@@ -6,7 +6,7 @@ import {
 } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   types: [
     {
       name: "CreateNoteInput",
@@ -22,6 +22,7 @@ const manifest: ZServiceManifest = {
       ],
     },
   ],
+  enums: [],
   errors: [{
     name: "NoteCreationError",
     module: "/app.zs",
@@ -177,6 +178,34 @@ describe("Z service binding generation", () => {
     expect(runtime).toContain(
       '"subtitle": decodeOptionOfString((value["subtitle"] === undefined ? null : value["subtitle"]))',
     );
+  });
+
+  it("emits payload-free enums as checked string unions with runtime values", () => {
+    const withEnum = structuredClone(manifest);
+    withEnum.enums.push({
+      name: "NoteState",
+      module: "/app.zs",
+      variants: ["active", "archived"],
+    });
+    withEnum.types[0].fields.push({ name: "state", type: "NoteState" });
+    withEnum.types[1].fields.push({ name: "state", type: "NoteState" });
+
+    const bindings = renderZServiceBindings(withEnum);
+    expect(bindings).toContain(`export const NoteState = {
+  active: "active",
+  archived: "archived",
+} as const;`);
+    expect(bindings).toContain(
+      "export type NoteState = typeof NoteState[keyof typeof NoteState];",
+    );
+    expect(bindings).toContain("state: NoteState;");
+    expect(bindings).toContain("const NoteStateValues = new Set<string>(Object.values(NoteState))");
+    expect(bindings).toContain("function decodeNoteState(value: unknown): NoteState");
+
+    const runtime = renderZServiceWebviewRuntime(withEnum);
+    expect(runtime).toContain('const decodeNoteState = value => {');
+    expect(runtime).toContain('value === "active" || value === "archived"');
+    expect(runtime).toContain('const encodeNoteState = value => {');
   });
 
   it("fails closed when nominal and collection codec names collide", () => {

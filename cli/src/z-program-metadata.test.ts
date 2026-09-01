@@ -142,7 +142,7 @@ const metadata: ZProgramMetadata = {
 describe("compiler-produced Z program metadata", () => {
   it("derives the typed service manifest without scanning Z source", () => {
     expect(deriveZServiceManifest(metadata)).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       types: [
         {
           name: "CreateNoteInput",
@@ -158,6 +158,7 @@ describe("compiler-produced Z program metadata", () => {
           ],
         },
       ],
+      enums: [],
       errors: [{
         name: "NoteCreationError",
         module: "/app.zs",
@@ -307,6 +308,78 @@ describe("compiler-produced Z program metadata", () => {
       receiverMode: "in",
     });
     expect(derived.types.filter((type) => type.name === "Note")).toHaveLength(1);
+  });
+
+  it("derives payload-free enums as named string wire contracts", () => {
+    const withEnum = structuredClone(metadata);
+    withEnum.modules[0].symbols.push({
+      name: "NoteState",
+      kind: "enum",
+      exported: true,
+      typeSignature: {
+        implementedTraits: [],
+        fields: [],
+        methods: [],
+        variants: [
+          { name: "active", payloadType: null },
+          { name: "archived", payloadType: null },
+        ],
+      },
+    });
+    withEnum.modules[0].symbols.find((symbol) => symbol.name === "Note")!
+      .typeSignature!.fields.push({
+        name: "state",
+        typeName: "NoteState",
+        visibility: "public",
+        optionalField: false,
+      });
+
+    const derived = deriveZServiceManifest(withEnum);
+    expect(derived.enums).toEqual([{
+      name: "NoteState",
+      module: "/app.zs",
+      variants: ["active", "archived"],
+    }]);
+    expect(derived.types.find((type) => type.name === "Note")?.fields)
+      .toContainEqual({ name: "state", type: "NoteState" });
+  });
+
+  it("rejects payload enums until their tagged wire representation is settled", () => {
+    const withPayload = structuredClone(metadata);
+    withPayload.modules[0].symbols.push({
+      name: "LookupResult",
+      kind: "enum",
+      exported: true,
+      typeSignature: {
+        implementedTraits: [],
+        fields: [],
+        methods: [],
+        variants: [
+          { name: "found", payloadType: "Note" },
+          { name: "missing", payloadType: null },
+        ],
+      },
+    });
+    withPayload.modules[0].symbols.find((symbol) => symbol.name === "NotesService")!
+      .typeSignature!.methods.push({
+        name: "lookup",
+        staticMethod: false,
+        visibility: "public",
+        receiverMode: "in",
+        signature: {
+          asynchronous: false,
+          executorAffinity: null,
+          parameterModes: [],
+          parameterTypes: [],
+          returnType: "LookupResult",
+          errorType: null,
+        },
+      });
+
+    expect(() => deriveZServiceManifest(withPayload)).toThrow(
+      "service wire enum LookupResult.found carries payload \"Note\"; "
+      + "payload enum wire representation is not settled yet",
+    );
   });
 
   it("assigns stable static method IDs", () => {

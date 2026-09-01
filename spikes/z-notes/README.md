@@ -129,7 +129,10 @@ separate from cancellation's `AbortError`. Generated TypeScript bindings expose
 both service invocations uniformly as cancellable promises.
 `CreateNoteInput.subtitle?: String` proves an omitted Web input becomes Z
 `Option.none`; the returned `Note` exposes that absence as JSON `null` and a
-generated `string | null` TypeScript field. The build now
+generated `string | null` TypeScript field. `NoteState` proves an exported
+payload-free Z enum becomes a checked string union with generated runtime
+values and exhaustive native codecs; `isArchived(state: NoteState)` also sends
+that enum directly from the WebView into a Z method. The build now
 generates and installs its checked `AsyncService` dispatcher plus lifecycle
 forwarder into the isolated staged application. The original `main.zs` remains
 unchanged. One `register` call derives the async dispatcher and lifecycle
@@ -207,8 +210,8 @@ evidence after creating a note directly:
 
 ```text
 Notes: notes service started
-visible WebView round trip window=1 request=6 ok=true hmr=packaged inject=ready payload={"id":"1","title":"WebView note","subtitle":null}
-visible WebView round trip window=2 request=4 ok=true hmr=packaged inject=ready payload={"id":"2","title":"WebView note","subtitle":null}
+visible WebView round trip window=1 request=6 ok=true hmr=packaged inject=ready payload={"id":"1","title":"WebView note","subtitle":null,"state":"active"}
+visible WebView round trip window=2 request=4 ok=true hmr=packaged inject=ready payload={"id":"2","title":"WebView note","subtitle":null,"state":"active"}
 Notes: notes service stopped
 ```
 

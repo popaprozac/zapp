@@ -290,6 +290,22 @@ property with `null` for `none`.
 rather than guessing whether they should become objects, entry arrays, or
 another representation.
 
+Payload-free exported Z enums are named string contracts. For example:
+
+```zs
+export enum NoteState {
+  active,
+  archived,
+}
+```
+
+uses `"active" | "archived"` on the JSON wire. Generated TypeScript exposes
+both a literal-union type and runtime values, so callers may write
+`NoteState.active` without numeric ordinals or unchecked strings. Generated
+JavaScript and native Z codecs reject unknown variant names. Enums with payloads
+remain fail-closed until their tagged JSON representation is deliberately
+settled.
+
 ## Compiler-produced metadata
 
 The fixed-point Z compiler now owns the source of truth. `z metadata` emits a

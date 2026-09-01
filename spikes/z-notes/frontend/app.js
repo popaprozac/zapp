@@ -56,7 +56,7 @@ setTimeout(() => {
 
 async function verifyTypedServiceError() {
   try {
-    await services.notes.create({ title: "" });
+    await services.notes.create({ title: "", state: "active" });
     throw new Error("Expected typed NoteCreationError");
   } catch (error) {
     if (
@@ -73,9 +73,15 @@ button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {
     await verifyTypedServiceError();
-    const note = await services.notes.create({ title: "WebView note" });
+    const note = await services.notes.create({ title: "WebView note", state: "active" });
     if (note.subtitle !== null) {
       throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
+    }
+    if (note.state !== "active") {
+      throw new Error(`Expected active note state, received ${note.state}`);
+    }
+    if (await services.notes.isArchived("active")) {
+      throw new Error("Expected active note to remain editable");
     }
     const empty = await services.notes.isEmpty();
     if (empty) throw new Error("Expected the created note");
@@ -117,9 +123,15 @@ cancelButton.addEventListener("click", async () => {
     document.body.dataset.cancellation = "ok";
     status.textContent = "Cancelled safely; checking follow-up…";
     try {
-      const note = await services.notes.create({ title: "WebView note" });
+      const note = await services.notes.create({ title: "WebView note", state: "active" });
       if (note.subtitle !== null) {
         throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
+      }
+      if (note.state !== "active") {
+        throw new Error(`Expected active note state, received ${note.state}`);
+      }
+      if (await services.notes.isArchived("active")) {
+        throw new Error("Expected active note to remain editable");
       }
       const empty = await services.notes.isEmpty();
       if (empty) throw new Error("Expected the created note");

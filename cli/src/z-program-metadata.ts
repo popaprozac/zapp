@@ -1,6 +1,7 @@
 import {
   zArrayElementType,
   zOptionPayloadType,
+  type ZServiceEnumMetadata,
   type ZServiceManifest,
   type ZServiceTypeMetadata,
 } from "./z-service-bindings";
@@ -33,6 +34,10 @@ interface ZProgramTypeSignature {
   implementedTraits: string[];
   fields: ZProgramFieldMetadata[];
   methods: ZProgramMethodMetadata[];
+  variants?: {
+    name: string;
+    payloadType: string | null;
+  }[];
 }
 
 interface ZProgramSymbolMetadata {
@@ -188,17 +193,18 @@ function addWireType(
   metadata: ZProgramMetadata,
   name: string,
   types: ZServiceTypeMetadata[],
+  enums: ZServiceEnumMetadata[],
   seen: Set<string>,
 ): void {
   if (scalarTypes.has(name) || seen.has(name)) return;
   const arrayElement = zArrayElementType(name);
   if (arrayElement) {
-    addWireType(metadata, arrayElement, types, seen);
+    addWireType(metadata, arrayElement, types, enums, seen);
     return;
   }
   const optionPayload = zOptionPayloadType(name);
   if (optionPayload) {
-    addWireType(metadata, optionPayload, types, seen);
+    addWireType(metadata, optionPayload, types, enums, seen);
     return;
   }
   if (name.includes("<") || name.includes(">")) {
@@ -208,9 +214,30 @@ function addWireType(
     );
   }
   const { module, symbol } = publicType(metadata, name);
+  if (symbol.kind === "enum" && symbol.typeSignature) {
+    const variants = symbol.typeSignature.variants;
+    if (!variants) {
+      throw new Error(`[zapp] malformed enum metadata for service wire type ${JSON.stringify(name)}`);
+    }
+    const payload = variants.find((variant) => variant.payloadType !== null);
+    if (payload) {
+      throw new Error(
+        `[zapp] service wire enum ${name}.${payload.name} carries payload `
+        + `${JSON.stringify(payload.payloadType)}; payload enum wire representation is not settled yet`,
+      );
+    }
+    seen.add(name);
+    enums.push({
+      name,
+      module: module.path,
+      variants: variants.map((variant) => variant.name),
+    });
+    return;
+  }
   if (symbol.kind !== "struct" || !symbol.typeSignature) {
     throw new Error(
-      `[zapp] service wire type ${JSON.stringify(name)} must be an exported Z struct`,
+      `[zapp] service wire type ${JSON.stringify(name)} must be an exported Z struct `
+      + "or payload-free enum",
     );
   }
   seen.add(name);
@@ -230,7 +257,7 @@ function addWireType(
       }
       : { name: field.name, type: field.typeName };
   });
-  for (const field of fields) addWireType(metadata, field.type, types, seen);
+  for (const field of fields) addWireType(metadata, field.type, types, enums, seen);
   types.push({ name, module: module.path, fields });
 }
 
@@ -243,6 +270,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
     )).map((call) => ({ call, module }))
   ));
   const types: ZServiceTypeMetadata[] = [];
+  const enums: ZServiceEnumMetadata[] = [];
   const errorNames = new Set<string>();
   const seenTypes = new Set<string>();
   const seenServices = new Set<string>();
@@ -323,8 +351,8 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
         throw new Error(`[zapp] void service method ${serviceType}.${method.name} is not supported yet`);
       }
       const input = method.signature.parameterTypes[0];
-      if (input) addWireType(metadata, input, types, seenTypes);
-      addWireType(metadata, method.signature.returnType, types, seenTypes);
+      if (input) addWireType(metadata, input, types, enums, seenTypes);
+      addWireType(metadata, method.signature.returnType, types, enums, seenTypes);
       const error = method.signature.errorType ?? undefined;
       if (error) {
         if (scalarTypes.has(error)) {
@@ -340,7 +368,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
             + "must be an exported Z struct",
           );
         }
-        addWireType(metadata, error, types, seenTypes);
+        addWireType(metadata, error, types, enums, seenTypes);
         errorNames.add(error);
       }
       const qualifiedName = `${name}.${method.name}`;
@@ -386,7 +414,7 @@ export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceMani
   });
   const errors = types.filter((type) => errorNames.has(type.name));
   const values = types.filter((type) => !errorNames.has(type.name));
-  return { schemaVersion: 3, types: values, errors, services };
+  return { schemaVersion: 4, types: values, enums, errors, services };
 }
 
 export function zServiceMethodId(qualifiedName: string): number {

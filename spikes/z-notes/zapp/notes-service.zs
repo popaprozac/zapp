@@ -8,6 +8,7 @@ import {
 import {
   CreateNoteInput,
   Note,
+  NoteState,
   NotesCore,
   createNotesCore,
 } from "./notes-core.zs";
@@ -36,6 +37,10 @@ export readonly class NotesService implements ServiceLifecycle {
 
   function count(): u64 on thread.main {
     return this.core.count();
+  }
+
+  function isArchived(state: NoteState): boolean {
+    return state == NoteState.archived;
   }
 
   async function isEmpty(): boolean on thread.main {

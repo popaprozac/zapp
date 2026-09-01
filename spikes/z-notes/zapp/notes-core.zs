@@ -10,10 +10,16 @@ import {
   ServiceOutcome,
 } from "../../../native/z/framework/service-contract.zs";
 
+export enum NoteState {
+  active,
+  archived,
+}
+
 export struct Note {
   id: u64;
   title: String;
   subtitle?: String;
+  state: NoteState;
 }
 
 struct NotesState {
@@ -23,6 +29,7 @@ struct NotesState {
 export struct CreateNoteInput {
   title: String;
   subtitle?: String;
+  state: NoteState;
 }
 
 struct NotesDecodeError {
@@ -33,12 +40,12 @@ export readonly class NotesCore {
   readonly state: Mutex<NotesState>;
 
   function create(input: CreateNoteInput): Note {
-    const { title, subtitle } = move input;
+    const { title, subtitle, state } = move input;
     const id = this.state.withLock((inout state): u64 => {
       state.nextId = state.nextId + 1;
       return state.nextId - 1;
     });
-    return Note({ id, title: move title, subtitle: move subtitle });
+    return Note({ id, title: move title, subtitle: move subtitle, state });
   }
 
   function count(): u64 {
@@ -91,7 +98,10 @@ function decodeCreateNoteInput(
         const found = fields.get("title");
         match (in found) {
           some(field) => match (in field) {
-            string(title) => return CreateNoteInput({ title: copy title });
+            string(title) => return CreateNoteInput({
+              title: copy title,
+              state: NoteState.active,
+            });
             nullValue => throw notesDecodeError("title must be a string");
             boolean(_) => throw notesDecodeError("title must be a string");
             number(_) => throw notesDecodeError("title must be a string");
@@ -111,10 +121,15 @@ function decodeCreateNoteInput(
 }
 
 function encodeNote(note: Note): String {
-  const { id, title } = move note;
+  const { id, title, state } = move note;
+  const stateName = match (state) {
+    active => "active";
+    archived => "archived";
+  };
   let fields = Map<String, JsonValue>();
   fields.set("id", JsonValue.string(`${id}`));
   fields.set("title", JsonValue.string(move title));
+  fields.set("state", JsonValue.string(stateName));
   const value = JsonValue.object(move fields);
   return stringify(in value);
 }

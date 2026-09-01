@@ -5,7 +5,7 @@ import {
 import type { ZServiceManifest } from "./z-service-bindings";
 
 const manifest: ZServiceManifest = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   types: [
     {
       name: "CreateNoteInput",
@@ -21,6 +21,7 @@ const manifest: ZServiceManifest = {
       ],
     },
   ],
+  enums: [],
   errors: [{
     name: "NoteCreationError",
     module: "/workspace/app/notes-core.zs",
@@ -353,5 +354,44 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("none => JsonValue.nullValue");
     expect(source).toContain("none => Option<String>.none");
     expect(source).toContain("__zappEncodeOptionOfString(move subtitle)");
+  });
+
+  it("generates exhaustive native codecs for payload-free enums", () => {
+    const withEnum = structuredClone(manifest);
+    withEnum.enums.push({
+      name: "NoteState",
+      module: "/workspace/app/notes-core.zs",
+      variants: ["active", "archived"],
+    });
+    withEnum.types[0].fields.push({ name: "state", type: "NoteState" });
+    withEnum.types[1].fields.push({ name: "state", type: "NoteState" });
+    withEnum.services[0].methods.push({
+      id: 4,
+      name: "echoState",
+      input: "NoteState",
+      inputMode: "value",
+      returns: "NoteState",
+      asynchronous: false,
+      executorAffinity: null,
+      receiverMode: "in",
+    });
+
+    const source = renderZServiceDispatchers(withEnum, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain("NoteState } from \"../app/notes-core.zs\"");
+    expect(source).toContain("function __zappDecodeNoteState(");
+    expect(source).toContain('if (text == "active") return NoteState.active');
+    expect(source).toContain('if (text == "archived") return NoteState.archived');
+    expect(source).toContain("function __zappEncodeNoteState(");
+    expect(source).toContain('active => JsonValue.string("active")');
+    expect(source).toContain('archived => JsonValue.string("archived")');
+    expect(source).toContain("const result = service.echoState(input)");
+    expect(source).not.toContain("service.echoState(move input)");
+    expect(source).toContain("__zappEncodeNoteState(\n    result\n  )");
   });
 });

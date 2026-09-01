@@ -13,6 +13,12 @@ export interface ZServiceTypeMetadata {
   fields: ZServiceFieldMetadata[];
 }
 
+export interface ZServiceEnumMetadata {
+  name: string;
+  module: string;
+  variants: string[];
+}
+
 export interface ZServiceMethodMetadata {
   id: number;
   name: string;
@@ -42,8 +48,9 @@ export interface ZServiceMetadata {
 }
 
 export interface ZServiceManifest {
-  schemaVersion: 3;
+  schemaVersion: 4;
   types: ZServiceTypeMetadata[];
+  enums: ZServiceEnumMetadata[];
   errors: ZServiceTypeMetadata[];
   services: ZServiceMetadata[];
 }
@@ -152,6 +159,7 @@ export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
   ]);
   const wireTypes = [
     ...manifest.types.map((type) => type.name),
+    ...manifest.enums.map((enumeration) => enumeration.name),
     ...manifest.errors.map((type) => type.name),
     ...manifestContainerTypes(manifest),
   ];
@@ -166,6 +174,40 @@ export function assertZServiceCodecNames(manifest: ZServiceManifest): void {
     }
     owners.set(suffix, type);
   }
+}
+
+function renderEnums(manifest: ZServiceManifest): string {
+  return manifest.enums.map((enumeration) => {
+    assertIdentifier(enumeration.name, "service enum");
+    const variants = enumeration.variants.map((variant) => {
+      assertIdentifier(variant, `${enumeration.name} variant`);
+      return `  ${variant}: ${JSON.stringify(variant)},`;
+    }).join("\n");
+    return `export const ${enumeration.name} = {\n${variants}\n} as const;\n`
+      + `export type ${enumeration.name} = `
+      + `typeof ${enumeration.name}[keyof typeof ${enumeration.name}];`;
+  }).join("\n\n");
+}
+
+function renderEnumCodecs(manifest: ZServiceManifest): string {
+  return manifest.enums.map((enumeration) => {
+    const values = `${enumeration.name}Values`;
+    return `const ${values} = new Set<string>(Object.values(${enumeration.name}));
+
+function decode${enumeration.name}(value: unknown): ${enumeration.name} {
+  if (typeof value !== "string" || !${values}.has(value)) {
+    throw new TypeError(${JSON.stringify(`expected a ${enumeration.name} variant from Z service`)});
+  }
+  return value as ${enumeration.name};
+}
+
+function encode${enumeration.name}(value: ${enumeration.name}): string {
+  if (!${values}.has(value)) {
+    throw new TypeError(${JSON.stringify(`expected a valid ${enumeration.name} variant`)});
+  }
+  return value;
+}`;
+  }).join("\n\n");
 }
 
 function renderContainerCodecs(manifest: ZServiceManifest): string {
@@ -344,7 +386,7 @@ function renderService(service: ZServiceMetadata): string {
 }
 
 export function renderZServiceBindings(manifest: ZServiceManifest): string {
-  if (manifest.schemaVersion !== 3) {
+  if (manifest.schemaVersion !== 4) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   assertZServiceCodecNames(manifest);
@@ -358,6 +400,8 @@ import {
 } from "@zappdev/runtime";
 
 ${renderTypes(manifest)}
+
+${renderEnums(manifest)}
 
 ${renderErrorTypes(manifest)}
 
@@ -419,6 +463,8 @@ function mapCall<T>(
 
 ${renderNamedCodecs(manifest.types)}
 
+${renderEnumCodecs(manifest)}
+
 ${renderContainerCodecs(manifest)}
 
 ${renderErrorCodecs(manifest)}
@@ -462,6 +508,23 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
     ? null
     : ${codecName(payload, "encode")}(value);`;
   }).join("\n");
+  const enums = manifest.enums.map((enumeration) => {
+    const expected = enumeration.variants
+      .map((variant) => `value === ${JSON.stringify(variant)}`)
+      .join(" || ");
+    return `  const decode${enumeration.name} = value => {
+    if (!(${expected})) {
+      throw new TypeError(${JSON.stringify(`expected a ${enumeration.name} variant from Z service`)});
+    }
+    return value;
+  };
+  const encode${enumeration.name} = value => {
+    if (!(${expected})) {
+      throw new TypeError(${JSON.stringify(`expected a valid ${enumeration.name} variant`)});
+    }
+    return value;
+  };`;
+  }).join("\n");
   return `  const decodeString = value => value;
   const encodeString = value => value;
   const decodeBoolean = value => value;
@@ -473,6 +536,7 @@ function renderRuntimeCodecs(manifest: ZServiceManifest): string {
   const decodeI64 = value => BigInt(value);
   const encodeI64 = value => value.toString();
 ${named}
+${enums}
 ${containers}`;
 }
 

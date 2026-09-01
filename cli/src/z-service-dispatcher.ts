@@ -1,6 +1,7 @@
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import type {
+  ZServiceEnumMetadata,
   ZServiceManifest,
   ZServiceMethodMetadata,
   ZServiceTypeMetadata,
@@ -64,17 +65,30 @@ function relativeModule(fromFile: string, target: string): string {
   return relative;
 }
 
-function moved(type: string, expression: string): string {
-  return copiedScalars.has(type) ? expression : `move ${expression}`;
+function moved(
+  type: string,
+  expression: string,
+  copyableTypes: ReadonlySet<string> = copiedScalars,
+): string {
+  return copyableTypes.has(type) ? expression : `move ${expression}`;
 }
 
-function copied(type: string, expression: string): string {
-  return copiedScalars.has(type) ? expression : `copy ${expression}`;
+function copied(
+  type: string,
+  expression: string,
+  copyableTypes: ReadonlySet<string> = copiedScalars,
+): string {
+  return copyableTypes.has(type) ? expression : `copy ${expression}`;
 }
 
-function inputCall(method: ZServiceMethodMetadata): string {
+function inputCall(
+  method: ZServiceMethodMetadata,
+  copyableTypes: ReadonlySet<string>,
+): string {
   if (!method.input) return "";
-  if (method.inputMode === "value") return "move input";
+  if (method.inputMode === "value") {
+    return moved(method.input, "input", copyableTypes);
+  }
   if (method.inputMode === "in") return "in input";
   throw new Error(
     `[zapp] generated WebView dispatch does not support ${method.inputMode ?? "missing"} `
@@ -123,7 +137,7 @@ function renderDecodeArray(type: string): string {
 }`;
 }
 
-function renderEncodeArray(type: string): string {
+function renderEncodeArray(type: string, copyableTypes: ReadonlySet<string>): string {
   const element = zArrayElementType(type)!;
   const suffix = zWireCodecSuffix(type);
   return `function __zappEncode${suffix}(
@@ -131,13 +145,13 @@ function renderEncodeArray(type: string): string {
 ): JsonValue {
   let encoded = Array<JsonValue>();
   for (const element of value) {
-    encoded.push(__zappEncode${zWireCodecSuffix(element)}(${copied(element, "element")}));
+    encoded.push(__zappEncode${zWireCodecSuffix(element)}(${copied(element, "element", copyableTypes)}));
   }
   return JsonValue.array(move encoded);
 }`;
 }
 
-function renderDecodeOption(type: string): string {
+function renderDecodeOption(type: string, copyableTypes: ReadonlySet<string>): string {
   const payload = zOptionPayloadType(type)!;
   const suffix = zWireCodecSuffix(type);
   return `function __zappDecode${suffix}(
@@ -147,13 +161,13 @@ function renderDecodeOption(type: string): string {
     nullValue => Option<${payload}>.none;
     _ => {
       const decoded = try __zappDecode${zWireCodecSuffix(payload)}(in value);
-      select Option.some(${moved(payload, "decoded")});
+      select Option.some(${moved(payload, "decoded", copyableTypes)});
     }
   };
 }`;
 }
 
-function renderEncodeOption(type: string): string {
+function renderEncodeOption(type: string, copyableTypes: ReadonlySet<string>): string {
   const payload = zOptionPayloadType(type)!;
   const suffix = zWireCodecSuffix(type);
   return `function __zappEncode${suffix}(
@@ -161,9 +175,38 @@ function renderEncodeOption(type: string): string {
 ): JsonValue {
   return match (value) {
     some(value) => __zappEncode${zWireCodecSuffix(payload)}(
-      ${moved(payload, "value")}
+      ${moved(payload, "value", copyableTypes)}
     );
     none => JsonValue.nullValue;
+  };
+}`;
+}
+
+function renderDecodeEnum(enumeration: ZServiceEnumMetadata): string {
+  const branches = enumeration.variants.map((variant) => (
+    `  if (text == ${JSON.stringify(variant)}) return ${enumeration.name}.${variant};`
+  )).join("\n");
+  return `function __zappDecode${enumeration.name}(
+  in value: JsonValue
+): ${enumeration.name} throws __ZappServiceCodecError {
+  const text = match (in value) {
+    string(text) => copy text;
+    _ => throw __zappCodecError(${JSON.stringify(`expected a ${enumeration.name} variant`)});
+  };
+${branches}
+  throw __zappCodecError(${JSON.stringify(`unknown ${enumeration.name} variant`)});
+}`;
+}
+
+function renderEncodeEnum(enumeration: ZServiceEnumMetadata): string {
+  const arms = enumeration.variants.map((variant) => (
+    `    ${variant} => JsonValue.string(${JSON.stringify(variant)});`
+  )).join("\n");
+  return `function __zappEncode${enumeration.name}(
+  value: ${enumeration.name}
+): JsonValue {
+  return match (value) {
+${arms}
   };
 }`;
 }
@@ -323,7 +366,10 @@ function renderEncodeScalar(type: string): string {
   );
 }
 
-function renderDecodeType(type: ZServiceTypeMetadata): string {
+function renderDecodeType(
+  type: ZServiceTypeMetadata,
+  copyableTypes: ReadonlySet<string>,
+): string {
   const fields = type.fields.map((field) => {
     assertIdentifier(field.name, `${type.name} field`);
     const missing = field.optional
@@ -336,7 +382,9 @@ function renderDecodeType(type: ZServiceTypeMetadata): string {
         };`;
   }).join("\n");
   const initialization = type.fields
-    .map((field) => `          ${field.name}: ${moved(field.type, field.name)},`)
+    .map((field) => (
+      `          ${field.name}: ${moved(field.type, field.name, copyableTypes)},`
+    ))
     .join("\n");
   return `function __zappDecode${generatedName(type.name)}(
   in value: JsonValue
@@ -353,11 +401,15 @@ ${initialization}
 }`;
 }
 
-function renderEncodeType(type: ZServiceTypeMetadata): string {
+function renderEncodeType(
+  type: ZServiceTypeMetadata,
+  copyableTypes: ReadonlySet<string>,
+): string {
   const names = type.fields.map((field) => field.name).join(", ");
   const fields = type.fields.map((field) => (
     `  fields.set(${JSON.stringify(field.name)}, `
-    + `__zappEncode${zWireCodecSuffix(field.type)}(${moved(field.type, field.name)}));`
+    + `__zappEncode${zWireCodecSuffix(field.type)}(`
+    + `${moved(field.type, field.name, copyableTypes)}));`
   )).join("\n");
   return `function __zappEncode${generatedName(type.name)}(
   value: ${type.name}
@@ -394,6 +446,7 @@ function renderSyncMethodHelper(
   serviceName: string,
   serviceType: string,
   method: ZServiceMethodMetadata,
+  copyableTypes: ReadonlySet<string>,
 ): string {
   if (method.receiverMode !== "in") {
     throw new Error(
@@ -407,7 +460,7 @@ function renderSyncMethodHelper(
       + `${serviceType}.${method.name} through its synchronous branch`,
     );
   }
-  const call = `service.${method.name}(${inputCall(method)})`;
+  const call = `service.${method.name}(${inputCall(method, copyableTypes)})`;
   const invocation = method.error
     ? `  const __called = attempt ${call};
   const result = match (__called) {
@@ -431,7 +484,7 @@ function renderSyncMethodHelper(
 ): ServiceOutcome {
 ${decode}${invocation}
   const encoded = __zappEncode${zWireCodecSuffix(method.returns)}(
-    ${moved(method.returns, "result")}
+    ${moved(method.returns, "result", copyableTypes)}
   );
   return ServiceOutcome.success(json.stringify(in encoded));
 }`;
@@ -454,6 +507,7 @@ function renderAsyncMethodHelpers(
   serviceName: string,
   serviceType: string,
   method: ZServiceMethodMetadata,
+  copyableTypes: ReadonlySet<string>,
 ): string {
   if (method.receiverMode !== "in") {
     throw new Error(
@@ -463,10 +517,12 @@ function renderAsyncMethodHelpers(
   }
   const suffix = `${generatedName(serviceType)}${generatedName(method.name)}`;
   const decode = renderInputDecode(method);
-  const directCall = `service.${method.name}(${inputCall(method)})`;
+  const directCall = `service.${method.name}(${inputCall(method, copyableTypes)})`;
   const synchronousPlacement = method.executorAffinity === "thread.main"
     && !method.asynchronous;
-  const placementInput = method.input ? ", move input" : "";
+  const placementInput = method.input
+    ? `, ${moved(method.input, "input", copyableTypes)}`
+    : "";
   const call = synchronousPlacement
     ? `__zappCall${suffix}OnMain(move service${placementInput})`
     : directCall;
@@ -501,7 +557,7 @@ function renderAsyncMethodHelpers(
   };`
     : `  const methodResult = ${awaited};`;
   const encode = `  const encoded = __zappEncode${zWireCodecSuffix(method.returns)}(
-    ${moved(method.returns, "methodResult")}
+    ${moved(method.returns, "methodResult", copyableTypes)}
   );
   return ServiceOutcome.success(json.stringify(in encoded));`;
   return `${placementWrapper}async function __zappFinish${suffix}(
@@ -515,6 +571,7 @@ ${encode}
 
 function renderDispatcher(
   service: ZServiceManifest["services"][number],
+  copyableTypes: ReadonlySet<string>,
 ): string {
   assertIdentifier(service.name, "service name");
   assertIdentifier(service.type, "service type");
@@ -530,11 +587,17 @@ function renderDispatcher(
   ));
   const synchronous = service.methods.filter((method) => !asynchronous.includes(method));
   const helpers = [
-    ...synchronous.map((method) => renderSyncMethodHelper(service.name, service.type, method)),
+    ...synchronous.map((method) => renderSyncMethodHelper(
+      service.name,
+      service.type,
+      method,
+      copyableTypes,
+    )),
     ...asynchronous.map((method) => renderAsyncMethodHelpers(
       service.name,
       service.type,
       method,
+      copyableTypes,
     )),
   ]
     .join("\n\n");
@@ -649,12 +712,14 @@ export function renderZServiceDispatchers(
   manifest: ZServiceManifest,
   options: RenderZServiceDispatchersOptions,
 ): string {
-  if (manifest.schemaVersion !== 3) {
+  if (manifest.schemaVersion !== 4) {
     throw new Error(`[zapp] unsupported Z service metadata schema ${manifest.schemaVersion}`);
   }
   assertZServiceCodecNames(manifest);
   const allTypes = [...manifest.types, ...manifest.errors];
   const namedTypes = new Map(allTypes.map((type) => [type.name, type]));
+  const enumNames = new Set(manifest.enums.map((enumeration) => enumeration.name));
+  const copyableTypes = new Set([...copiedScalars, ...enumNames]);
   const decoded = new Set<string>();
   const encoded = new Set<string>();
   for (const service of manifest.services) {
@@ -675,6 +740,11 @@ export function renderZServiceDispatchers(
   for (const type of allTypes) {
     if (decoded.has(type.name) || encoded.has(type.name)) addImport(type.module, type.name);
   }
+  for (const enumeration of manifest.enums) {
+    if (decoded.has(enumeration.name) || encoded.has(enumeration.name)) {
+      addImport(enumeration.module, enumeration.name);
+    }
+  }
   const nativeImports = [...imports.entries()].sort(([left], [right]) => left.localeCompare(right))
     .map(([module, names]) => (
       `import { ${[...names].sort().join(", ")} } from `
@@ -683,7 +753,8 @@ export function renderZServiceDispatchers(
 
   const scalarDecoders = [...decoded]
     .filter((type) => (
-      !namedTypes.has(type) && !zArrayElementType(type) && !zOptionPayloadType(type)
+      !namedTypes.has(type) && !enumNames.has(type)
+      && !zArrayElementType(type) && !zOptionPayloadType(type)
     ))
     .sort()
     .map(renderDecodeScalar);
@@ -692,25 +763,32 @@ export function renderZServiceDispatchers(
     .map(renderDecodeArray);
   const optionDecoders = [...decoded]
     .filter((type) => zOptionPayloadType(type))
-    .map(renderDecodeOption);
+    .map((type) => renderDecodeOption(type, copyableTypes));
+  const enumDecoders = manifest.enums
+    .filter((enumeration) => decoded.has(enumeration.name))
+    .map(renderDecodeEnum);
   const typeDecoders = allTypes
     .filter((type) => decoded.has(type.name))
-    .map(renderDecodeType);
+    .map((type) => renderDecodeType(type, copyableTypes));
   const scalarEncoders = [...encoded]
     .filter((type) => (
-      !namedTypes.has(type) && !zArrayElementType(type) && !zOptionPayloadType(type)
+      !namedTypes.has(type) && !enumNames.has(type)
+      && !zArrayElementType(type) && !zOptionPayloadType(type)
     ))
     .sort()
     .map(renderEncodeScalar);
   const arrayEncoders = [...encoded]
     .filter((type) => zArrayElementType(type))
-    .map(renderEncodeArray);
+    .map((type) => renderEncodeArray(type, copyableTypes));
   const optionEncoders = [...encoded]
     .filter((type) => zOptionPayloadType(type))
-    .map(renderEncodeOption);
+    .map((type) => renderEncodeOption(type, copyableTypes));
+  const enumEncoders = manifest.enums
+    .filter((enumeration) => encoded.has(enumeration.name))
+    .map(renderEncodeEnum);
   const typeEncoders = allTypes
     .filter((type) => encoded.has(type.name))
-    .map(renderEncodeType);
+    .map((type) => renderEncodeType(type, copyableTypes));
 
   return `// AUTO-GENERATED from checked Z service metadata. Do not edit.
 import json from "std/json";
@@ -751,16 +829,18 @@ function __zappCodecError(message: String): __ZappServiceCodecError {
 
 ${[
     ...scalarDecoders,
+    ...enumDecoders,
     ...typeDecoders,
     ...arrayDecoders,
     ...optionDecoders,
     ...scalarEncoders,
+    ...enumEncoders,
     ...typeEncoders,
     ...arrayEncoders,
     ...optionEncoders,
   ].join("\n\n")}
 
-${manifest.services.map(renderDispatcher).join("\n\n")}
+${manifest.services.map((service) => renderDispatcher(service, copyableTypes)).join("\n\n")}
 `;
 }
 
