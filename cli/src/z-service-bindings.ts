@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 export interface ZServiceFieldMetadata {
   name: string;
@@ -542,6 +542,13 @@ export async function generateZServiceBindings(
 ): Promise<string> {
   await mkdir(outputDirectory, { recursive: true });
   const output = path.join(outputDirectory, "services.ts");
-  await writeFile(output, renderZServiceBindings(manifest), "utf8");
+  const source = renderZServiceBindings(manifest);
+  let current: string | undefined;
+  try {
+    current = await readFile(output, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (current !== source) await writeFile(output, source, "utf8");
   return output;
 }

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+  generateZServiceBindings,
   renderZServiceBindings,
   type ZServiceManifest,
 } from "./z-service-bindings";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const manifest: ZServiceManifest = {
   schemaVersion: 5,
@@ -68,6 +72,21 @@ const manifest: ZServiceManifest = {
 };
 
 describe("Z service binding generation", () => {
+  it("does not rewrite an unchanged binding during a native dev build", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "zapp-service-bindings-"));
+    try {
+      const output = await generateZServiceBindings(manifest, directory);
+      const first = await stat(output);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await generateZServiceBindings(manifest, directory);
+      const second = await stat(output);
+      expect(second.mtimeMs).toBe(first.mtimeMs);
+      expect(await readFile(output, "utf8")).toBe(renderZServiceBindings(manifest));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("generates typed cancellable bindings with exact integer decoding", () => {
     const source = renderZServiceBindings(manifest);
     expect(source).toContain("export interface Note");

@@ -708,10 +708,10 @@ describe("Z native host inputs", () => {
 
 describe("parseZCompilerIdentity", () => {
   it("decodes the pinned compiler contract", () => {
-    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-25.1 compiler-api 2\n"))
+    expect(parseZCompilerIdentity("z 0.1.0-dev revision 2026-08-31.1 compiler-api 2\n"))
       .toEqual({
         languageVersion: "0.1.0-dev",
-        compilerRevision: "2026-08-25.1",
+        compilerRevision: "2026-08-31.1",
         compilerApi: 2,
       });
   });
@@ -725,7 +725,7 @@ describe("parseZCompilerIdentity", () => {
 describe("validateZCompilerIdentity", () => {
   const expected = {
     languageVersion: "0.1.0-dev",
-    compilerRevision: "2026-08-25.1",
+    compilerRevision: "2026-08-31.1",
     compilerApi: 2,
   };
 

@@ -32,6 +32,7 @@
     "bench:z-notes:reset": "bun run benchmarks/z-notes/scripts/reset.ts"
   },
   "devDependencies": {
+    "@zappdev/runtime": "workspace:*",
     "@types/bun": "^1.4.0",
     "@types/node": "^25.9.1",
     "typescript": "5.7.2"

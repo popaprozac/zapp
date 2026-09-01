@@ -228,7 +228,7 @@ implicitly main-isolated.
 Z reports an identity shaped like:
 
 ```text
-z 0.1.0-dev revision 2026-08-25.1 compiler-api 2
+z 0.1.0-dev revision 2026-08-31.1 compiler-api 2
 ```
 
 The language version describes the user-facing language, the compiler revision
