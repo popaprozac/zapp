@@ -1,3 +1,9 @@
+import {
+  ChannelClosed,
+  Receiver,
+  Sender,
+  SyncReceiver,
+} from "std/channel";
 import { Mutex } from "std/sync";
 import { sleep } from "std/time";
 
@@ -20,51 +26,67 @@ export enum WorkerLifecycle {
   failed i32,
 }
 
-struct WorkerMailboxState {
-  pending: Option<WorkerCommand> = Option<WorkerCommand>.none;
+struct WorkerCancellationState {
   cancellationRequested: boolean = false;
 }
 
 export readonly class WorkerMailbox {
-  readonly state: Mutex<WorkerMailboxState>;
+  readonly sender: Sender<WorkerCommand>;
+  readonly cancellation: Mutex<WorkerCancellationState>;
 
-  function post(command: WorkerCommand): boolean {
-    return this.state.withLock((inout state): boolean => {
-      const accepted = match (in state.pending) {
-        some(_) => false;
-        none => true;
-      };
-      if (!accepted) return false;
-      state.pending = Option.some(command);
-      return true;
-    });
+  async function post(
+    command: WorkerCommand
+  ): void throws ChannelClosed<WorkerCommand> {
+    try await this.sender.send(command);
   }
 
   function requestCancellation(): boolean {
-    return this.state.withLock((inout state): boolean => {
+    const requested = this.cancellation.withLock((inout state): boolean => {
       if (state.cancellationRequested) return false;
       state.cancellationRequested = true;
       return true;
     });
+    if (requested) this.sender.close();
+    return requested;
   }
 
   function isCancellationRequested(): boolean {
-    return this.state.withLock(
+    return this.cancellation.withLock(
       (in state): boolean => state.cancellationRequested
     );
   }
+}
 
-  function take(): Option<WorkerCommand> {
-    return this.state.withLock((inout state): Option<WorkerCommand> => {
-      const pending = state.pending;
-      state.pending = Option<WorkerCommand>.none;
-      return pending;
-    });
+export struct WorkerInbox {
+  commands: SyncReceiver<WorkerCommand>;
+  mailbox: WorkerMailbox;
+
+  function receive(): Option<WorkerCommand> {
+    return this.commands.receive();
+  }
+
+  function isCancellationRequested(): boolean {
+    return this.mailbox.isCancellationRequested();
   }
 }
 
-export function createWorkerMailbox(): WorkerMailbox {
-  return new WorkerMailbox({ state: Mutex(WorkerMailboxState()) });
+export function createWorkerMailbox(
+  sender: Sender<WorkerCommand>
+): WorkerMailbox {
+  return new WorkerMailbox({
+    sender: move sender,
+    cancellation: Mutex(WorkerCancellationState()),
+  });
+}
+
+export function createWorkerInbox(
+  receiver: Receiver<WorkerCommand>,
+  mailbox: WorkerMailbox
+): WorkerInbox {
+  return WorkerInbox({
+    commands: receiver.sync(),
+    mailbox,
+  });
 }
 
 export trait WorkerEngine {
@@ -80,17 +102,17 @@ export trait WorkerEngine {
 export function runWorkerEngine<T: WorkerEngine>(
   inout engine: T,
   in module: WorkerModule,
-  in mailbox: WorkerMailbox
+  in inbox: WorkerInbox
 ): WorkerLifecycle {
   const loadStatus = engine.load(in module);
   if (loadStatus != 0) return WorkerLifecycle.failed(loadStatus);
 
   while (true) {
-    if (mailbox.isCancellationRequested()) {
+    if (inbox.isCancellationRequested()) {
       return WorkerLifecycle.cancelled(engine.result());
     }
 
-    const pending = mailbox.take();
+    const pending = inbox.receive();
     match (pending) {
       some(command) => {
         const dispatchStatus = engine.dispatch(in command);
@@ -98,18 +120,27 @@ export function runWorkerEngine<T: WorkerEngine>(
           return WorkerLifecycle.failed(dispatchStatus);
         }
       }
-      none => {}
+      none => {
+        if (inbox.isCancellationRequested()) {
+          return WorkerLifecycle.cancelled(engine.result());
+        }
+        return WorkerLifecycle.stopped(engine.result());
+      }
     }
 
-    if (engine.hasPendingWork()) {
+    // The first host tier runs one command to engine quiescence before taking
+    // the next command. A future wait-set can wake on either channel input or
+    // the engine's next timer without polling.
+    while (engine.hasPendingWork()) {
       const wait = engine.nextWakeMilliseconds();
       if (wait > 1) sleep(1);
       else if (wait > 0) sleep(u64(wait));
 
       const pumpStatus = engine.pump();
       if (pumpStatus != 0) return WorkerLifecycle.failed(pumpStatus);
-    } else {
-      sleep(1);
+      if (engine.isComplete()) {
+        return WorkerLifecycle.stopped(engine.result());
+      }
     }
 
     if (engine.isComplete()) {

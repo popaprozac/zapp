@@ -1,14 +1,16 @@
 import console from "std/console";
+import { Channel } from "std/channel";
 import { thread } from "std/thread";
 import { delay } from "std/time";
 import native from "zapp_worker_zjs.h";
 import {
   WorkerEngine,
   WorkerCommand,
+  WorkerInbox,
   WorkerLifecycle,
-  WorkerMailbox,
   WorkerMessage,
   WorkerModule,
+  createWorkerInbox,
   createWorkerMailbox,
   runWorkerEngine,
 } from "./worker-engine.zs";
@@ -65,26 +67,33 @@ struct ZjsWorkerEngine implements WorkerEngine {
   }
 }
 
-function executeWorkerModule(in mailbox: WorkerMailbox): WorkerLifecycle {
+function executeWorkerModule(in inbox: WorkerInbox): WorkerLifecycle {
   const engine = native.zapp_zjs_engine_create();
   if (engine == null) return WorkerLifecycle.failed(100);
 
   let adapter = ZjsWorkerEngine({ handle: move engine });
   const module = WorkerModule({ source: workerModule });
-  return runWorkerEngine(inout adapter, in module, in mailbox);
+  return runWorkerEngine(inout adapter, in module, in inbox);
 }
 
 async function main(): i32 {
-  const commands = createWorkerMailbox();
+  const { sender, receiver } = Channel<WorkerCommand>.bounded(1);
+  const mailbox = createWorkerMailbox(move sender);
+  const inbox = createWorkerInbox(move receiver, mailbox);
   const worker = thread.spawn(
-    move (): WorkerLifecycle => executeWorkerModule(in commands)
+    move (): WorkerLifecycle => executeWorkerModule(in inbox)
   );
   await delay(1);
-  const accepted = commands.post(WorkerCommand.message(WorkerMessage({
+  console.log("ZJS worker channel ready");
+  const posted = attempt await mailbox.post(WorkerCommand.message(WorkerMessage({
     left: 20,
     right: 22,
   })));
-  if (!accepted) return 1;
+  match (posted) {
+    success => {}
+    failure(_) => return 1;
+  }
+  console.log("ZJS worker command accepted");
 
   const result = await worker;
   const value = match (result) {
@@ -94,9 +103,17 @@ async function main(): i32 {
   };
   if (value != 42) return 2;
 
-  const cancellation = createWorkerMailbox();
+  const {
+    sender: cancellationSender,
+    receiver: cancellationReceiver,
+  } = Channel<WorkerCommand>.bounded(1);
+  const cancellation = createWorkerMailbox(move cancellationSender);
+  const cancellationInbox = createWorkerInbox(
+    move cancellationReceiver,
+    cancellation
+  );
   const cancelledWorker = thread.spawn(
-    move (): WorkerLifecycle => executeWorkerModule(in cancellation)
+    move (): WorkerLifecycle => executeWorkerModule(in cancellationInbox)
   );
   await delay(1);
   if (!cancellation.requestCancellation()) return 3;

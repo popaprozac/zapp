@@ -9,7 +9,8 @@ It proves that:
 - the engine runs on a dedicated `thread.spawn` worker and is joined;
 - an ES module is evaluated through ZJS's stable C embedding ABI;
 - Z owns the worker loop, sleeps until ZJS's next wake, and pumps a real timer;
-- a typed Z mailbox carries a command into the running worker;
+- a bounded typed Z channel transfers commands into the running worker with
+  ownership safety and backpressure;
 - cooperative cancellation is separate from ordinary worker commands;
 - JavaScript calls a checked `export c function` implemented in Z directly;
 - the typed `i32` result returns through ZJS without WebView IPC or JSON; and
@@ -39,8 +40,16 @@ contract engine-neutral: load a module, report pending work and its next wake,
 pump one turn, and expose the terminal result. It is evidence for a future API,
 not that API itself.
 
-The private mailbox intentionally uses today's shareable `Mutex<T>` rather
-than pretending Z already ships its planned `Channel<T>`. It carries one
-cleanup-free command and polls with a bounded sleep. A production worker queue
-should wake on a condition/event primitive, provide backpressure, and transfer
-arbitrary owned payloads; this spike keeps that future surface open.
+The private mailbox uses `Channel<WorkerCommand>.bounded(capacity)` with a
+shareable asynchronous sender and one synchronous receiver owned by the worker
+thread. Sending applies backpressure without blocking the async executor. The
+worker blocks only when it has no JavaScript work to pump. Cancellation remains
+a separate operation: it records cancellation state and closes the command
+sender, which wakes a worker blocked in `receive()`.
+
+This is deliberately not yet a general event loop. The first tier processes one
+command until the embedded engine becomes quiescent, then receives the next.
+Waking on either concurrent command arrival or an engine timer will eventually
+require a native wait-set/selection primitive or an async executor hosted by the
+worker thread. The spike records that pressure without prematurely adding
+`tryReceive` or a channel-specific polling API to Z.
