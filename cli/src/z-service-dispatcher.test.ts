@@ -158,6 +158,51 @@ describe("generated Z service dispatch", () => {
     );
   });
 
+  it("taskifies synchronous executor-placed methods behind a generated wrapper", () => {
+    const placed = structuredClone(manifest);
+    placed.services[0].methods[1].asynchronous = false;
+    const source = renderZServiceDispatchers(placed, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain(
+      "async function __zappCallNotesServiceCountOnMain(\n  service: NotesService",
+    );
+    expect(source).toContain(
+      "): u64 on thread.main {\n  return service.count();\n}",
+    );
+    expect(source).toContain(
+      "await on thread.main __zappCallNotesServiceCountOnMain(move service)",
+    );
+  });
+
+  it("moves owned input and typed failures through a synchronous placed wrapper", () => {
+    const placed = structuredClone(manifest);
+    placed.services[0].methods[0].executorAffinity = "thread.main";
+    const source = renderZServiceDispatchers(placed, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain(
+      "async function __zappCallNotesServiceCreateOnMain(\n"
+        + "  service: NotesService,\n  input: CreateNoteInput",
+    );
+    expect(source).toContain(
+      "): Note throws NoteCreationError on thread.main {\n"
+        + "  return try service.create(move input);\n}",
+    );
+    expect(source).toContain(
+      "const __called = attempt await on thread.main "
+        + "__zappCallNotesServiceCreateOnMain(move service, move input)",
+    );
+  });
+
   it("keeps synchronous struct services on the non-task adapter path", () => {
     const synchronous = structuredClone(manifest);
     synchronous.services[0].kind = "struct";

@@ -290,6 +290,8 @@ permission slice also gates frontend window creation inside Z and returns
 structured invocation errors that the TypeScript runtime restores as
 descriptive error subclasses. Generated services now preserve owned decoded
 request values and typed failures through suspension and explicit main-executor
-placement. Remaining work includes zjs host attachment, broader wire-type
-coverage, the still fail-closed synchronous executor-placed method shape, and
-ASan or equivalent leak evidence on a compatible host.
+placement. Synchronous main-isolated service methods are adapted through a
+private generated async wrapper, keeping the public method synchronous while
+making cross-executor dispatch explicit in generated Z. Remaining work includes
+zjs host attachment, broader wire-type coverage, and ASan or equivalent leak
+evidence on a compatible host.

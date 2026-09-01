@@ -34,8 +34,7 @@ export readonly class NotesService implements ServiceLifecycle {
     return this.core.create(move input);
   }
 
-  async function count(): u64 on thread.main {
-    await delay(1);
+  function count(): u64 on thread.main {
     return this.core.count();
   }
 

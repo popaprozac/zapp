@@ -310,8 +310,11 @@ transport method.
 
 Synchronous registrations use a generated `Service` adapter and the existing
 allocation-lean map. Suspended or main-isolated methods use a generated
-`AsyncService` adapter. Zapp does not silently turn a sync-only service into a
-task.
+`AsyncService` adapter. An ordinary sync-only service does not acquire task
+overhead. When a synchronous method explicitly declares `on thread.main`, the
+generated adapter synthesizes one private async main-isolated wrapper because
+cross-executor dispatch requires a task to await; the public service method
+remains synchronous.
 
 The internal runtime builders remain generic over the framework's `Service`
 and `AsyncService` traits, so the framework does not know about Notes or any
@@ -325,7 +328,7 @@ application source and external completion see only `register(...)`:
 export readonly class NotesService implements ServiceLifecycle {
   function create(input: CreateNoteInput)
     : Note throws NoteCreationError { /* ... */ }
-  async function count(): u64 on thread.main { /* ... */ }
+  function count(): u64 on thread.main { /* ... */ }
 
   function start(in context: ApplicationContext)
     : void throws ServiceLifecycleError on thread.main { /* ... */ }
@@ -389,13 +392,14 @@ The thrown type must be an exported struct whose public fields use supported
 service-wire types. The compiler metadata names it; generated Z dispatch uses
 `attempt` or `attempt await`, serializes its fields only on the failure path,
 and publishes the service, method, error type, and details in the bridge error
-envelope. The executable tier supports synchronous methods plus suspending
-methods with ordinary or `thread.main` placement. Generated dispatch
-materializes the typed result with `attempt await`, retains it in the owned task
-frame, and narrows the failure into the structured bridge envelope only at the
-transport boundary. Synchronous executor-placed methods remain fail-closed in
-the current native compiler tier; declaring the method `async` is the supported
-placement shape when it must participate in generated service dispatch.
+envelope. The executable tier supports synchronous methods, synchronous
+`thread.main` methods, and suspending methods with ordinary or `thread.main`
+placement. Generated dispatch materializes typed async results with
+`attempt await`, retains them in the owned task frame, and narrows failures into
+the structured bridge envelope only at the transport boundary. For a
+synchronous main-isolated method, generation emits a private
+`async function ... on thread.main` wrapper and awaits that task; the compiler
+does not implicitly change the method's declared execution model.
 
 Generated TypeScript exports a same-named `ZappError` subclass and a details
 interface:
@@ -536,11 +540,10 @@ an intermediate JSON document.
   against compiler metadata, and native dispatch rejects unauthorized
   originating windows before application service code runs.
 - Generated async dispatch supports multiple suspending methods, owned decoded
-  inputs, declared typed failures, and explicit `thread.main` placement. The
-  Z Notes smoke exercises all four in one generated `notes.create` route.
-- Synchronous executor-placed service methods remain fail-closed until the
-  fixed-point compiler can execute that placement without manufacturing an
-  unnecessary task. Async placed methods are the implemented path today.
+  inputs, declared typed failures, asynchronous `thread.main` placement, and
+  synchronous `thread.main` methods through private generated task wrappers.
+  The Z Notes smoke exercises both placed execution shapes: synchronous
+  `notes.count` and suspending, fallible `notes.create`.
 - The in-tree Notes project now supplies its own `.zs` entries. A stable local
   package/module contract is the next productization step; it must work in both
   semantic frontends and the editor rather than relying on staging rewrites.

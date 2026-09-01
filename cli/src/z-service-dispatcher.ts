@@ -421,15 +421,26 @@ function renderAsyncMethodHelpers(
       + `${serviceType}.${method.name}, not ${method.receiverMode}`,
     );
   }
-  if (method.executorAffinity === "thread.main" && !method.asynchronous) {
-    throw new Error(
-      `[zapp] generated async Z dispatch cannot lower synchronous executor-placed `
-      + `method ${serviceType}.${method.name} in the current fixed-point compiler tier`,
-    );
-  }
   const suffix = `${generatedName(serviceType)}${generatedName(method.name)}`;
   const decode = renderInputDecode(method);
-  const call = `service.${method.name}(${inputCall(method)})`;
+  const directCall = `service.${method.name}(${inputCall(method)})`;
+  const synchronousPlacement = method.executorAffinity === "thread.main"
+    && !method.asynchronous;
+  const placementInput = method.input ? ", move input" : "";
+  const call = synchronousPlacement
+    ? `__zappCall${suffix}OnMain(move service${placementInput})`
+    : directCall;
+  const throws = method.error ? ` throws ${method.error}` : "";
+  const wrapperParameters = method.input
+    ? `,\n  input: ${method.input}`
+    : "";
+  const wrapperInvocation = method.error ? `try ${directCall}` : directCall;
+  const wrapperBody = method.returns === "void"
+    ? `  ${wrapperInvocation};\n  return;`
+    : `  return ${wrapperInvocation};`;
+  const placementWrapper = synchronousPlacement
+    ? `async function __zappCall${suffix}OnMain(\n  service: ${serviceType}${wrapperParameters}\n): ${method.returns}${throws} on thread.main {\n${wrapperBody}\n}\n\n`
+    : "";
   const awaited = method.executorAffinity === "thread.main"
     ? `await on thread.main ${call}`
     : `await ${call}`;
@@ -453,7 +464,7 @@ function renderAsyncMethodHelpers(
     ${moved(method.returns, "methodResult")}
   );
   return ServiceOutcome.success(json.stringify(in encoded));`;
-  return `async function __zappFinish${suffix}(
+  return `${placementWrapper}async function __zappFinish${suffix}(
   service: ${serviceType},
   in invocation: ServiceInvocation
 ): ServiceOutcome {
