@@ -55,7 +55,7 @@ bunx @zappdev/cli init my-app --no-install    # scaffold only, skip `bun install
 
 Produces a ready-to-run project with `@zappdev/cli`, `@zappdev/runtime`,
 `@zappdev/vite` as dependencies pinned to the current alpha. Vite config is
-auto-wired with the `zappWorkers()` plugin. The CLI resolves
+auto-wired with the unified `zapp()` plugin. The CLI resolves
 `zapp.config.ts` once and the plugin consumes its normalized snapshot.
 
 ### `zapp dev`

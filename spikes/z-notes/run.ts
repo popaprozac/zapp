@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { compileNative } from "../../cli/src/native";
+import { prepareZFrontendServices } from "../../cli/src/native-z";
 import {
   createConfigContext,
   loadConfig,
@@ -32,8 +33,6 @@ const config = await loadConfig(
   createConfigContext(spike, "build", "macos"),
 );
 
-await run(["bunx", "vite", "build"], undefined, spike);
-
 const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
 const originalSmokeSupport = process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
@@ -42,6 +41,15 @@ process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
 if (smoke) process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = "1";
 try {
+  await prepareZFrontendServices({
+    root: spike,
+    nativeDir: resolve(repository, "native"),
+  });
+  await run(
+    ["bunx", "vite", "build"],
+    { ...process.env, ZAPP_PROJECT_ROOT: spike },
+    spike,
+  );
   await compileNative({
     root: spike,
     buildFile: "",

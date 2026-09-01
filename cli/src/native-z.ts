@@ -43,6 +43,11 @@ interface BuildNativeZOptions {
   devUrl?: string;
 }
 
+export interface PrepareZFrontendServicesOptions {
+  root: string;
+  nativeDir: string;
+}
+
 function renderZCapabilityProfiles(
   profiles: ResolvedCapabilityProfile[],
 ): string {
@@ -477,6 +482,56 @@ export async function assertZCompilerContract(
   const actual = parseZCompilerIdentity(await run([...compiler, "version"], cwd, true));
   validateZCompilerIdentity(expected, actual, contractPath);
   return actual;
+}
+
+/**
+ * Generate the WebView-facing TypeScript service module before Vite starts.
+ *
+ * The full native build repeats metadata collection from its isolated staged
+ * workspace and remains authoritative for linking. This source-graph pass is
+ * intentionally smaller: it gives Vite and TypeScript a real generated module
+ * on the first clean `zapp dev` / `zapp build` invocation.
+ */
+export async function prepareZFrontendServices(
+  options: PrepareZFrontendServicesOptions,
+): Promise<string> {
+  const appSource = path.join(options.root, "zapp");
+  const sourceEntry = path.join(appSource, zNativeEntry(
+    resolveZNativeHost(process.env.ZAPP_Z_HOST),
+  ));
+  if (!existsSync(sourceEntry)) {
+    throw new Error(
+      `[zapp] could not generate Z service bindings because ${sourceEntry} does not exist.`,
+    );
+  }
+
+  const repositoryRoot = path.resolve(options.nativeDir, "..");
+  const compiler = resolveZCompilerCommand(repositoryRoot);
+  await assertZCompilerContract(
+    compiler,
+    path.join(options.nativeDir, "z", "compiler-contract.json"),
+    options.root,
+  );
+
+  const {
+    deriveZServiceManifest,
+    parseZProgramMetadata,
+  } = await import("./z-program-metadata");
+  const { generateZServiceBindings } = await import("./z-service-bindings");
+  const metadataSource = await run(
+    [...compiler, "metadata", appSource],
+    options.root,
+    true,
+  );
+  const manifest = deriveZServiceManifest(parseZProgramMetadata(metadataSource));
+  const outputDirectory = path.join(options.root, ".zapp", "generated");
+  await mkdir(outputDirectory, { recursive: true });
+  await writeFile(
+    path.join(outputDirectory, "services.zmeta.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+  return generateZServiceBindings(manifest, outputDirectory);
 }
 
 export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> {

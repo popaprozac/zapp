@@ -10,7 +10,7 @@
 //   2. `bun create-vite` with the chosen template
 //   3. Drop in zapp/{app,build}.zc + zapp/app.nim (opt-in Nim entry),
 //      zapp.config.ts, build/macos/.gitkeep
-//   4. Inject `zappWorkers()` into the template's vite.config.{ts,js}
+//   4. Inject `zapp()` into the template's vite.config.{ts,js}
 //   5. (optional) `bun install` in the project dir
 
 import path from "node:path";
@@ -33,6 +33,29 @@ export function ensureViewportFitCover(html: string): string {
         ? full
         : `${pre}${content.replace(/\s*$/, "")}, viewport-fit=cover${post}`,
   );
+}
+
+/** Add editor resolution for the compiler-owned `zapp:services` module. */
+export function ensureZappServicePathMapping(source: string): string {
+  if (source.includes('"zapp:services"')) return source;
+  const compilerOptions = source.indexOf('"compilerOptions"');
+  if (compilerOptions < 0) return source;
+  const objectStart = source.indexOf("{", compilerOptions);
+  if (objectStart < 0) return source;
+
+  const paths = source.indexOf('"paths"', objectStart);
+  if (paths >= 0) {
+    const pathsStart = source.indexOf("{", paths);
+    if (pathsStart >= 0) {
+      return source.slice(0, pathsStart + 1)
+        + '\n      "zapp:services": ["./.zapp/generated/services.ts"],'
+        + source.slice(pathsStart + 1);
+    }
+  }
+
+  return source.slice(0, objectStart + 1)
+    + '\n    "paths": {\n      "zapp:services": ["./.zapp/generated/services.ts"]\n    },'
+    + source.slice(objectStart + 1);
 }
 
 // Vite templates we surface as first-class. Each entry maps the display
@@ -281,7 +304,7 @@ export default defineConfig({
 
   await Bun.write(pkgPath, JSON.stringify(pkgObj, null, 2));
 
-  // 5. Inject zappWorkers() into the template's vite.config.ts
+  // 5. Inject the unified zapp() plugin into the template's vite.config.ts
   // Templates like svelte-ts ship their own vite.config.ts with framework
   // plugins (e.g. svelte()). We must preserve those and append ours.
   const viteConfigPath = path.join(projectDir, "vite.config.ts");
@@ -296,7 +319,7 @@ export default defineConfig({
 
     // Add our imports at the top (after existing imports)
     const importLines = [
-      `import { zappWorkers } from "@zappdev/vite";`,
+      `import { zapp } from "@zappdev/vite";`,
     ];
     for (const importLine of importLines) {
       const pkg = importLine.match(/from ["'](.+?)["']/)?.[1] ?? "";
@@ -312,10 +335,10 @@ export default defineConfig({
 
     // The plugin reads the normalized config snapshot the CLI writes before
     // Vite starts, so contextual config factories stay out of Vite's graph.
-    if (!viteConfig.includes("zappWorkers(")) {
+    if (!viteConfig.includes("zapp(")) {
       viteConfig = viteConfig.replace(
         /plugins:\s*\[/,
-        "plugins: [zappWorkers(), "
+        "plugins: [zapp(), "
       );
     }
 
@@ -323,12 +346,24 @@ export default defineConfig({
   } else {
     // No vite.config found — create a minimal one
     await Bun.write(viteConfigPath, `import { defineConfig } from "vite";
-import { zappWorkers } from "@zappdev/vite";
+import { zapp } from "@zappdev/vite";
 
 export default defineConfig({
-  plugins: [zappWorkers()],
+  plugins: [zapp()],
 });
 `);
+  }
+
+  // TypeScript does not consult Vite aliases. Point generated projects at
+  // the same compiler-owned module so autocomplete and go-to-definition work.
+  const tsconfigCandidates = [
+    path.join(projectDir, "tsconfig.app.json"),
+    path.join(projectDir, "tsconfig.json"),
+  ];
+  const tsconfigPath = tsconfigCandidates.find((candidate) => existsSync(candidate));
+  if (tsconfigPath) {
+    const tsconfig = await Bun.file(tsconfigPath).text();
+    await Bun.write(tsconfigPath, ensureZappServicePathMapping(tsconfig));
   }
 
   // 6. Scaffold build/ directory for platform build inputs (icons,

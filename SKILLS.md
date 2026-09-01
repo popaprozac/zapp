@@ -106,7 +106,7 @@ zapp/
 │   └── patches/                    # Applied to vendored engine sources
 │
 ├── vite/                           # @zappdev/vite
-│   └── src/index.ts                # zappWorkers() plugin
+│   └── src/index.ts                # zapp() plugin
 │
 ├── benchmarks/                     # Zapp vs Tauri/Wails/Electron/Electrobun
 ├── kitchen-sink/                   # Showcase + smoke app (native chrome, workers, etc.)

@@ -170,7 +170,7 @@ const published = services.freeze();
 The generated TypeScript API is transport-independent:
 
 ```ts
-import { notes } from "./.zapp/generated/services";
+import { notes } from "zapp:services";
 
 const note = await notes.create({ title: "Draft" });
 const count = await notes.count();
@@ -180,6 +180,13 @@ In a WebView, `Services.invoke` sends the call through the document-start
 bridge. In an embedded zjs worker, the same generated module selects the
 existing direct-host fast path. Application code and generated method names do
 not change with the JavaScript execution environment.
+
+`zapp dev` and `zapp build` generate this compiler-owned module before Vite
+starts, including on a clean checkout. The unified `zapp()` Vite plugin maps
+the public specifier to `.zapp/generated/services.ts` for WebViews and nested
+worker bundles. `zapp init` adds the matching TypeScript `paths` entry so the
+editor provides completion and go-to-definition without exposing the generated
+path in application source.
 
 ## Per-request cancellation
 
@@ -449,7 +456,7 @@ Generated TypeScript exports a same-named `ZappError` subclass and a details
 interface:
 
 ```ts
-import { NoteCreationError, notes } from "./.zapp/generated/services";
+import { NoteCreationError, notes } from "zapp:services";
 
 try {
   await notes.create({ title: "" });

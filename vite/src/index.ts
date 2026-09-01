@@ -1,5 +1,5 @@
 /**
- * Zapp Vite Plugin — bundles workers and backend scripts.
+ * Zapp Vite Plugin — connects generated Z services and bundles workers.
  *
  * Discovers `new Worker("./path")` patterns, bundles each as a separate
  * entry, outputs to dist/_workers/. (`new SharedWorker()` is the web-native
@@ -9,10 +9,12 @@
  *
  * @example
  * ```ts
- * import { zappWorkers } from "@zappdev/vite";
- * export default defineConfig({ plugins: [zappWorkers()] });
+ * import { zapp } from "@zappdev/vite";
+ * export default defineConfig({ plugins: [zapp()] });
  * ```
  */
+
+/// <reference path="./babel.d.ts" />
 
 import type { Plugin, ViteDevServer } from "vite";
 import path from "node:path";
@@ -679,7 +681,7 @@ async function bundleWorker(
   }
 }
 
-interface ZappWorkersOptions {
+export interface ZappOptions {
   /**
    * Headless workers to bundle, keyed by ID. Each value is either a
    * source path (string) or `{ script, restart? }` for supervised
@@ -704,13 +706,13 @@ interface ZappWorkersOptions {
 
 async function resolveWorkerOptions(
   root: string,
-  authored: ZappWorkersOptions | undefined,
-): Promise<ZappWorkersOptions> {
+  authored: ZappOptions | undefined,
+): Promise<ZappOptions> {
   const snapshotPath = path.join(root, ".zapp", "config.resolved.json");
   if (!existsSync(snapshotPath)) return authored ?? {};
   try {
     const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as {
-      config?: ZappWorkersOptions;
+      config?: ZappOptions;
     };
     return {
       headless: authored?.headless ?? snapshot.config?.headless,
@@ -760,7 +762,7 @@ function effectiveEngine(engine: string | undefined, root: string): string | und
   return engine;
 }
 
-function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["headless"]): WorkerEntry[] {
+function resolveHeadlessEntries(root: string, headless?: ZappOptions["headless"]): WorkerEntry[] {
   if (!headless) return [];
   const entries: WorkerEntry[] = [];
   for (const [id, value] of Object.entries(headless)) {
@@ -800,8 +802,31 @@ function resolveHeadlessEntries(root: string, headless?: ZappWorkersOptions["hea
   return entries;
 }
 
-export function zappWorkers(options?: ZappWorkersOptions): Plugin {
+const ZAPP_SERVICES_MODULE = "zapp:services";
+
+function findZappProjectRoot(viteRoot: string): string {
+  const configured = process.env.ZAPP_PROJECT_ROOT;
+  if (configured) return path.resolve(configured);
+
+  let candidate = path.resolve(viteRoot);
+  while (true) {
+    if (
+      existsSync(path.join(candidate, "zapp.config.ts"))
+      || existsSync(path.join(candidate, "zapp.config.js"))
+      || existsSync(path.join(candidate, ".zapp", "generated", "services.ts"))
+    ) {
+      return candidate;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return path.resolve(viteRoot);
+    candidate = parent;
+  }
+}
+
+export function zapp(options?: ZappOptions): Plugin {
   let root = "";
+  let projectRoot = "";
+  let generatedServices = "";
   let srcDir = "";
   let workers: WorkerEntry[] = [];
   let headlessEntries: WorkerEntry[] = [];
@@ -812,11 +837,18 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
   let workerOptions = options ?? {};
 
   return {
-    name: "zapp-workers",
+    name: "zapp",
     enforce: "pre",
 
     configResolved(config) {
       root = config.root;
+      projectRoot = findZappProjectRoot(root);
+      generatedServices = path.join(
+        projectRoot,
+        ".zapp",
+        "generated",
+        "services.ts",
+      );
       srcDir = path.join(root, "src");
       outDir = path.join(root, "dist", "_workers");
       isDev = config.command === "serve";
@@ -839,6 +871,18 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
       } else if (resolvedAlias && typeof resolvedAlias === "object") {
         aliases = resolvedAlias as Record<string, string>;
       }
+      aliases[ZAPP_SERVICES_MODULE] = generatedServices;
+    },
+
+    resolveId(id) {
+      if (id !== ZAPP_SERVICES_MODULE) return null;
+      if (!existsSync(generatedServices)) {
+        throw new Error(
+          `[zapp] generated services are missing at ${generatedServices}. `
+          + "Run the frontend through `zapp dev` or `zapp build` so Z service metadata is generated first.",
+        );
+      }
+      return generatedServices;
     },
 
     async buildStart() {
@@ -970,4 +1014,7 @@ export function zappWorkers(options?: ZappWorkersOptions): Plugin {
   };
 }
 
-export default zappWorkers;
+/** @deprecated Use the unified `zapp()` plugin. */
+export const zappWorkers = zapp;
+
+export default zapp;

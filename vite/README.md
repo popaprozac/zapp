@@ -1,8 +1,8 @@
 # @zappdev/vite
 
-Vite plugin for [Zapp](https://github.com/zappdev/zapp). Bundles workers,
-routes headless workers from `zapp.config.ts`, serves worker scripts in
-dev.
+Vite plugin for [Zapp](https://github.com/zappdev/zapp). Resolves generated Z
+service bindings, bundles workers, routes headless workers from
+`zapp.config.ts`, and serves worker scripts in dev.
 
 ## Install
 
@@ -17,10 +17,10 @@ bun add -D @zappdev/vite
 ```ts
 // vite.config.ts
 import { defineConfig } from "vite";
-import { zappWorkers } from "@zappdev/vite";
+import { zapp } from "@zappdev/vite";
 
 export default defineConfig({
-  plugins: [zappWorkers()],
+  plugins: [zapp()],
 });
 ```
 
@@ -30,6 +30,16 @@ reads worker configuration from that snapshot; `vite.config.ts` never imports
 or re-evaluates executable Zapp configuration.
 
 ## What the plugin does
+
+### Generated Z services
+
+Resolves the application-owned `zapp:services` module to the typed bindings
+generated from Z compiler metadata before Vite starts. The same alias is
+forwarded into nested worker builds, so WebViews and workers use one import:
+
+```ts
+import { notes, NoteCreationError } from "zapp:services";
+```
 
 ### Webview-spawned worker discovery
 
@@ -64,7 +74,7 @@ worker code.
 ## Options
 
 ```ts
-interface ZappWorkersOptions {
+interface ZappOptions {
   /**
    * Headless workers: map of worker ID → source path (relative to project root).
    * Optional integration override. Ordinary Zapp apps use the CLI snapshot.

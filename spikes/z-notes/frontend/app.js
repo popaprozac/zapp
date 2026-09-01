@@ -2,11 +2,16 @@ import {
   createWindow,
   currentWindow,
 } from "@zappdev/runtime/window";
+import {
+  health,
+  NoteCreationError,
+  NoteDescription,
+  notes,
+} from "zapp:services";
 
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
 const status = document.querySelector("#status");
-const services = globalThis.__zappServices;
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
 // client in development. The native smoke verifies the matching mode, proving
@@ -56,11 +61,11 @@ setTimeout(() => {
 
 async function verifyTypedServiceError() {
   try {
-    await services.notes.create({ title: "", state: "active" });
+    await notes.create({ title: "", state: "active" });
     throw new Error("Expected typed NoteCreationError");
   } catch (error) {
     if (
-      error?.name !== "NoteCreationError"
+      !(error instanceof NoteCreationError)
       || error?.details?.message !== "a note title is required"
     ) {
       throw error;
@@ -70,11 +75,12 @@ async function verifyTypedServiceError() {
 }
 
 async function verifyPayloadEnum() {
-  const description = await services.notes.describeState("active");
-  if (description.kind !== "described" || description.value !== "Editable") {
+  const description = await notes.describeState("active");
+  const expected = NoteDescription.described("Editable");
+  if (description.kind !== expected.kind || description.value !== expected.value) {
     throw new Error(`Unexpected note description: ${JSON.stringify(description)}`);
   }
-  if (!(await services.notes.hasDescription(description))) {
+  if (!(await notes.hasDescription(description))) {
     throw new Error("Expected the payload enum to round-trip through Z");
   }
   document.body.dataset.payloadEnum = "ok";
@@ -84,22 +90,22 @@ button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {
     await verifyTypedServiceError();
-    const note = await services.notes.create({ title: "WebView note", state: "active" });
+    const note = await notes.create({ title: "WebView note", state: "active" });
     if (note.subtitle !== null) {
       throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
     }
     if (note.state !== "active") {
       throw new Error(`Expected active note state, received ${note.state}`);
     }
-    if (await services.notes.isArchived("active")) {
+    if (await notes.isArchived("active")) {
       throw new Error("Expected active note to remain editable");
     }
     await verifyPayloadEnum();
-    const empty = await services.notes.isEmpty();
+    const empty = await notes.isEmpty();
     if (empty) throw new Error("Expected the created note");
-    const health = await services.health.status();
-    if (health !== "ready") {
-      throw new Error(`Unexpected health status: ${health}`);
+    const healthStatus = await health.status();
+    if (healthStatus !== "ready") {
+      throw new Error(`Unexpected health status: ${healthStatus}`);
     }
     status.textContent = `Created note ${note.id}\n${note.title}`;
     document.body.dataset.roundTrip = "ok";
@@ -120,7 +126,7 @@ cancelButton.addEventListener("click", async () => {
     return;
   }
   const controller = new AbortController();
-  const pending = services.notes.count({ signal: controller.signal });
+  const pending = notes.count({ signal: controller.signal });
   controller.abort("smoke cancellation");
   try {
     await pending;
@@ -135,22 +141,22 @@ cancelButton.addEventListener("click", async () => {
     document.body.dataset.cancellation = "ok";
     status.textContent = "Cancelled safely; checking follow-up…";
     try {
-      const note = await services.notes.create({ title: "WebView note", state: "active" });
+      const note = await notes.create({ title: "WebView note", state: "active" });
       if (note.subtitle !== null) {
         throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
       }
       if (note.state !== "active") {
         throw new Error(`Expected active note state, received ${note.state}`);
       }
-      if (await services.notes.isArchived("active")) {
+      if (await notes.isArchived("active")) {
         throw new Error("Expected active note to remain editable");
       }
       await verifyPayloadEnum();
-      const empty = await services.notes.isEmpty();
+      const empty = await notes.isEmpty();
       if (empty) throw new Error("Expected the created note");
-      const health = await services.health.status();
-      if (health !== "ready") {
-        throw new Error(`Unexpected health status: ${health}`);
+      const healthStatus = await health.status();
+      if (healthStatus !== "ready") {
+        throw new Error(`Unexpected health status: ${healthStatus}`);
       }
       status.textContent =
         `Cancelled safely\nCreated note ${note.id}\n${note.title}`;

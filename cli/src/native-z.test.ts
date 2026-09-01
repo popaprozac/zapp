@@ -357,10 +357,11 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("Foundation.NSError.errorWithDomain(");
     expect(macOSPlatform).toContain("Foundation.NSLocalizedDescriptionKey");
     expect(objectiveCSmoke).toContain("forMainFrameOnly:YES");
-    expect(notesFrontend).toContain("services.notes.create");
-    expect(notesFrontend).toContain("services.notes.isEmpty()");
+    expect(notesFrontend).toContain('from "zapp:services"');
+    expect(notesFrontend).toContain("notes.create");
+    expect(notesFrontend).toContain("notes.isEmpty()");
     expect(notesFrontend).toContain("new AbortController()");
-    expect(notesFrontend).toContain("services.notes.count({ signal: controller.signal })");
+    expect(notesFrontend).toContain("notes.count({ signal: controller.signal })");
     expect(notesFrontend).toContain('error?.name !== "AbortError"');
     expect(notesFrontend).toContain('dataset.cancellation = "ok"');
     expect(notesFrontend).toContain('dataset.hmr = import.meta.hot ? "ready" : "packaged"');

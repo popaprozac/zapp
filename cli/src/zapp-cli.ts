@@ -23,6 +23,7 @@ import { createProductionBundle } from "./package";
 import { generateAssetManifest } from "./assets";
 import { setCliLevel, levelFromArgv, getCliLevel, envFromLevel, clog, clogError } from "./log";
 import { nativeLanguage } from "./native-lang";
+import { prepareZFrontendServices } from "./native-z";
 import { signalProcessTree, terminateProcessTree } from "./bounded-process";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
@@ -236,10 +237,19 @@ async function runDev(root: string) {
     ? await generateIOSBuildFile(root, userBuildFileEarly, config)
     : null;
 
-  // 2. Generate service bindings + bundle workers
-  clog(1, "scanning for services...");
-  const count = await generateBindings(root);
-  if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
+  // 2. Generate service bindings before Vite starts. Z applications derive
+  // their public `zapp:services` module from compiler metadata; legacy native
+  // hosts retain the source scanner during migration.
+  const selectedNativeLanguage = nativeLanguage();
+  if (selectedNativeLanguage === "z") {
+    clog(1, "generating typed Z service module...");
+    const generated = await prepareZFrontendServices({ root, nativeDir });
+    clog(1, `generated ${path.relative(root, generated)}`);
+  } else {
+    clog(1, "scanning for services...");
+    const count = await generateBindings(root);
+    if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
+  }
   // Workers are bundled by the Vite plugin during vite build/dev
 
   // 3. Build vendored worker engines that the user opted into (either
@@ -323,7 +333,7 @@ async function runDev(root: string) {
     stderr: "inherit",
     // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
     // (Bun.spawn otherwise snapshots env at process start, missing mutations).
-    env: { ...process.env },
+    env: { ...process.env, ZAPP_PROJECT_ROOT: root },
   });
 
   // Wait for Vite to be ready — but also fail fast if the spawned process dies
@@ -565,10 +575,17 @@ async function runBuild(
 
   await verifyWorkerModules(root, config.workerModules);
 
-  // 1. Generate service bindings + bundle workers
-  clog(1, "scanning for services...");
-  const count = await generateBindings(root);
-  if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
+  // 1. Generate service bindings before Vite resolves application imports.
+  const selectedNativeLanguage = nativeLanguage();
+  if (selectedNativeLanguage === "z") {
+    clog(1, "generating typed Z service module...");
+    const generated = await prepareZFrontendServices({ root, nativeDir });
+    clog(1, `generated ${path.relative(root, generated)}`);
+  } else {
+    clog(1, "scanning for services...");
+    const count = await generateBindings(root);
+    if (count > 0) clog(1, `generated ${count} binding(s) in src/zapp/`);
+  }
   // Workers are bundled by the Vite plugin during vite build
 
   // 2. Build frontend with Vite
@@ -579,7 +596,7 @@ async function runBuild(
     stderr: "inherit",
     // Spread process.env so the vite plugin sees the runtime-set ZAPP_LOG
     // (Bun.spawn otherwise snapshots env at process start, missing mutations).
-    env: { ...process.env },
+    env: { ...process.env, ZAPP_PROJECT_ROOT: root },
   });
   const viteExit = await viteProc.exited;
   if (viteExit !== 0) {
@@ -594,7 +611,6 @@ async function runBuild(
   // (compileNative's nim branch ignores `assetsFile`.)
   const zappDir = path.join(root, ".zapp");
   let assetsFile: string | undefined;
-  const selectedNativeLanguage = nativeLanguage();
   if (selectedNativeLanguage === "nim") {
     clog(1, "embedding assets with brotli (Nim emitter, in native build)...");
   } else if (selectedNativeLanguage === "zc") {
