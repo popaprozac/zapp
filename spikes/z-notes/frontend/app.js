@@ -2,6 +2,7 @@ import {
   createWindow,
   currentWindow,
 } from "@zappdev/runtime/window";
+import { WindowEvent } from "@zappdev/runtime";
 import {
   health,
   NoteCreationError,
@@ -15,6 +16,7 @@ const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
 const status = document.querySelector("#status");
+const windowEvents = document.querySelector("#window-events");
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
 // client in development. The native smoke verifies the matching mode, proving
@@ -23,6 +25,36 @@ document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
 const windowHandle = currentWindow();
 const currentWindowId = windowHandle.id;
+let focusedEvents = 0;
+let blurredEvents = 0;
+let resizedEvents = 0;
+let latestSize = "waiting";
+
+function renderWindowEvents() {
+  windowEvents.textContent = [
+    `Window: ${currentWindowId}`,
+    `Focused: ${focusedEvents}`,
+    `Blurred: ${blurredEvents}`,
+    `Resized: ${resizedEvents}`,
+    `Latest size: ${latestSize}`,
+  ].join("\n");
+}
+
+windowHandle.subscribe(WindowEvent.FOCUS, () => {
+  focusedEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.BLUR, () => {
+  blurredEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
+  resizedEvents += 1;
+  latestSize = `${event.size.width} × ${event.size.height}`;
+  renderWindowEvents();
+});
+renderWindowEvents();
+
 if (currentWindowId === "win-1") {
   createWindow({
     title: "Z Notes Diagnostics",

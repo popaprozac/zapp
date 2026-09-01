@@ -124,6 +124,25 @@ scope before releasing the Z-owned window graph, so native callbacks cannot race
 framework teardown. The public event objects remain platform-neutral; future
 backends provide their own native callback adapters.
 
+AppKit focus, blur, and resize callbacks now continue through that Z-owned path
+into the matching WebView. The frontend API deliberately mirrors the backend's
+subscription vocabulary and lifecycle:
+
+```ts
+const resized = window.subscribe(WindowEvent.RESIZE, ({ size }) => {
+  renderSize(size.width, size.height);
+});
+
+resized.unsubscribe();
+```
+
+Delivery is window-scoped twice: native code evaluates the event only in the
+originating window's WebView, and `WindowHandle.subscribe` filters the payload by
+the handle identity. Z Notes renders per-window focus, blur, and resize counters
+so this isolation can be exercised directly. Cancellable `closeRequested`
+remains a synchronous Z-native event; asynchronous JavaScript observers cannot
+veto an AppKit close and are not presented as though they can.
+
 The Objective-C host owns the process/run-loop adapter, native service-response
 delivery, and smoke observation rather than application object construction or
 message-body validation. The WebKit custom-scheme controller and its request

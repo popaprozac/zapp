@@ -452,8 +452,15 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("window.delegate = windowDelegate");
     expect(macOSPlatform).toContain("function javascriptJSON(");
     expect(macOSPlatform).toContain("json.encode(in envelope)");
+    expect(macOSPlatform).toContain("deliverWebViewWindowEvent(");
+    expect(macOSPlatform).toContain("deliverWebViewWindowResize(");
+    expect(macOSPlatform).toContain("b.dispatchWindowEvent(");
     expect(macOSPlatform).toContain("webView.evaluateJavaScript(");
     expect(macOSPlatform).toContain("completionHandler: move (value, error): void =>");
+    expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.FOCUS");
+    expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.BLUR");
+    expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.RESIZE");
+    expect(notesHTML).toContain('id="window-events"');
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");

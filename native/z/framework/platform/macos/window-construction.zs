@@ -113,6 +113,7 @@ internal function createMacOSWindowRuntime(
     copy id,
     nativeId,
     window,
+    webView,
     windowManager,
     didCloseNativeWindow
   );

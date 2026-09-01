@@ -15,6 +15,17 @@ readonly struct WebViewResponseEnvelope {
   payload: String;
 }
 
+readonly struct WebViewWindowEventEnvelope {
+  windowId: String;
+  eventName: String;
+  dataJson: String;
+}
+
+readonly struct WebViewWindowSizePayload {
+  width: u32;
+  height: u32;
+}
+
 function javascriptJSON(in source: String): String {
   let output = TextBuffer();
   let segmentStart: usize = 0;
@@ -50,6 +61,48 @@ function responseScript(in response: BridgeResponse): String {
   const encoded = json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b._onInvokeResult!=='function'){throw new Error('Zapp bridge is unavailable')}b._onInvokeResult(Number(r.id),r.ok,r.payload)})()`;
+}
+
+function windowEventScript(
+  in windowId: String,
+  in eventName: String,
+  in dataJson: String
+): String {
+  const envelope = WebViewWindowEventEnvelope({
+    windowId: copy windowId,
+    eventName: copy eventName,
+    dataJson: copy dataJson,
+  });
+  const encoded = json.encode(in envelope);
+  const source = javascriptJSON(in encoded);
+  return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchWindowEvent!=='function')return;b.dispatchWindowEvent(e.windowId,e.eventName,e.dataJson||undefined)})()`;
+}
+
+internal function deliverWebViewWindowEvent(
+  in webView: WebKit.WKWebView,
+  in windowId: String,
+  in eventName: String
+): void on thread.main {
+  const script = windowEventScript(in windowId, in eventName, "");
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
+}
+
+internal function deliverWebViewWindowResize(
+  in webView: WebKit.WKWebView,
+  in windowId: String,
+  width: u32,
+  height: u32
+): void on thread.main {
+  const payload = WebViewWindowSizePayload({ width, height });
+  const dataJson = json.encode(in payload);
+  const script = windowEventScript(in windowId, "resize", in dataJson);
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
 }
 
 internal function deliverWebViewResponse(
