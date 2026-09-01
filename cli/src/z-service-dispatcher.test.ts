@@ -109,6 +109,23 @@ describe("generated Z service dispatch", () => {
     expect(source).toContain("function __zappAdaptNotes(");
   });
 
+  it("widens generated integer bounds before checked comparison", () => {
+    const scalar = structuredClone(manifest);
+    scalar.services[0].methods[0].input = "i32";
+    scalar.services[0].methods[0].returns = "i32";
+    scalar.services[0].methods[0].error = undefined;
+    const source = renderZServiceDispatchers(scalar, {
+      outputPath: "/workspace/generated/service-dispatchers.zs",
+      serviceContractModule: "/workspace/framework/service-contract.zs",
+      servicesModule: "/workspace/framework/services.zs",
+      asyncServiceContractModule: "/workspace/framework/async-service-contract.zs",
+      serviceLifecycleContractModule: "/workspace/framework/service-lifecycle-contract.zs",
+    });
+    expect(source).toContain(
+      "integer < -i64(2147483648) || integer > i64(2147483647)",
+    );
+  });
+
   it("rejects writable request capabilities at generation time", () => {
     const invalid = structuredClone(manifest);
     invalid.services[0].methods[0].inputMode = "inout";

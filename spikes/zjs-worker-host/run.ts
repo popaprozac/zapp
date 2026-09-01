@@ -1,5 +1,11 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { generateZServiceDispatchers } from "../../cli/src/z-service-dispatcher";
+import { generateZServiceRegistrationOverlay } from "../../cli/src/z-service-registration";
+import {
+  deriveZServiceManifest,
+  parseZProgramMetadata,
+} from "../../cli/src/z-program-metadata";
 
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
@@ -9,20 +15,31 @@ const build = resolve(spike, "build");
 const generated = resolve(spike, ".zapp");
 const adapterObject = resolve(build, "zapp_worker_zjs.o");
 const adapterLibrary = resolve(build, "libzapp_worker_zjs.a");
+const zEntry = resolve(repository, "native/z/smokes/zjs-worker-host/main.zs");
 const zjsLibrary = resolve(
   process.env.ZAPP_ZJS_LIBRARY ?? resolve(zjsRepository, "build/libzjs.a"),
 );
 
-async function run(command: string[], cwd: string): Promise<void> {
+async function run(
+  command: string[],
+  cwd: string,
+  capture = false,
+): Promise<string> {
   const child = Bun.spawn(command, {
     cwd,
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: capture ? "pipe" : "inherit",
+    stderr: capture ? "pipe" : "inherit",
   });
+  const stdout = capture ? await new Response(child.stdout).text() : "";
+  const stderr = capture ? await new Response(child.stderr).text() : "";
   const status = await child.exited;
   if (status !== 0) {
-    throw new Error(`${command[0]} exited with status ${status}`);
+    throw new Error(
+      `${command[0]} exited with status ${status}`
+      + (stderr.trim() ? `\n${stderr.trim()}` : ""),
+    );
   }
+  return stdout;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -71,7 +88,7 @@ await writeFile(resolve(generated, "z.json"), `${JSON.stringify({
   target: {
     kind: "executable",
     name: "zapp_zjs_worker_host",
-    entry: "../main.zs",
+    entry: zEntry,
     platform: "macos",
     minimumVersion: "14.0",
     includeDirectories: [
@@ -86,7 +103,47 @@ await writeFile(resolve(generated, "z.json"), `${JSON.stringify({
   },
 }, null, 2)}\n`);
 
+const compiler = [process.execPath, "run", "z"];
+const metadataSource = await run(
+  [...compiler, "metadata", generated],
+  zRepository,
+  true,
+);
+const serviceManifest = deriveZServiceManifest(
+  parseZProgramMetadata(metadataSource),
+  "WorkerServicesBuilder.register",
+);
+const dispatcher = await generateZServiceDispatchers(serviceManifest, {
+  outputPath: resolve(generated, "generated/service-dispatchers.zs"),
+  serviceContractModule: resolve(repository, "native/z/framework/service-contract.zs"),
+  servicesModule: resolve(repository, "native/z/framework/services.zs"),
+  asyncServiceContractModule: resolve(repository, "native/z/framework/async-service-contract.zs"),
+  serviceLifecycleContractModule: resolve(repository, "native/z/api/zapp/service.zs"),
+});
+const registrationOverlay = await generateZServiceRegistrationOverlay(
+  serviceManifest,
+  dispatcher,
+  resolve(generated, "generated/service-registration.zbuild.json"),
+  {
+    marker: "WorkerServicesBuilder.register",
+    synchronous: "WorkerServicesBuilder.registerGenerated",
+    asynchronous: "WorkerServicesBuilder.registerGeneratedAsync",
+    synchronousWithLifecycle:
+      "WorkerServicesBuilder.registerGeneratedWithLifecycle",
+    asynchronousWithLifecycle:
+      "WorkerServicesBuilder.registerGeneratedAsyncWithLifecycle",
+    generatedModulePackage: null,
+  },
+);
+
 await run(
-  ["bun", "run", "z", "run", generated, "--release"],
+  [
+    ...compiler,
+    "run",
+    generated,
+    "--generated",
+    registrationOverlay,
+    "--release",
+  ],
   zRepository,
 );

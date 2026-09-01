@@ -218,6 +218,19 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
+  it("derives services from an explicitly selected private build marker", () => {
+    const workerMetadata = structuredClone(metadata);
+    workerMetadata.modules[0].calls[0].target.symbol = "WorkerServicesBuilder";
+    workerMetadata.modules[0].calls[0].target.name = "WorkerServicesBuilder.register";
+    const derived = deriveZServiceManifest(
+      workerMetadata,
+      "WorkerServicesBuilder.register",
+    );
+    expect(derived.services).toHaveLength(1);
+    expect(derived.services[0].registration.method)
+      .toBe("WorkerServicesBuilder.register");
+  });
+
   it("retains typed async and executor contracts for dispatcher generation", () => {
     expect(deriveZServiceManifest(metadata).services[0].methods).toContainEqual({
       id: zServiceMethodId("notes.count"),

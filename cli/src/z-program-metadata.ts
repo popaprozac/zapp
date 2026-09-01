@@ -262,12 +262,22 @@ function addWireType(
   types.push({ name, module: module.path, fields });
 }
 
-export function deriveZServiceManifest(metadata: ZProgramMetadata): ZServiceManifest {
+export function deriveZServiceManifest(
+  metadata: ZProgramMetadata,
+  registrationMethod = "ApplicationServicesBuilder.register",
+): ZServiceManifest {
+  const separator = registrationMethod.lastIndexOf(".");
+  if (separator <= 0 || separator === registrationMethod.length - 1) {
+    throw new Error(
+      `[zapp] invalid Z service registration method ${JSON.stringify(registrationMethod)}`,
+    );
+  }
+  const registrationSymbol = registrationMethod.slice(0, separator);
   const registrations = metadata.modules.flatMap((module) => (
     module.calls.filter((call) => (
-      call.target.symbol === "ApplicationServicesBuilder"
+      call.target.symbol === registrationSymbol
       && call.target.kind === "method"
-      && call.target.name === "ApplicationServicesBuilder.register"
+      && call.target.name === registrationMethod
     )).map((call) => ({ call, module }))
   ));
   const types: ZServiceTypeMetadata[] = [];

@@ -129,4 +129,43 @@ function main(): i32 {
       .toBe("ApplicationServicesBuilder.registerGenerated");
     rmSync(directory, { recursive: true, force: true });
   });
+
+  it("adapts an explicitly selected private registration marker", async () => {
+    const directory = mkdtempSync("/tmp/zapp-service-registration-private-");
+    const application = path.join(directory, "worker", "main.zs");
+    const generatedModule = path.join(directory, "generated", "service-dispatchers.zs");
+    const overlayPath = path.join(directory, "generated", "service-registration.zbuild.json");
+    mkdirSync(path.dirname(application), { recursive: true });
+    mkdirSync(path.dirname(generatedModule), { recursive: true });
+    const source = 'services.register("probe", service);\n';
+    writeFileSync(application, source);
+    writeFileSync(generatedModule, "");
+    const manifest = manifestFor(source, application);
+    manifest.services[0].registration.method = "WorkerServicesBuilder.register";
+    manifest.services[0].lifecycle = false;
+    manifest.services[0].methods[0].asynchronous = false;
+    manifest.services[0].methods[0].executorAffinity = null;
+    await generateZServiceRegistrationOverlay(
+      manifest,
+      generatedModule,
+      overlayPath,
+      {
+        marker: "WorkerServicesBuilder.register",
+        synchronous: "WorkerServicesBuilder.registerGenerated",
+        asynchronous: "WorkerServicesBuilder.registerGeneratedAsync",
+        synchronousWithLifecycle: "WorkerServicesBuilder.registerGeneratedWithLifecycle",
+        asynchronousWithLifecycle: "WorkerServicesBuilder.registerGeneratedAsyncWithLifecycle",
+        generatedModulePackage: null,
+      },
+    );
+    const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    expect(overlay.modules["zapp/generated/service-dispatchers"]).toEqual({
+      source: "./service-dispatchers.zs",
+    });
+    expect(overlay.callAdapters[0].target)
+      .toBe("WorkerServicesBuilder.register");
+    expect(overlay.callAdapters[0].replacement)
+      .toBe("WorkerServicesBuilder.registerGenerated");
+    rmSync(directory, { recursive: true, force: true });
+  });
 });

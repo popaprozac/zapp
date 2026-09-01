@@ -404,9 +404,9 @@ function renderDecodeScalar(type: string): string {
   const signed = type.match(/^i(8|16|32)$/);
   if (signed) {
     const limits: Record<string, [string, string]> = {
-      "8": ["-128", "127"],
-      "16": ["-32768", "32767"],
-      "32": ["-2147483648", "2147483647"],
+      "8": ["128", "127"],
+      "16": ["32768", "32767"],
+      "32": ["2147483648", "2147483647"],
     };
     const [minimum, maximum] = limits[signed[1]];
     const suffix = generatedName(type);
@@ -422,7 +422,7 @@ function renderDecodeScalar(type: string): string {
     success(integer) => integer;
     failure(error) => throw __zappCodecError(copy error.message);
   };
-  if (integer < ${minimum} || integer > ${maximum}) {
+  if (integer < -i64(${minimum}) || integer > i64(${maximum})) {
     throw __zappCodecError("${type} value is out of range");
   }
   return ${type}(integer);
@@ -449,7 +449,7 @@ function renderDecodeScalar(type: string): string {
     success(integer) => integer;
     failure(error) => throw __zappCodecError(copy error.message);
   };
-  if (integer > ${maximum}) {
+  if (integer > u64(${maximum})) {
     throw __zappCodecError("${type} value is out of range");
   }
   return ${type}(integer);

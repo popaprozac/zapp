@@ -561,7 +561,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
     const workerSpike = readFileSync(
-      new URL("../../spikes/zjs-worker-host/main.zs", import.meta.url),
+      new URL("../../native/z/smokes/zjs-worker-host/main.zs", import.meta.url),
       "utf8",
     );
 
@@ -618,7 +618,7 @@ describe("Z native host inputs", () => {
     expect(workerEngine).toContain("export struct WorkerInbox<Command>");
     expect(workerEngine).toContain("Engine: WorkerEngine<Command>");
     expect(workerSpike).toContain(
-      'from "../../native/z/framework/worker/engine.zs"',
+      'from "../../framework/worker/engine.zs"',
     );
     expect(workerSpike).toContain(
       "struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand>",

@@ -3,6 +3,12 @@
 This private spike validates the engine boundary for the Z rewrite of Zapp
 Workers without committing a public `Worker` API.
 
+The checked Z program lives under `native/z/smokes/zjs-worker-host` beside the
+framework code it pressure-tests. The spike directory retains only the native
+ZJS adapter, build runner, and editor manifest. Its generated standalone build
+uses an exported smoke-only registration marker without exposing a public
+Zapp Worker API or weakening package-scoped `internal` declarations.
+
 It proves that:
 
 - Z owns the move-only lifetime of an opaque ZJS engine adapter;
@@ -13,7 +19,10 @@ It proves that:
   ownership safety and backpressure;
 - cooperative cancellation is separate from ordinary worker commands;
 - JavaScript calls a checked `export c function` implemented in Z directly;
-- the typed `i32` result returns through ZJS without WebView IPC or JSON; and
+- that narrow host binding enters a generated typed `WorkerProbeService.add`
+  adapter through Zapp's frozen Z `Services` router;
+- the typed `i32` result returns through ZJS without WebView IPC (the private
+  service adapter owns its generated JSON wire codec); and
 - lexical Z cleanup destroys the ZJS context after the worker completes.
 
 Run from the Zapp repository root:
