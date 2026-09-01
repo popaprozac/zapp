@@ -8,6 +8,7 @@ It proves that:
 - Z owns the move-only lifetime of an opaque ZJS engine adapter;
 - the engine runs on a dedicated `thread.spawn` worker and is joined;
 - an ES module is evaluated through ZJS's stable C embedding ABI;
+- Z owns the worker loop, sleeps until ZJS's next wake, and pumps a real timer;
 - JavaScript calls a checked `export c function` implemented in Z directly;
 - the typed `i32` result returns through ZJS without WebView IPC or JSON; and
 - lexical Z cleanup destroys the ZJS context after the worker completes.
@@ -25,6 +26,13 @@ compatible Zen-C compiler revision; `ZAPP_ZC` and `ZAPP_ZC_ROOT` can point the
 runner at that compiler and source tree. `ZAPP_ZJS_LIBRARY` can instead select
 an already-built static archive.
 
+The checked-in `z.json` supplies stable header discovery to the Z language
+server. The runner emits a private manifest with resolved library paths for the
+actual executable build.
+
 This adapter is intentionally narrow. It keeps `ZjsContext`, `ZjsValue`, GC
 roots, module evaluation, and engine error conversion out of Zapp's eventual
-public worker model.
+public worker model. The private `WorkerEngine` trait makes the scheduling
+contract engine-neutral: load a module, report pending work and its next wake,
+pump one turn, and expose the terminal result. It is evidence for a future API,
+not that API itself.

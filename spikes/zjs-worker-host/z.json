@@ -1,0 +1,13 @@
+{
+  "target": {
+    "kind": "executable",
+    "name": "zapp_zjs_worker_host",
+    "entry": "main.zs",
+    "platform": "macos",
+    "minimumVersion": "14.0",
+    "includeDirectories": [
+      "adapter",
+      "../../../zjs/include"
+    ]
+  }
+}

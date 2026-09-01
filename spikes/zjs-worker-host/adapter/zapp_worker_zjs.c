@@ -16,6 +16,12 @@ struct ZappZjsEngine {
   char error[512];
 };
 
+// ZJS host functions do not currently carry embedder user data. Worker
+// engines are thread-confined, so the adapter binds the engine being entered
+// for the duration of each evaluation or pump. This remains safe when several
+// engines share an OS thread because calls into an engine are synchronous.
+static _Thread_local ZappZjsEngine *entered_engine;
+
 static ZjsValue host_add(
   ZjsContext *context,
   ZjsValue *arguments,
@@ -33,10 +39,12 @@ static ZjsValue host_add(
     return zjs_undefined();
   }
 
-  return zjs_int32(zapp_worker_probe_add(
+  int32_t result = zapp_worker_probe_add(
     zjs_as_int32(arguments[0]),
     zjs_as_int32(arguments[1])
-  ));
+  );
+  if (entered_engine) entered_engine->result = result;
+  return zjs_int32(result);
 }
 
 static void copy_error(ZappZjsEngine *engine, const char *fallback) {
@@ -83,29 +91,51 @@ int32_t zapp_zjs_engine_evaluate_module(
   if (!engine || !engine->context || !source) return 1;
   engine->error[0] = '\0';
 
-  ZjsValue exports = zjs_eval_module_source(
+  ZappZjsEngine *previous_engine = entered_engine;
+  entered_engine = engine;
+  zjs_eval_module_source(
     engine->context,
     source,
     strlen(source),
     "/zapp/internal/worker-proof.mjs"
   );
+  entered_engine = previous_engine;
   if (zjs_had_error(engine->context)) {
     copy_error(engine, "worker module evaluation failed");
     return 2;
   }
 
-  ZjsValue result = zjs_get_property(engine->context, exports, "result");
-  if (!zjs_is_int32(result)) {
-    copy_error(engine, "worker module did not export an i32 result");
-    return 3;
+  return 0;
+}
+
+int32_t zapp_zjs_engine_has_pending_work(ZappZjsEngine *engine) {
+  if (!engine || !engine->context) return 0;
+  return zjs_has_pending_work(engine->context);
+}
+
+int64_t zapp_zjs_engine_next_wake_milliseconds(ZappZjsEngine *engine) {
+  if (!engine || !engine->context) return -1;
+  return zjs_next_timer_ms(engine->context);
+}
+
+int32_t zapp_zjs_engine_pump(ZappZjsEngine *engine) {
+  if (!engine || !engine->context) return 1;
+  ZappZjsEngine *previous_engine = entered_engine;
+  entered_engine = engine;
+  zjs_run_pending_timers(engine->context);
+  zjs_drain_microtasks(engine->context);
+  entered_engine = previous_engine;
+  if (zjs_had_error(engine->context)) {
+    copy_error(engine, "worker event loop failed");
+    return 2;
   }
 
-  engine->result = zjs_as_int32(result);
   return 0;
 }
 
 int32_t zapp_zjs_engine_result(ZappZjsEngine *engine) {
-  return engine ? engine->result : 0;
+  if (!engine || !engine->context) return 0;
+  return engine->result;
 }
 
 const char *zapp_zjs_engine_error(ZappZjsEngine *engine) {
