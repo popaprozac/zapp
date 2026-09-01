@@ -302,6 +302,34 @@ describe("ROUTE_CHANGED event updates router getters", () => {
   });
 });
 
+describe("WindowHandle.subscribe", () => {
+  const EVENT = eventName(WindowEvent.FOCUS);
+
+  test("delivers only this window's events", () => {
+    const win = createWindowHandle("win-subscribe");
+    const calls: unknown[] = [];
+    win.subscribe(WindowEvent.FOCUS, (payload) => calls.push(payload));
+
+    mock.fire(EVENT, { windowId: "win-other" });
+    mock.fire(EVENT, { windowId: "win-subscribe" });
+
+    expect(calls).toEqual([{ windowId: "win-subscribe" }]);
+  });
+
+  test("unsubscribe is explicit and idempotent", () => {
+    const win = createWindowHandle("win-unsubscribe");
+    let calls = 0;
+    const subscription = win.subscribe(WindowEvent.FOCUS, () => { calls += 1; });
+
+    mock.fire(EVENT, { windowId: "win-unsubscribe" });
+    subscription.unsubscribe();
+    subscription.unsubscribe();
+    mock.fire(EVENT, { windowId: "win-unsubscribe" });
+
+    expect(calls).toBe(1);
+  });
+});
+
 // ── Seed invoke fires on handle construction ───────────────────────────────────
 
 test("createWindowHandle issues __router:state seed invoke (best-effort)", () => {

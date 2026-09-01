@@ -40,11 +40,11 @@ export const inspectorSection: Section = {
     const win = Window.current();
     host.innerHTML = `<div class="kv"><b>Inspector</b><div data-state class="muted">Live — collapse, expand, or drag the inspector to see state.</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
-    const off = [
-      win.on(WindowEvent.INSPECTOR_COLLAPSED, () => { state.textContent = "collapsed"; }),
-      win.on(WindowEvent.INSPECTOR_EXPANDED, () => { state.textContent = "expanded"; }),
-      win.on(WindowEvent.INSPECTOR_RESIZED, (d: any) => { state.textContent = `width ${d.width}`; }),
+    const subscriptions = [
+      win.subscribe(WindowEvent.INSPECTOR_COLLAPSED, () => { state.textContent = "collapsed"; }),
+      win.subscribe(WindowEvent.INSPECTOR_EXPANDED, () => { state.textContent = "expanded"; }),
+      win.subscribe(WindowEvent.INSPECTOR_RESIZED, (d: any) => { state.textContent = `width ${d.width}`; }),
     ];
-    return () => off.forEach((fn) => fn());
+    return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
   },
 };

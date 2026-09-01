@@ -226,7 +226,7 @@ fn run_app() -> int {
 ```ts
 import { Window, WindowEvent, Services, Menu, App } from "@zappdev/runtime";
 
-Window.current().on(WindowEvent.READY, () => {
+Window.current().subscribe(WindowEvent.READY, () => {
     Window.current().show();
 });
 

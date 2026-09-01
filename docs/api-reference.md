@@ -434,7 +434,7 @@ MINIMIZE = 6, MAXIMIZE = 7, RESTORE = 8,
 FULLSCREEN = 9, UNFULLSCREEN = 10
 ```
 
-Attach with `WindowHandle.on(WindowEvent.X, handler)` (auto-scopes to the
+Attach with `WindowHandle.subscribe(WindowEvent.X, handler)` (auto-scopes to the
 window).
 
 **`AppEvent`** (app-scoped, numeric 100+):
@@ -519,7 +519,7 @@ const w = await Window.create({
   height: 600,
   visible: false,
 });
-w.on(WindowEvent.READY, () => w.show());
+w.subscribe(WindowEvent.READY, () => w.show());
 ```
 
 > **iOS is single-window.** A `Window.create()` *without* `asSheetOf` is a no-op
@@ -617,7 +617,7 @@ Window.create({
 
 ```ts
 readonly id: string
-on(event: WindowEvent, handler): () => void
+subscribe(event: WindowEvent, handler): WindowEventSubscription
 
 show(): void
 hide(): void
@@ -643,6 +643,18 @@ attachModal(modal: WindowHandle): void
 detachModal(modal: WindowHandle): void
 ```
 
+`subscribe` returns an identity-bearing subscription rather than a bare cleanup
+callback. Detach explicitly when the owning UI scope ends; repeated calls are
+safe:
+
+```ts
+const focused = window.subscribe(WindowEvent.FOCUS, () => renderFocused());
+
+// During teardown:
+focused.unsubscribe();
+focused.unsubscribe(); // no-op
+```
+
 > **Coordinates are top-left global** (origin at the primary display's
 > top-left, y down) — consistent with the `Screen` API. (Changed from the
 > earlier macOS-native bottom-left in the Screen/Displays release.)
@@ -666,7 +678,7 @@ const settings = await Window.create({
 // settings is now a sheet on parent — no separate attachModal needed.
 
 // Listen for dismissal on the parent:
-parent.on(WindowEvent.MODAL_DISMISSED, ({ modalId, code }) => {
+parent.subscribe(WindowEvent.MODAL_DISMISSED, ({ modalId, code }) => {
   if (modalId === settings.id) {
     // code: NSModalResponse value (1=OK, 0=Cancel, -1000=Stop, ...)
   }
@@ -1000,10 +1012,10 @@ the request falls outside `minWidth`/`maxWidth` and UIKit clamps it, a second
 correction event follows with the actual (clamped) width once layout settles.
 
 ```ts
-win.on(WindowEvent.SIDEBAR_RESIZED, ({ width }) => {
+win.subscribe(WindowEvent.SIDEBAR_RESIZED, ({ width }) => {
   localStorage.setItem("sidebarWidth", String(width));
 });
-win.on(WindowEvent.SIDEBAR_COLLAPSED, () => console.log("collapsed"));
+win.subscribe(WindowEvent.SIDEBAR_COLLAPSED, () => console.log("collapsed"));
 ```
 
 The sidebar receives all host window events (focus, resize, close, etc.)
@@ -1253,7 +1265,7 @@ const win = await Window.create({
 const insp = Window.current().inspector!;
 insp.toggle();
 insp.setWidth(360);
-win.on(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", width));
+win.subscribe(WindowEvent.INSPECTOR_RESIZED, ({ width }) => console.log("inspector", width));
 ```
 
 **Options:** `url` (required), `title` (default `""` — no bar unless set; see
@@ -1600,7 +1612,7 @@ same emit:
 { id: "compose", icon: "sf:square.and.pencil", action: () => { ... } }
 
 // 2. window event — any pane of the window (or anyone holding a handle)
-win.on(WindowEvent.TOOLBAR_CLICKED, ({ id }) => {
+win.subscribe(WindowEvent.TOOLBAR_CLICKED, ({ id }) => {
   if (id === "compose") startCompose();
 });
 ```
@@ -1750,7 +1762,7 @@ host content webview plus its sidebar/inspector panes — **not** a
 currently-pushed route webview. Worker delivery of toolbar events is a
 **known iOS gap** — wire toolbar handlers from a webview pane for now. A
 route page that needs a toolbar action should rely on the item's `action`
-callback (always delivered) rather than `win.on(WindowEvent.TOOLBAR_CLICKED, …)`.
+callback (always delivered) rather than `win.subscribe(WindowEvent.TOOLBAR_CLICKED, …)`.
 
 **Per-VC stamping.** The window's toolbar defs (`setItems`/`updateItem`) are
 the source of truth; the framework re-stamps whichever view controller is
@@ -1791,7 +1803,7 @@ pop.show({ x: 40, y: 90, width: 120, height: 20 }, { edge: "right" });
 pop.hide();                              // dismiss — webview stays warm
 pop.destroy();                           // teardown + slot freed
 
-win.on(WindowEvent.POPOVER_CLOSED, ({ popoverId }) => { ... }); // hide() AND transient dismissal
+win.subscribe(WindowEvent.POPOVER_CLOSED, ({ popoverId }) => { ... }); // hide() AND transient dismissal
 ```
 
 `behavior` controls dismissal: `"transient"` (default — outside click
@@ -1855,7 +1867,7 @@ group-level press signal, or rely on the per-segment `action`). In all modes the
 segment's own `action` callback also runs.
 
 ```ts
-win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, ({ id, index, selected }) => {
+win.subscribe(WindowEvent.TOOLBAR_GROUP_SELECTED, ({ id, index, selected }) => {
   // id      — the segmented item's id
   // index   — segment index that was toggled
   // selected — boolean: the toggled index's new state (always true for "one";
@@ -1961,7 +1973,7 @@ const off = router.on((e) => {
 off();
 
 // Equivalent via WindowEvent
-win.on(WindowEvent.ROUTE_CHANGED, (e) => console.log(e.url));
+win.subscribe(WindowEvent.ROUTE_CHANGED, (e) => console.log(e.url));
 ```
 
 #### `RouteOptions`
@@ -2122,7 +2134,7 @@ clicks, and sidebar/inspector collapse/expand events fan out only to the
 window's host content webview plus its sidebar/inspector panes, never to a
 currently-pushed route. A route page that needs to react to a toolbar click
 should rely on the item's `action` callback (always delivered to the pushing
-context) rather than `win.on(WindowEvent.TOOLBAR_CLICKED, …)`.
+context) rather than `win.subscribe(WindowEvent.TOOLBAR_CLICKED, …)`.
 
 **Lateral navigation** (sidebar to section on iPhone):
 
@@ -2203,7 +2215,7 @@ console.log(wins.map((w) => w.id));
 
 Broadcast to **all** webviews and workers when a router stack changes for any
 window (push/pop/forward/replace/popToRoot). Filter by `windowId` to scope to
-a specific window — or use `win.on(WindowEvent.ROUTE_CHANGED, handler)` /
+a specific window — or use `win.subscribe(WindowEvent.ROUTE_CHANGED, handler)` /
 `win.router.on(handler)` which filter automatically.
 
 **Payload:** `{ windowId, url, params, canGoBack, canGoForward, kind }`

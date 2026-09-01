@@ -20,7 +20,7 @@ document.getElementById("editor")!.addEventListener("input", () => {
 });
 
 win.setCloseGuard(true);
-win.on(WindowEvent.CLOSE, async () => {
+win.subscribe(WindowEvent.CLOSE, async () => {
   if (!isDirty) {
     win.close();
     return;
@@ -1197,7 +1197,7 @@ pair so app code can react per-level.
 ### Dismissal event
 
 ```ts
-parent.on(WindowEvent.MODAL_DISMISSED, ({ modalId }) => {
+parent.subscribe(WindowEvent.MODAL_DISMISSED, ({ modalId }) => {
   console.log("user closed modal:", modalId);
 });
 ```

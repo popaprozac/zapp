@@ -138,8 +138,8 @@ if (isSidebar || isInspector || isPopover) {
 // window. The toolbar itself is attached create-time from Nim (app.nim's
 // `toolbar:` field) — HOST pane only, since that's where the native NSToolbar
 // lives (window.m's darwin_toolbar_attach is engine-agnostic and per-window,
-// not per-pane). `Window.current().on(WindowEvent.TOOLBAR_CLICKED, ...)` is
-// the raw bridge subscription (window.ts's WindowHandle.on — filters by
+// not per-pane). `Window.current().subscribe(WindowEvent.TOOLBAR_CLICKED, ...)` is
+// the raw bridge subscription (window.ts's WindowHandle.subscribe — filters by
 // windowId, independent of whether the clicked item was registered via a JS
 // `toolbar.setItems({action})` closure). We use this raw form deliberately:
 // the toolbar here is Nim-authored (no JS-side action closures registered),
@@ -148,7 +148,7 @@ if (isSidebar || isInspector || isPopover) {
 const tbclick = document.querySelector<HTMLPreElement>("#tbclick")!;
 const tbheight = document.querySelector<HTMLPreElement>("#tbheight")!;
 if (!isSidebar && !isInspector) {
-  Window.current().on(WindowEvent.TOOLBAR_CLICKED, (payload: any) => {
+  Window.current().subscribe(WindowEvent.TOOLBAR_CLICKED, (payload: any) => {
     tbclick.textContent = `toolbar click: ${JSON.stringify(payload)}`;
   });
 }
@@ -172,11 +172,11 @@ document.addEventListener("contextmenu", (e) => {
 // Host window events must reach CEF windows + panes (host-event fan-out fix).
 // Every pane subscribes; resizing/focusing window 1 should update ALL THREE.
 const winevt = document.querySelector<HTMLPreElement>("#winevt")!;
-Window.current().on(WindowEvent.RESIZE, (p) => {
+Window.current().subscribe(WindowEvent.RESIZE, (p) => {
   winevt.textContent = `window event: resize ${p.size.width}×${p.size.height}`;
 });
-Window.current().on(WindowEvent.FOCUS, () => { winevt.textContent = "window event: focus"; });
-Window.current().on(WindowEvent.BLUR,  () => { winevt.textContent = "window event: blur"; });
+Window.current().subscribe(WindowEvent.FOCUS, () => { winevt.textContent = "window event: focus"; });
+Window.current().subscribe(WindowEvent.BLUR,  () => { winevt.textContent = "window event: blur"; });
 
 // Render whatever --zapp-toolbar-height computes to — this is the WK-only
 // zapp_toolbar_inject_metrics CSS var (zapp_webview_for_slot → WKWebView).

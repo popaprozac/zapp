@@ -88,7 +88,7 @@ App.on(AppEvent.OPEN_URL, (data) => { ... });
 // Windows
 const w = Window.current();                          // webview only
 const w2 = await Window.create({ title: "Second" }); // any context
-w.on(WindowEvent.CLOSE, () => { ... });
+w.subscribe(WindowEvent.CLOSE, () => { ... });
 w.setCloseGuard(true);  // block close; handle in CLOSE event
 
 // Services (Zen-C handlers)

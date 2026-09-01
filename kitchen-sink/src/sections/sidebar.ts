@@ -95,17 +95,17 @@ export const sidebarSection: Section = {
     const win = Window.current();
     host.innerHTML = `<div class="kv"><b>Sidebar</b><div data-state class="muted">Live — collapse, expand, or drag the sidebar to see state.</div></div>`;
     const state = host.querySelector<HTMLElement>("[data-state]")!;
-    const off = [
-      win.on(WindowEvent.SIDEBAR_COLLAPSED, () => {
+    const subscriptions = [
+      win.subscribe(WindowEvent.SIDEBAR_COLLAPSED, () => {
         state.textContent = "collapsed";
       }),
-      win.on(WindowEvent.SIDEBAR_EXPANDED, () => {
+      win.subscribe(WindowEvent.SIDEBAR_EXPANDED, () => {
         state.textContent = "expanded";
       }),
-      win.on(WindowEvent.SIDEBAR_RESIZED, (d: any) => {
+      win.subscribe(WindowEvent.SIDEBAR_RESIZED, (d: any) => {
         state.textContent = `width ${d.width}`;
       }),
     ];
-    return () => off.forEach((fn) => fn());
+    return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
   },
 };

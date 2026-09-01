@@ -10,7 +10,7 @@
 import { Events, Window, WindowEvent } from "@zappdev/runtime";
 
 const win = Window.current();
-win.on(WindowEvent.READY, () => win.show());
+win.subscribe(WindowEvent.READY, () => win.show());
 
 const out = document.getElementById("out") as HTMLDivElement;
 

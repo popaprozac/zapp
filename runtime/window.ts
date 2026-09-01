@@ -9,7 +9,13 @@
  * // no manual show() needed. Just listen for events you actually care
  * // about (resize, focus, close, etc.).
  * const win = Window.current();
- * win.on(WindowEvent.RESIZE, (payload) => console.log(payload.size));
+ * const resized = win.subscribe(
+ *   WindowEvent.RESIZE,
+ *   (payload) => console.log(payload.size),
+ * );
+ *
+ * // Later, when this UI scope is torn down:
+ * resized.unsubscribe();
  *
  * // Want to delay showing yourself? Pass visible:false at create time
  * // and call win.show() when you're ready.
@@ -1489,6 +1495,17 @@ export interface RouterHandle {
 /** Size events that include width/height/position data. */
 type SizeEvent = WindowEvent.RESIZE | WindowEvent.MOVE | WindowEvent.MAXIMIZE | WindowEvent.RESTORE;
 
+/**
+ * One active window-event subscription.
+ *
+ * `unsubscribe()` is explicit and idempotent. This mirrors Z's native
+ * `WindowEventSubscription` surface while the bridge keeps its lower-level
+ * cleanup callback internal.
+ */
+export interface WindowEventSubscription {
+  unsubscribe(): void;
+}
+
 /** A handle to a specific window. */
 export interface WindowHandle {
   readonly id: string;
@@ -1504,11 +1521,11 @@ export interface WindowHandle {
    *  context (webview or worker) using the window id. */
   readonly router: RouterHandle;
 
-  on(event: SizeEvent, handler: (payload: WindowSizePayload) => void): () => void;
-  on(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): () => void;
-  on(event: WindowEvent.SIDEBAR_RESIZED, handler: (payload: SidebarResizedPayload) => void): () => void;
-  on(event: WindowEvent.INSPECTOR_RESIZED, handler: (payload: InspectorResizedPayload) => void): () => void;
-  on(event: WindowEvent, handler: (payload: WindowPayload) => void): () => void;
+  subscribe(event: SizeEvent, handler: (payload: WindowSizePayload) => void): WindowEventSubscription;
+  subscribe(event: WindowEvent.MODAL_DISMISSED, handler: (payload: ModalDismissedPayload) => void): WindowEventSubscription;
+  subscribe(event: WindowEvent.SIDEBAR_RESIZED, handler: (payload: SidebarResizedPayload) => void): WindowEventSubscription;
+  subscribe(event: WindowEvent.INSPECTOR_RESIZED, handler: (payload: InspectorResizedPayload) => void): WindowEventSubscription;
+  subscribe(event: WindowEvent, handler: (payload: WindowPayload) => void): WindowEventSubscription;
 
   show(): void;
   hide(): void;
@@ -1615,8 +1632,8 @@ function createSidebarHandle(
 
   if (!sidebarWired.has(windowId)) {
     // Use bridge.on directly here — the WindowHandle being built isn't
-    // returned yet, so handle.on() isn't available. bridge.on uses the same
-    // event bus and the same windowId filter as handle.on() would.
+    // returned yet, so handle.subscribe() isn't available. bridge.on uses the
+    // same event bus and the same windowId filter as handle.subscribe() would.
     const bridge = getBridge();
     bridge.on(eventName(WindowEvent.SIDEBAR_COLLAPSED), (payload: any) => {
       if (payload?.windowId === windowId) {
@@ -1860,13 +1877,21 @@ export function createWindowHandle(windowId: string, sidebarOpts?: SidebarOption
   return {
     id: windowId,
 
-    on(event: WindowEvent, handler: (payload: any) => void): () => void {
+    subscribe(event: WindowEvent, handler: (payload: any) => void): WindowEventSubscription {
       const name = eventName(event);
-      return bridge.on(name, (payload: any) => {
+      const detach = bridge.on(name, (payload: any) => {
         if (payload?.windowId === windowId) {
           handler(payload);
         }
       });
+      let active = true;
+      return {
+        unsubscribe() {
+          if (!active) return;
+          active = false;
+          detach();
+        },
+      };
     },
 
     show()                            { windowAction("show", { windowId }); },

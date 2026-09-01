@@ -69,13 +69,17 @@ export const toolbarSection: Section = {
     const state = host.querySelector<HTMLElement>("[data-state]")!;
     const group = host.querySelector<HTMLElement>("[data-group]")!;
     const filterEl = host.querySelector<HTMLElement>("[data-filter]")!;
-    const offClick = win.on(WindowEvent.TOOLBAR_CLICKED, (p: any) => { state.textContent = `clicked: ${p.id}`; });
-    const offGroup = win.on(WindowEvent.TOOLBAR_GROUP_SELECTED, (p: any) => {
+    const clickSubscription = win.subscribe(WindowEvent.TOOLBAR_CLICKED, (p: any) => { state.textContent = `clicked: ${p.id}`; });
+    const groupSubscription = win.subscribe(WindowEvent.TOOLBAR_GROUP_SELECTED, (p: any) => {
       group.textContent = `group: id=${p.id} index=${p.index} selected=${JSON.stringify(p.selected)}`;
     });
     // ks:filter is emitted from the Filter pull-down AND the cycle button — keep
     // the inspector in sync from either path (this pane is a separate webview).
     const offFilter = Events.on("ks:filter", ({ value }: any) => { filterEl.textContent = `Filter: ${value}`; });
-    return () => { offClick(); offGroup(); offFilter(); };
+    return () => {
+      clickSubscription.unsubscribe();
+      groupSubscription.unsubscribe();
+      offFilter();
+    };
   },
 };

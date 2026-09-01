@@ -43,7 +43,7 @@ export enum WindowEvent {
   SIDEBAR_RESIZED = 14,
   /** Fires when a custom toolbar button is clicked. Broadcast to ALL
    * webviews + workers (menu pattern) — the creator's `action` callbacks
-   * and any pane's `win.on(...)` both consume the same emit.
+   * and any pane's `win.subscribe(...)` both consume the same emit.
    * Payload: `{ windowId, id }`. */
   TOOLBAR_CLICKED = 15,
   /** Fires when a popover closes — both explicit hide() and transient

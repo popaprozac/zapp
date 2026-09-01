@@ -34,25 +34,31 @@ export const windowLogSection: Section = {
     };
 
     const win = Window.current();
-    // WindowEvent members: window-scoped (filtered to this window by win.on)
+    // WindowEvent members: window-scoped (filtered by win.subscribe)
     // AppEvent.SCREENS_CHANGED: app-scoped (displays added/removed/reconfigured)
-    const off = [
-      win.on(WindowEvent.RESIZE,      (d: any) => append("resize",      d)),
-      win.on(WindowEvent.MOVE,        (d: any) => append("move",        d)),
-      win.on(WindowEvent.FOCUS,       ()       => append("focus",       undefined)),
-      win.on(WindowEvent.BLUR,        ()       => append("blur",        undefined)),
-      win.on(WindowEvent.MINIMIZE,    ()       => append("minimize",    undefined)),
-      win.on(WindowEvent.MAXIMIZE,    ()       => append("maximize",    undefined)),
-      win.on(WindowEvent.RESTORE,     ()       => append("restore",     undefined)),
-      win.on(WindowEvent.FULLSCREEN,  ()       => append("fullscreen",  undefined)),
-      win.on(WindowEvent.UNFULLSCREEN,()       => append("unfullscreen",undefined)),
-      Events.on(AppEvent.SCREENS_CHANGED, ()   => append("screens-changed", undefined)),
+    const subscriptions = [
+      win.subscribe(WindowEvent.RESIZE,      (d: any) => append("resize",      d)),
+      win.subscribe(WindowEvent.MOVE,        (d: any) => append("move",        d)),
+      win.subscribe(WindowEvent.FOCUS,       ()       => append("focus",       undefined)),
+      win.subscribe(WindowEvent.BLUR,        ()       => append("blur",        undefined)),
+      win.subscribe(WindowEvent.MINIMIZE,    ()       => append("minimize",    undefined)),
+      win.subscribe(WindowEvent.MAXIMIZE,    ()       => append("maximize",    undefined)),
+      win.subscribe(WindowEvent.RESTORE,     ()       => append("restore",     undefined)),
+      win.subscribe(WindowEvent.FULLSCREEN,  ()       => append("fullscreen",  undefined)),
+      win.subscribe(WindowEvent.UNFULLSCREEN,()       => append("unfullscreen",undefined)),
     ];
+    const offScreens = Events.on(
+      AppEvent.SCREENS_CHANGED,
+      () => append("screens-changed", undefined),
+    );
 
     onAct(host, "clear", () => {
       log.innerHTML = `<div class="muted" data-empty>waiting for events…</div>`;
     });
 
-    return () => { off.forEach((fn) => fn()); };
+    return () => {
+      subscriptions.forEach((subscription) => subscription.unsubscribe());
+      offScreens();
+    };
   },
 };

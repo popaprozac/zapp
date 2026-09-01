@@ -26,10 +26,10 @@ test("sidebar window event wire names", () => {
   expect(eventName(WindowEvent.SIDEBAR_RESIZED)).toBe("window:sidebar-resized");
 });
 
-// INSPECTOR_RESIZED: wire name + typed on() overload (compile-level check).
+// INSPECTOR_RESIZED: wire name + typed subscribe() overload (compile-level check).
 expect(eventName(WindowEvent.INSPECTOR_RESIZED)).toBe("window:inspector-resized");
 const _inspectorResizedTyped = (win: WindowHandle) =>
-  win.on(WindowEvent.INSPECTOR_RESIZED, (p: InspectorResizedPayload) => void p.width);
+  win.subscribe(WindowEvent.INSPECTOR_RESIZED, (p: InspectorResizedPayload) => void p.width);
 void _inspectorResizedTyped;
 
 describe("BackgroundExtension", () => {
@@ -319,4 +319,3 @@ describe("normalizeToolbar stable menu ids (push path, #771 T8 review I3; round 
     for (const id of ids) expect(id).toMatch(/^__tbmenu_\d+$/);
   });
 });
-

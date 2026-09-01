@@ -34,10 +34,17 @@ export const popoverSection: Section = {
       setResult(host, "shown (anchored to Compose toolbar item)");
     });
     const win = Window.current();
-    const off = [
-      win.on(WindowEvent.POPOVER_CLOSED, (p: any) => setResult(host, `closed: ${p.popoverId}`)),
-      Events.on("ks:popover-emit", () => setResult(host, "popover emitted an event → main pane received it")),
-    ];
-    return () => off.forEach((fn) => fn());
+    const closed = win.subscribe(
+      WindowEvent.POPOVER_CLOSED,
+      (p: any) => setResult(host, `closed: ${p.popoverId}`),
+    );
+    const offEmit = Events.on(
+      "ks:popover-emit",
+      () => setResult(host, "popover emitted an event → main pane received it"),
+    );
+    return () => {
+      closed.unsubscribe();
+      offEmit();
+    };
   },
 };
