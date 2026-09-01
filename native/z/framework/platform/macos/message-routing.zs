@@ -15,11 +15,15 @@ import {
 import { TaskControl } from "std/async";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
-import { routeWindowBridgeMessage } from "../../window-bridge.zs";
+import {
+  WindowBridgeRoute,
+  routeWindowBridgeMessage,
+} from "../../window-bridge.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
 
 enum WindowMessageRoute {
   framework BridgeResponse,
+  handled,
   service BridgeMessage,
 }
 
@@ -145,6 +149,7 @@ async function routeFrameworkOrServiceMessageAndDeliver(
       deliverResponse(in response, windowId);
       return true;
     }
+    handled => return true;
     service(forwarded) => return await routeMessageAndDeliver(
       move forwarded,
       services,
@@ -192,8 +197,9 @@ function selectWindowMessageRouteWithCapabilities(
     inout windows
   );
   return match (routed) {
-    some(response) => WindowMessageRoute.framework(response);
-    none => {
+    response(value) => WindowMessageRoute.framework(value);
+    handled => WindowMessageRoute.handled;
+    unhandled => {
       const denied = authorizeServiceInvocation(
         in message,
         selectedCapabilities

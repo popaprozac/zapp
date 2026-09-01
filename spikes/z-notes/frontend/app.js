@@ -11,6 +11,9 @@ import {
 
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
+const renameWindowButton = document.querySelector("#rename-window");
+const hideWindowButton = document.querySelector("#hide-window");
+const closeWindowButton = document.querySelector("#close-window");
 const status = document.querySelector("#status");
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
@@ -18,7 +21,8 @@ const status = document.querySelector("#status");
 // that `zapp dev` loaded the app through Vite rather than a stale packaged UI.
 document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
-const currentWindowId = currentWindow().id;
+const windowHandle = currentWindow();
+const currentWindowId = windowHandle.id;
 if (currentWindowId === "win-1") {
   createWindow({
     title: "Z Notes Diagnostics",
@@ -58,6 +62,26 @@ setTimeout(() => {
   document.body.dataset.windowId = String(windowId ?? "missing");
   document.body.dataset.inject = isolated ? "ready" : "error";
 }, 0);
+
+renameWindowButton.addEventListener("click", () => {
+  const title = `Z Notes — ${currentWindowId}`;
+  windowHandle.setTitle(title);
+  status.textContent = `Renamed native window\n${title}`;
+});
+
+hideWindowButton.addEventListener("click", () => {
+  status.textContent = "Hiding native window for 1 second…";
+  windowHandle.hide();
+  setTimeout(() => {
+    windowHandle.show();
+    status.textContent = "Native window shown again";
+  }, 1000);
+});
+
+closeWindowButton.addEventListener("click", () => {
+  status.textContent = `Closing ${currentWindowId}…`;
+  windowHandle.close();
+});
 
 async function verifyTypedServiceError() {
   try {
@@ -108,6 +132,7 @@ button.addEventListener("click", async () => {
       throw new Error(`Unexpected health status: ${healthStatus}`);
     }
     status.textContent = `Created note ${note.id}\n${note.title}`;
+    windowHandle.setTitle(`Z Notes — ${note.title}`);
     document.body.dataset.roundTrip = "ok";
     document.body.dataset.health = "ok";
   } catch (error) {

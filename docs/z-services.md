@@ -60,9 +60,10 @@ the manager, while its main-executor methods may safely update the manager's
 owned state. This is Z's shallow `readonly` contract, not a recursive freeze.
 `WindowOptions()` supplies defaults, and each successful `create` returns a
 stable ARC `Window` handle with `show`, `hide`, `setTitle`, and idempotent
-`close` operations. The current macOS vertical slice realizes one window
-registered before `run`; native dynamic and multi-window realization are
-explicit follow-up work.
+`close` operations. The macOS vertical slice realizes both windows registered
+before `run` and windows requested dynamically by the frontend. Focused
+frontend handles route `show`, `hide`, `setTitle`, and `close` back through the
+same Z-owned manager rather than a parallel native implementation.
 
 The window URL is application-relative and stable across environments. Zapp
 resolves `/notes` against the Vite/Bun development origin or the packaged

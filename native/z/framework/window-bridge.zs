@@ -32,8 +32,23 @@ readonly struct FrontendWindowCreated {
   windowId: String;
 }
 
+readonly struct FrontendWindowAction {
+  windowId: String;
+}
+
+readonly struct FrontendWindowTitleAction {
+  windowId: String;
+  title: String;
+}
+
 readonly struct FrontendWindowList {
   ids: Array<String>;
+}
+
+export enum WindowBridgeRoute {
+  response BridgeResponse,
+  handled,
+  unhandled,
 }
 
 readonly struct WindowBridgeError {
@@ -139,15 +154,73 @@ function listWindows(
   return bridgeSuccess(message.id, move payload);
 }
 
+function routeWindowAction(
+  in message: BridgeMessage,
+  inout windows: WindowManager
+): boolean on thread.main {
+  if (message.method == "show") {
+    const decoded = attempt json.decode<FrontendWindowAction>(
+      in message.arguments
+    );
+    match (decoded) {
+      success(action) => windows.show(in action.windowId);
+      failure(_) => {}
+    }
+    return true;
+  }
+  if (message.method == "hide") {
+    const decoded = attempt json.decode<FrontendWindowAction>(
+      in message.arguments
+    );
+    match (decoded) {
+      success(action) => windows.hide(in action.windowId);
+      failure(_) => {}
+    }
+    return true;
+  }
+  if (message.method == "close") {
+    const decoded = attempt json.decode<FrontendWindowAction>(
+      in message.arguments
+    );
+    match (decoded) {
+      success(action) => windows.close(in action.windowId);
+      failure(_) => {}
+    }
+    return true;
+  }
+  if (message.method == "setTitle") {
+    const decoded = attempt json.decode<FrontendWindowTitleAction>(
+      in message.arguments
+    );
+    match (decoded) {
+      success(action) => windows.setTitle(
+        in action.windowId,
+        copy action.title
+      );
+      failure(_) => {}
+    }
+    return true;
+  }
+  return false;
+}
+
 export function routeWindowBridgeMessage(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
   capabilities: CapabilitySelection,
   inout windows: WindowManager
-): Option<BridgeResponse> on thread.main {
-  if (message.kind != BridgeMessageKind.invoke) return Option.none;
+): WindowBridgeRoute on thread.main {
+  if (message.kind == BridgeMessageKind.action) {
+    if (routeWindowAction(in message, inout windows)) {
+      return WindowBridgeRoute.handled;
+    }
+    return WindowBridgeRoute.unhandled;
+  }
+  if (message.kind != BridgeMessageKind.invoke) {
+    return WindowBridgeRoute.unhandled;
+  }
   if (message.method == "__window:create") {
-    return Option.some(createWindow(
+    return WindowBridgeRoute.response(createWindow(
       in message,
       in permissions,
       capabilities,
@@ -155,7 +228,7 @@ export function routeWindowBridgeMessage(
     ));
   }
   if (message.method == "__zapp:windows-list") {
-    return Option.some(listWindows(in message, in windows));
+    return WindowBridgeRoute.response(listWindows(in message, in windows));
   }
-  return Option.none;
+  return WindowBridgeRoute.unhandled;
 }

@@ -366,6 +366,12 @@ permissions, lifecycle, and generated contracts.
 Exit: a small application uses ordinary Zapp frontend APIs without knowing the
 native core was replaced.
 
+Current checkpoint: the Z Notes application creates multiple native windows,
+uses generated typed services with error and cancellation propagation, and
+drives `show`, `hide`, `setTitle`, and `close` through ordinary frontend window
+handles into the Z-owned manager. Frontend delivery of the native typed window
+event surface remains the next focused composition slice.
+
 ### Phase 3: zjs worker vertical slice
 
 - Initialize and own one zjs context from Z.

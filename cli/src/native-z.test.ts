@@ -387,6 +387,10 @@ describe("Z native host inputs", () => {
       new URL("../../spikes/z-notes/frontend/index.html", import.meta.url),
       "utf8",
     );
+    const windowBridge = readFileSync(
+      new URL("../../native/z/framework/window-bridge.zs", import.meta.url),
+      "utf8",
+    );
     const nativeBuilder = readFileSync(
       new URL("./native-z.ts", import.meta.url),
       "utf8",
@@ -454,6 +458,12 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
     expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
     expect(macOSPlatform).toContain("unknown window capability profile");
+    expect(macOSPlatform).toContain("WindowMessageRoute.handled");
+    expect(windowBridge).toContain("export enum WindowBridgeRoute");
+    expect(windowBridge).toContain('message.method == "show"');
+    expect(windowBridge).toContain('message.method == "hide"');
+    expect(windowBridge).toContain('message.method == "close"');
+    expect(windowBridge).toContain('message.method == "setTitle"');
     expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
     expect(macOSPlatform).toContain("u32(math.trunc(value))");
     expect(macOSPlatform).toContain("WebKit.NSMakeRect(");
@@ -468,6 +478,13 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain('from "zapp:services"');
     expect(notesFrontend).toContain("notes.create");
     expect(notesFrontend).toContain("notes.isEmpty()");
+    expect(notesFrontend).toContain("windowHandle.setTitle(");
+    expect(notesFrontend).toContain("windowHandle.hide()");
+    expect(notesFrontend).toContain("windowHandle.show()");
+    expect(notesFrontend).toContain("windowHandle.close()");
+    expect(notesHTML).toContain('id="rename-window"');
+    expect(notesHTML).toContain('id="hide-window"');
+    expect(notesHTML).toContain('id="close-window"');
     expect(notesFrontend).toContain("new AbortController()");
     expect(notesFrontend).toContain("notes.count({ signal: controller.signal })");
     expect(notesFrontend).toContain('error?.name !== "AbortError"');

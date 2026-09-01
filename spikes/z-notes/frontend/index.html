@@ -26,6 +26,17 @@
         font: inherit;
       }
 
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      h2 {
+        margin: 24px 0 10px;
+        font-size: 1rem;
+      }
+
       pre {
         min-height: 72px;
         padding: 14px;
@@ -38,8 +49,16 @@
     <main>
       <h1>Zapp is calling a Z service</h1>
       <p>This page is an embedded frontend asset calling generated service bindings.</p>
-      <button id="ping" type="button">Create a note in Z</button>
-      <button id="cancel" type="button">Cancel a suspended request</button>
+      <div class="controls">
+        <button id="ping" type="button">Create a note in Z</button>
+        <button id="cancel" type="button">Cancel a suspended request</button>
+      </div>
+      <h2>Native window actions routed through Z</h2>
+      <div class="controls">
+        <button id="rename-window" type="button">Rename window</button>
+        <button id="hide-window" type="button">Hide for 1 second</button>
+        <button id="close-window" type="button">Close window</button>
+      </div>
       <pre id="status">Waiting for the bridge…</pre>
     </main>
 

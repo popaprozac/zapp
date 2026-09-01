@@ -46,11 +46,11 @@ the Z builder. The builder:
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request
-identities through the full `u64` range, dispatches `__zapp:ping`, and returns
-an `Option<BridgeResponse>` to the host. Request/response invokes produce
-`some(response)`; fire-and-forget bridge actions, events, worker messages, sync
-signals, and cancellation produce `none`. Arbitrary `a` payloads are serialized
-at the ingress edge and do not become the core's internal object model.
+identities through the full `u64` range, and distinguishes framework responses,
+handled fire-and-forget operations, and messages available to another router.
+This prevents a recognized action from accidentally falling through as a
+service invocation. Arbitrary `a` payloads are serialized at the ingress edge
+and do not become the core's internal object model.
 
 The default executable is now a visible multi-window AppKit/WebKit application.
 Z creates and owns each window, WebView, configuration, content controller,
@@ -65,6 +65,16 @@ child inherits its creator's capability profiles; Web content cannot submit a
 different profile list. Native-authored windows may select named profiles in
 `WindowOptions`, while unknown names fail window realization with a typed
 `WindowError`.
+
+The focused frontend `WindowHandle` operations `show`, `hide`, `setTitle`, and
+`close` now traverse that same production bridge and call the Z-owned
+`WindowManager` on `thread.main`. They are intentionally fire-and-forget, so a
+recognized action is consumed without manufacturing an invoke response;
+malformed payloads and unknown window identities fail closed as no-ops. The Z
+Notes smoke changes the native title after a typed service round trip, proving
+WebView -> Z -> AppKit composition rather than only the manager seam.
+The interactive page also exposes visible rename, temporary hide/show, and
+close controls so the same production route can be exercised by hand.
 
 Each Z-owned `Window` also exposes a typed, main-executor event surface. Event
 channels are ordinary Z objects rather than stringly framework callbacks:
