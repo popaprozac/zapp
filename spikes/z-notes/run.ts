@@ -54,12 +54,27 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "configured application worker did not invoke the Z health service directly",
     );
   }
+  if (!stdout.includes("sent async-service")) {
+    throw new Error(
+      "configured application worker did not await a suspended Z service",
+    );
+  }
+  if (!stdout.includes("sent async-cancelled")) {
+    throw new Error(
+      "configured application worker did not cancel a suspended Z service",
+    );
+  }
   if (!stdout.includes("sent denied")) {
     throw new Error(
       "configured application worker did not receive a typed capability denial",
     );
   }
-  if (stdout.includes("sent denial-missing") || stdout.includes("sent denial-wrong-error")) {
+  if (
+    stdout.includes("sent denial-missing")
+    || stdout.includes("sent denial-wrong-error")
+    || stdout.includes("sent async-cancellation-missing")
+    || stdout.includes("sent async-cancellation-wrong-error")
+  ) {
     throw new Error(
       "configured application worker did not preserve service capability safety",
     );

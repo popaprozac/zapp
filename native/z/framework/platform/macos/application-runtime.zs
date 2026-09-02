@@ -6,7 +6,7 @@ import {
   CapabilitySelection,
 } from "../../application-capabilities.zs";
 import { AsyncServices } from "../../async-services.zs";
-import { BridgeResponse } from "../../bridge.zs";
+import { BridgeResponse, bridgeFailure } from "../../bridge.zs";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
 import { Map } from "std/collections";
@@ -29,8 +29,12 @@ import {
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import {
+  ApplicationWorkerServiceRequests,
   ApplicationWorkers,
   ApplicationWorkerDispatch,
+  applicationWorkerServiceResponse,
+  completeApplicationWorkerService,
+  createApplicationWorkerServiceRequests,
   emptyApplicationWorkers,
 } from "../../worker/application-workers.zs";
 
@@ -44,6 +48,7 @@ internal class MacOSApplicationRuntime {
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
   applicationWorkers: ApplicationWorkers on thread.main;
+  readonly workerServiceRequests: ApplicationWorkerServiceRequests;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
   retiredNativeWindows: Array<MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
@@ -369,6 +374,76 @@ internal function publishMacOSApplicationWorkerMessage(
   if (!scheduled.accepted) return;
 }
 
+async function finishMacOSApplicationWorkerService(
+  workerIdentity: usize,
+  requestId: u64,
+  generation: u64,
+  method: String,
+  arguments: String
+): void on thread.main {
+  const current = application.get();
+  const invoked = await current.services.invoke(
+    move method,
+    move arguments
+  );
+  const response = applicationWorkerServiceResponse(move invoked);
+  current.workerServiceRequests.finish(requestId, generation);
+  completeApplicationWorkerService(
+    workerIdentity,
+    requestId,
+    in response
+  );
+}
+
+internal function publishMacOSApplicationWorkerService(
+  workerIdentity: usize,
+  workerId: String,
+  requestId: u64,
+  method: String,
+  arguments: String
+): void on thread.any {
+  const current = application.get();
+  const updates = current.updates;
+  const generation = current.workerServiceRequests.begin(requestId);
+  const control = updates.schedule(
+    thread.main,
+    async move (): void => await finishMacOSApplicationWorkerService(
+      workerIdentity,
+      requestId,
+      generation,
+      move method,
+      move arguments
+    )
+  );
+  current.workerServiceRequests.attach(requestId, control);
+  if (!control.accepted) {
+    current.workerServiceRequests.cancel(requestId);
+    const closing = bridgeFailure(
+      0,
+      "APPLICATION_CLOSING",
+      `Application is closing; worker ${workerId} service was not started`
+    );
+    completeApplicationWorkerService(
+      workerIdentity,
+      requestId,
+      in closing
+    );
+    return;
+  }
+}
+
+internal function cancelMacOSApplicationWorkerService(
+  requestId: u64
+): void on thread.any {
+  const current = application.get();
+  current.workerServiceRequests.cancel(requestId);
+}
+
+internal function cancelAllMacOSApplicationWorkerServices(): void on thread.main {
+  const current = application.get();
+  current.workerServiceRequests.cancelAll();
+}
+
 internal function initializeMacOSApplicationRuntimeState(
   name: String,
   permissions: ApplicationPermissions,
@@ -389,6 +464,7 @@ internal function initializeMacOSApplicationRuntimeState(
     routeMessage,
     deliverMessageResponse: deliverResponse,
     applicationWorkers: emptyApplicationWorkers(),
+    workerServiceRequests: createApplicationWorkerServiceRequests(),
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,

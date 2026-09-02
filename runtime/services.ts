@@ -28,34 +28,80 @@ function normalizeWorkerError(error: unknown): Error {
 }
 
 function invokeDirectWorker<TReturn, TArgs>(
-  hostBridge: { invokeService(method: string, args?: TArgs): TReturn },
+  hostBridge: {
+    invokeService(method: string, args?: TArgs): TReturn | PromiseLike<TReturn>;
+    cancelService?(requestId: number): boolean;
+  },
   method: string,
   args: TArgs | undefined,
   opts: InvokeOptions | undefined,
 ): CancellablePromise<TReturn> {
+  const signal = opts?.signal;
+  if (signal?.aborted) {
+    const aborted = Promise.reject<TReturn>(abortError()) as CancellablePromise<TReturn>;
+    aborted.cancel = () => {};
+    return aborted;
+  }
+
+  let value: TReturn | PromiseLike<TReturn>;
+  try {
+    // Native entry remains hot and synchronous. Only a genuinely suspended
+    // service returns a Promise-like continuation from the host.
+    value = hostBridge.invokeService(method, args);
+  } catch (error) {
+    const failed = Promise.reject<TReturn>(
+      normalizeWorkerError(error),
+    ) as CancellablePromise<TReturn>;
+    failed.cancel = () => {};
+    return failed;
+  }
+
+  const thenable = value !== null
+    && (typeof value === "object" || typeof value === "function")
+    && typeof (value as { then?: unknown }).then === "function";
+  if (!thenable) {
+    // Keep synchronous worker services on the allocation-lean path. The
+    // generated facade still returns its ordinary Promise API, but no abort
+    // listener or native-continuation closure is needed after native return.
+    const settled = Promise.resolve(value as TReturn) as CancellablePromise<TReturn>;
+    settled.cancel = () => {};
+    return settled;
+  }
+
   let completed = false;
+  let rejectSource: (reason?: unknown) => void = () => {};
+  const id = Number((value as { __zappRequestId?: unknown }).__zappRequestId);
+  const requestId = Number.isFinite(id) && id > 0 ? id : undefined;
+  let cancel = () => {};
+  const cleanup = () => signal?.removeEventListener("abort", cancel);
   const source = new Promise<TReturn>((resolve, reject) => {
-    if (opts?.signal?.aborted) {
-      completed = true;
-      reject(abortError());
-      return;
-    }
-    // Synchronous native services are hot: enter the host during the call,
-    // then expose the result through the same Promise API generated for a
-    // WebView. Once entered, this tier has no suspended work to cancel.
-    try {
-      const value = hostBridge.invokeService(method, args);
-      completed = true;
-      resolve(value);
-    } catch (error) {
-      completed = true;
-      reject(normalizeWorkerError(error));
-    }
+    rejectSource = reject;
+    Promise.resolve(value).then(
+      (resolved) => {
+        if (completed) return;
+        completed = true;
+        cleanup();
+        resolve(resolved);
+      },
+      (error) => {
+        if (completed) return;
+        completed = true;
+        cleanup();
+        reject(normalizeWorkerError(error));
+      },
+    );
   }) as CancellablePromise<TReturn>;
-  source.cancel = () => {
+  cancel = () => {
     if (completed) return;
     completed = true;
+    if (requestId !== undefined) hostBridge.cancelService?.(requestId);
+    cleanup();
+    rejectSource(abortError());
   };
+  source.cancel = cancel;
+  signal?.addEventListener("abort", cancel, { once: true });
+  // Cover a signal that changed after native entry but before listener setup.
+  if (signal?.aborted) cancel();
   return source;
 }
 
@@ -85,7 +131,10 @@ export const Services = {
     const directWorkerInvoke = (globalThis as any).__zappWorkerInvokeService;
     if (typeof directWorkerInvoke === "function") {
       return invokeDirectWorker(
-        { invokeService: directWorkerInvoke },
+        {
+          invokeService: directWorkerInvoke,
+          cancelService: (globalThis as any).__zappWorkerCancelService,
+        },
         method,
         args,
         opts,

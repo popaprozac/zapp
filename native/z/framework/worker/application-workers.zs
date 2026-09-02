@@ -8,7 +8,11 @@ import {
   bridgeTypedServiceFailure,
   bridgeWorkerCapabilityFailure,
 } from "../bridge.zs";
+import { ServiceOutcome } from "../service-contract.zs";
 import { Services } from "../services.zs";
+import { TaskControl } from "std/async";
+import { Map } from "std/collections";
+import { Mutex } from "std/sync";
 
 export enum ApplicationWorkerDispatch {
   accepted,
@@ -26,7 +30,138 @@ export type ApplicationWorkerMessageHandler = (
   payload: String
 ) => void on thread.any;
 
-function allowsApplicationWorkerService(
+export type ApplicationWorkerAsyncServiceHandler = (
+  workerIdentity: usize,
+  workerId: String,
+  requestId: u64,
+  method: String,
+  arguments: String
+) => void on thread.any;
+
+export type ApplicationWorkerServiceCancelHandler = (
+  requestId: u64
+) => void on thread.any;
+
+class ApplicationWorkerServiceRequest {
+  readonly generation: u64;
+  control: Option<TaskControl>;
+
+  function attach(inout this, control: TaskControl): void {
+    this.control = Option.some(control);
+  }
+
+  function requestCancel(): boolean {
+    return match (in this.control) {
+      some(control) => control.requestCancel();
+      none => false;
+    };
+  }
+}
+
+struct ApplicationWorkerServiceRequestState {
+  requests: Map<u64, ApplicationWorkerServiceRequest>;
+  nextGeneration: u64;
+}
+
+// Request admission happens on the engine thread, while execution and
+// completion happen on the application executor. This synchronized registry
+// ensures attach/cancel races cannot depend on executor queue order.
+internal readonly class ApplicationWorkerServiceRequests {
+  readonly state: Mutex<ApplicationWorkerServiceRequestState>;
+
+  function begin(requestId: u64): u64 {
+    return this.state.withLock(
+      (inout state): u64 => {
+        const generation = state.nextGeneration;
+        state.nextGeneration = state.nextGeneration + 1;
+        // Service request IDs are process-wide and never reused. Delete is a
+        // defensive replacement guard without introducing a second owner.
+        state.requests.delete(requestId);
+        state.requests.set(
+          requestId,
+          new ApplicationWorkerServiceRequest({
+            generation,
+            control: Option<TaskControl>.none,
+          })
+        );
+        return generation;
+      }
+    );
+  }
+
+  function attach(requestId: u64, control: TaskControl): void {
+    const attached = this.state.withLock(
+      (inout state): boolean => {
+        const found = state.requests.remove(requestId);
+        return match (found) {
+          some(value) => {
+            let request = value;
+            request.attach(control);
+            state.requests.set(requestId, request);
+            select true;
+          }
+          none => false;
+        };
+      }
+    );
+    if (!attached) control.requestCancel();
+  }
+
+  function finish(requestId: u64, generation: u64): void {
+    this.state.withLock(
+      (inout state): void => {
+        const found = state.requests.remove(requestId);
+        match (found) {
+          some(value) => {
+            let request = value;
+            if (request.generation != generation) {
+              state.requests.set(requestId, request);
+            }
+          }
+          none => {}
+        }
+      }
+    );
+  }
+
+  function cancel(requestId: u64): boolean {
+    return this.state.withLock(
+      (inout state): boolean => {
+        const found = state.requests.remove(requestId);
+        return match (found) {
+          some(value) => {
+            let request = value;
+            select request.requestCancel();
+          }
+          none => false;
+        };
+      }
+    );
+  }
+
+  function cancelAll(): void {
+    this.state.withLock(
+      (inout state): void => {
+        for (const entry of state.requests) {
+          entry.value.requestCancel();
+        }
+        state.requests.clear();
+      }
+    );
+  }
+}
+
+internal function createApplicationWorkerServiceRequests(
+): ApplicationWorkerServiceRequests {
+  return new ApplicationWorkerServiceRequests({
+    state: Mutex(ApplicationWorkerServiceRequestState({
+      requests: Map<u64, ApplicationWorkerServiceRequest>(),
+      nextGeneration: 1,
+    })),
+  });
+}
+
+internal function allowsApplicationWorkerService(
   in serviceMethods: readonly Array<String>,
   in method: String
 ): boolean {
@@ -36,6 +171,30 @@ function allowsApplicationWorkerService(
     index = index + 1;
   }
   return false;
+}
+
+internal function applicationWorkerServiceResponse(
+  invoked: ServiceOutcome
+): BridgeResponse on thread.any {
+  return match (invoked) {
+    success(payload) => bridgeSuccess(0, move payload);
+    failure(error) => bridgeFailure(0, "SERVICE_ERROR", move error);
+    typedFailure(error) => bridgeTypedServiceFailure(0, move error);
+  };
+}
+
+internal function completeApplicationWorkerService(
+  workerIdentity: usize,
+  requestId: u64,
+  in response: BridgeResponse
+): boolean on thread.any {
+  const status = native.zapp_worker_runtime_complete_service(
+    workerIdentity,
+    requestId,
+    response.ok ? 1 : 0,
+    response.payload
+  );
+  return status == 0;
 }
 
 // Engine-neutral direct service route. Worker configuration supplies an
@@ -53,11 +212,7 @@ export function invokeApplicationWorkerService(
     return bridgeWorkerCapabilityFailure(0, copy workerId, move method);
   }
   const invoked = services.invoke(move method, move arguments);
-  return match (invoked) {
-    success(payload) => bridgeSuccess(0, move payload);
-    failure(error) => bridgeFailure(0, "SERVICE_ERROR", move error);
-    typedFailure(error) => bridgeTypedServiceFailure(0, move error);
-  };
+  return applicationWorkerServiceResponse(move invoked);
 }
 
 export readonly class ApplicationWorkerControl {

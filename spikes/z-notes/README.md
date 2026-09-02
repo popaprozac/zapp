@@ -149,17 +149,21 @@ const status = await health.status();
 The public method, Promise result, generated codecs, and runtime error classes
 do not expose the transport choice. In this ZJS application worker,
 `health.status()` calls the frozen synchronous Z service router in process;
-the equivalent WebView call uses request/response IPC. The worker's immutable
+`notes.isEmpty()` suspends on Z's main executor and resumes the same generated
+Promise on the worker thread; the equivalent WebView calls use request/response
+IPC. The worker's immutable
 `diagnostics` capability profile is authoritative on the direct path too: the
 smoke calls ungranted `notes.create()` and requires the ordinary generated
 Promise to reject with `PermissionDeniedError` before Notes service code runs.
 
 The smoke queues `ping` immediately—even before the module may have
-initialized—and fails unless the worker dispatches it, calls the authorized
-service, observes the typed denial, and replies on `pong`. It does not yet
-expose frontend-to-worker messaging, an `app.workers` manager, restart
-execution, or direct suspended-service continuation routing; those remain the
-next worker composition slices. The current compatibility ZJS artifact also
+initialized—and fails unless the worker dispatches it, calls synchronous and
+suspending authorized services, cancels a second suspended request, observes
+the typed denial, and replies on `pong`. Cancellation forwards to the native Z
+task rather than merely dropping the JavaScript result. The spike does not yet
+expose frontend-to-worker messaging, an `app.workers` manager, or restart
+execution; those remain the next worker composition slices. The current
+compatibility ZJS artifact also
 receives an unminified worker module because it misexecutes one Rolldown
 compact-control-flow rewrite. Other engines retain minification, and the ZJS
 rewrite must close this compatibility test before reclaiming it.
@@ -170,8 +174,9 @@ The same configured worker has a repeatable fast-path benchmark:
 bun run bench:z-notes:worker
 ```
 
-The September 2, 2026 Apple M4 Pro checkpoint measures 351 ns/call at the
-direct host boundary and 2.275 us/call through the generated Promise API. See
+The post-continuation September 2, 2026 Apple M4 Pro checkpoint measures
+399 ns/call at the direct host boundary and 2.253 us/call through the generated
+Promise API. See
 [the worker service benchmark](../../benchmarks/z-worker-services.md) for the
 exact boundary, sample ranges, and remaining allocation/copy analysis.
 

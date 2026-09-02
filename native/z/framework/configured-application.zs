@@ -11,7 +11,9 @@ import {
   emptyApplicationWorkerCatalog,
 } from "./worker/configuration.zs";
 import {
+  ApplicationWorkerAsyncServiceHandler,
   ApplicationWorkerMessageHandler,
+  ApplicationWorkerServiceCancelHandler,
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
@@ -54,6 +56,8 @@ export function configuredApplicationWorkers(): ApplicationWorkerCatalog {
 export function startConfiguredApplicationWorkers(
   in catalog: ApplicationWorkerCatalog,
   services: Services,
+  asyncService: ApplicationWorkerAsyncServiceHandler,
+  cancelService: ApplicationWorkerServiceCancelHandler,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();

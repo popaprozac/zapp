@@ -4,6 +4,7 @@ import { Services } from "./services";
 
 const previousHostBridge = (globalThis as any).__zappBridge;
 const previousDirectInvoke = (globalThis as any).__zappWorkerInvokeService;
+const previousDirectCancel = (globalThis as any).__zappWorkerCancelService;
 
 afterEach(() => {
   if (previousHostBridge === undefined) delete (globalThis as any).__zappBridge;
@@ -12,6 +13,11 @@ afterEach(() => {
     delete (globalThis as any).__zappWorkerInvokeService;
   } else {
     (globalThis as any).__zappWorkerInvokeService = previousDirectInvoke;
+  }
+  if (previousDirectCancel === undefined) {
+    delete (globalThis as any).__zappWorkerCancelService;
+  } else {
+    (globalThis as any).__zappWorkerCancelService = previousDirectCancel;
   }
 });
 
@@ -104,5 +110,35 @@ describe("environment-neutral service invocation", () => {
 
     await expect(Services.invoke<string>("health.status")).resolves.toBe("ready");
     expect(calls).toEqual(["health.status"]);
+  });
+
+  test("awaits a deferred native worker service through the same generated API", async () => {
+    let resolveNative: (value: boolean) => void = () => {};
+    const native = new Promise<boolean>((resolve) => {
+      resolveNative = resolve;
+    });
+    Object.defineProperty(native, "__zappRequestId", { value: 41 });
+    (globalThis as any).__zappWorkerInvokeService = () => native;
+
+    const result = Services.invoke<boolean>("notes.isEmpty");
+    expect(result.cancel).toBeFunction();
+    resolveNative(true);
+    await expect(result).resolves.toBeTrue();
+  });
+
+  test("forwards cancellation to the deferred native worker request", async () => {
+    const cancelled: number[] = [];
+    const native = new Promise<boolean>(() => {});
+    Object.defineProperty(native, "__zappRequestId", { value: 42 });
+    (globalThis as any).__zappWorkerInvokeService = () => native;
+    (globalThis as any).__zappWorkerCancelService = (requestId: number) => {
+      cancelled.push(requestId);
+      return true;
+    };
+
+    const result = Services.invoke<boolean>("notes.isEmpty");
+    result.cancel();
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelled).toEqual([42]);
   });
 });

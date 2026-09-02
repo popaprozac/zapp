@@ -17,7 +17,7 @@ export default defineConfig({
         services: ["notes", "health"],
       },
       diagnostics: {
-        services: ["notes.count", "health.status"],
+        services: ["notes.count", "notes.isEmpty", "health.status"],
       },
     },
   },

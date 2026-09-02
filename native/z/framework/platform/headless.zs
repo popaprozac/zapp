@@ -10,8 +10,12 @@ import {
   startConfiguredApplicationWorkers,
 } from "../configured-application.zs";
 import {
+  ApplicationWorkerAsyncServiceHandler,
   ApplicationWorkerMessageHandler,
+  ApplicationWorkerServiceCancelHandler,
+  completeApplicationWorkerService,
 } from "../worker/application-workers.zs";
+import { bridgeFailure } from "../bridge.zs";
 
 struct HeadlessApplicationRuntime {
   exitStatus: i32;
@@ -22,6 +26,29 @@ function discardApplicationWorkerMessage(
   workerId: String,
   channel: String,
   payload: String
+): void on thread.any {}
+
+function rejectHeadlessApplicationWorkerService(
+  workerIdentity: usize,
+  workerId: String,
+  requestId: u64,
+  method: String,
+  arguments: String
+): void on thread.any {
+  const unavailable = bridgeFailure(
+    0,
+    "SERVICE_UNAVAILABLE",
+    `headless worker ${workerId} cannot suspend service ${method}`
+  );
+  completeApplicationWorkerService(
+    workerIdentity,
+    requestId,
+    in unavailable
+  );
+}
+
+function discardHeadlessApplicationWorkerServiceCancellation(
+  requestId: u64
 ): void on thread.any {}
 
 export async function runApplicationPlatform(
@@ -47,9 +74,15 @@ export async function runApplicationPlatform(
   }
   const workerMessages: ApplicationWorkerMessageHandler =
     discardApplicationWorkerMessage;
+  const workerServices: ApplicationWorkerAsyncServiceHandler =
+    rejectHeadlessApplicationWorkerService;
+  const cancelWorkerService: ApplicationWorkerServiceCancelHandler =
+    discardHeadlessApplicationWorkerServiceCancellation;
   const workers = startConfiguredApplicationWorkers(
     config.workers,
     config.services.synchronous,
+    workerServices,
+    cancelWorkerService,
     workerMessages
   );
   const status = runtime.exitStatus;

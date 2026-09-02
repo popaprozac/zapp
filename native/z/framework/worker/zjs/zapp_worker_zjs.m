@@ -20,15 +20,33 @@ struct ZappZjsEngine {
   char *service_payload;
   int service_responded;
   int service_ok;
+  int service_deferred;
   char error[512];
 };
 
 #define ZAPP_ZJS_WORKER_INBOX_CAPACITY 64
+#define ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY 64
+
+typedef enum ZappZjsWorkerMessageKind {
+  ZAPP_ZJS_WORKER_MESSAGE_COMMAND = 0,
+  ZAPP_ZJS_WORKER_MESSAGE_SERVICE_COMPLETION = 1,
+} ZappZjsWorkerMessageKind;
 
 typedef struct ZappZjsWorkerMessage {
+  ZappZjsWorkerMessageKind kind;
   char *channel;
   char *payload;
+  uint64_t request_id;
+  int service_ok;
 } ZappZjsWorkerMessage;
+
+typedef struct ZappZjsPendingService {
+  uint64_t request_id;
+  uint32_t promise_handle;
+  uint32_t resolve_handle;
+  uint32_t reject_handle;
+  int active;
+} ZappZjsPendingService;
 
 struct ZappZjsWorker {
   ZappWorkerRuntime runtime;
@@ -47,13 +65,21 @@ struct ZappZjsWorker {
   ZappZjsWorkerServiceCallback service;
   void *service_context;
   ZappZjsWorkerServiceRelease service_release;
+  ZappZjsWorkerServiceCancelCallback service_cancel;
+  void *service_cancel_context;
+  ZappZjsWorkerServiceCancelRelease service_cancel_release;
   pthread_mutex_t inbox_mutex;
   pthread_cond_t inbox_condition;
   ZappZjsWorkerMessage inbox[ZAPP_ZJS_WORKER_INBOX_CAPACITY];
   size_t inbox_head;
   size_t inbox_tail;
   size_t inbox_count;
+  ZappZjsPendingService pending_services[
+    ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY
+  ];
 };
+
+static _Atomic uint64_t next_service_request_id = 1;
 
 static void cancel_worker_runtime(ZappWorkerRuntime *runtime);
 static int32_t dispatch_worker_runtime(
@@ -61,8 +87,20 @@ static int32_t dispatch_worker_runtime(
   const char *channel,
   const char *payload
 );
+static int32_t complete_worker_service_runtime(
+  ZappWorkerRuntime *runtime,
+  uint64_t request_id,
+  int32_t ok,
+  const char *payload
+);
 static int32_t join_worker_runtime(ZappWorkerRuntime *runtime);
 static void destroy_worker_runtime(ZappWorkerRuntime *runtime);
+static int32_t push_service_completion(
+  ZappZjsWorker *worker,
+  uint64_t request_id,
+  int ok,
+  const char *payload
+);
 
 // ZJS host functions do not carry embedder data yet. Each engine remains
 // confined to one worker thread, so a thread-local entered engine is enough
@@ -90,6 +128,7 @@ static void clear_service_response(ZappZjsEngine *engine) {
   engine->service_payload = NULL;
   engine->service_responded = 0;
   engine->service_ok = 0;
+  engine->service_deferred = 0;
 }
 
 static void throw_service_payload(
@@ -149,6 +188,168 @@ static ZjsValue parse_service_result(
   return parsed;
 }
 
+static ZappZjsPendingService *find_pending_service(
+  ZappZjsWorker *worker,
+  uint64_t request_id
+) {
+  for (size_t index = 0;
+       index < ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY;
+       index += 1) {
+    ZappZjsPendingService *pending = &worker->pending_services[index];
+    if (pending->active && pending->request_id == request_id) return pending;
+  }
+  return NULL;
+}
+
+static ZappZjsPendingService *reserve_pending_service(
+  ZappZjsWorker *worker,
+  uint64_t request_id
+) {
+  for (size_t index = 0;
+       index < ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY;
+       index += 1) {
+    ZappZjsPendingService *pending = &worker->pending_services[index];
+    if (pending->active) continue;
+    *pending = (ZappZjsPendingService){
+      .request_id = request_id,
+      .active = 1,
+    };
+    return pending;
+  }
+  return NULL;
+}
+
+static void release_pending_service(
+  ZappZjsEngine *engine,
+  ZappZjsPendingService *pending
+) {
+  if (!engine || !pending || !pending->active) return;
+  zjs_unroot(engine->context, pending->promise_handle);
+  zjs_unroot(engine->context, pending->resolve_handle);
+  zjs_unroot(engine->context, pending->reject_handle);
+  *pending = (ZappZjsPendingService){0};
+}
+
+static ZjsValue create_pending_service_promise(
+  ZappZjsEngine *engine,
+  uint64_t request_id
+) {
+  ZjsContext *context = engine->context;
+  ZappZjsPendingService *pending = reserve_pending_service(
+    engine->worker,
+    request_id
+  );
+  if (!pending) {
+    if (engine->worker->service_cancel) {
+      engine->worker->service_cancel(
+        request_id,
+        engine->worker->service_cancel_context
+      );
+    }
+    throw_service_payload(
+      context,
+      "application worker has too many pending service calls"
+    );
+    return zjs_undefined();
+  }
+
+  ZjsValue constructor = zjs_get_global(context, "Promise");
+  zjs_pin(context, constructor);
+  ZjsValue with_resolvers = zjs_get_property(
+    context,
+    constructor,
+    "withResolvers"
+  );
+  zjs_pin(context, with_resolvers);
+  ZjsValue capability = zjs_call(
+    context,
+    with_resolvers,
+    constructor,
+    NULL,
+    0
+  );
+  zjs_unpin(context);
+  zjs_unpin(context);
+  if (zjs_had_error(context) || !zjs_is_object(capability)) {
+    *pending = (ZappZjsPendingService){0};
+    return zjs_undefined();
+  }
+
+  zjs_pin(context, capability);
+  ZjsValue promise = zjs_get_property(context, capability, "promise");
+  zjs_pin(context, promise);
+  pending->promise_handle = zjs_root(context, promise);
+  ZjsValue resolve = zjs_get_property(context, capability, "resolve");
+  pending->resolve_handle = zjs_root(context, resolve);
+  ZjsValue reject = zjs_get_property(context, capability, "reject");
+  pending->reject_handle = zjs_root(context, reject);
+  zjs_set_property(
+    context,
+    promise,
+    "__zappRequestId",
+    zjs_double((double)request_id)
+  );
+  zjs_unpin(context);
+  zjs_unpin(context);
+  return promise;
+}
+
+static int32_t settle_pending_service(
+  ZappZjsEngine *engine,
+  uint64_t request_id,
+  int ok,
+  const char *payload
+) {
+  ZappZjsPendingService *pending = find_pending_service(
+    engine->worker,
+    request_id
+  );
+  if (!pending) return 1;
+
+  // Promise callbacks may invoke Zapp host functions while the microtask
+  // queue drains. Re-enter the owning engine just as module evaluation,
+  // command dispatch, and timer pumping do; the worker thread remains the
+  // sole owner of this context throughout settlement.
+  ZappZjsEngine *previous_engine = entered_engine;
+  entered_engine = engine;
+
+  ZjsValue callback = zjs_root_get(
+    engine->context,
+    ok ? pending->resolve_handle : pending->reject_handle
+  );
+  ZjsValue value = ok
+    ? parse_service_result(engine->context, payload)
+    : zjs_new_string(
+        engine->context,
+        payload,
+        (uint32_t)strlen(payload)
+      );
+  zjs_call(
+    engine->context,
+    callback,
+    zjs_undefined(),
+    &value,
+    1
+  );
+  release_pending_service(engine, pending);
+  zjs_drain_microtasks(engine->context);
+  int32_t status = zjs_had_error(engine->context) ? 2 : 0;
+  entered_engine = previous_engine;
+  return status;
+}
+
+static void release_all_pending_services(ZappZjsEngine *engine) {
+  if (!engine || !engine->worker) return;
+  for (size_t index = 0;
+       index < ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY;
+       index += 1) {
+    release_pending_service(
+      engine,
+      &engine->worker->pending_services[index]
+    );
+  }
+}
+
 static ZjsValue host_invoke_service(
   ZjsContext *context,
   ZjsValue *arguments,
@@ -163,7 +364,6 @@ static ZjsValue host_invoke_service(
     );
     return zjs_undefined();
   }
-
   uint32_t method_length = 0;
   const char *method_bytes = zjs_string_bytes(arguments[0], &method_length);
   char *method = copy_string_bytes(method_bytes, method_length);
@@ -186,13 +386,23 @@ static ZjsValue host_invoke_service(
   }
 
   clear_service_response(engine);
+  uint64_t request_id = atomic_fetch_add_explicit(
+    &next_service_request_id,
+    1,
+    memory_order_relaxed
+  );
   engine->service(
+    (uintptr_t)engine->worker,
+    request_id,
     method,
     serialized,
     engine->worker->service_context
   );
   free(method);
   free(owned_serialized);
+  if (engine->service_deferred) {
+    return create_pending_service_promise(engine, request_id);
+  }
   if (!engine->service_responded || !engine->service_payload) {
     throw_service_payload(context, "application worker service produced no response");
     return zjs_undefined();
@@ -202,6 +412,41 @@ static ZjsValue host_invoke_service(
     return zjs_undefined();
   }
   return parse_service_result(context, engine->service_payload);
+}
+
+static ZjsValue host_cancel_service(
+  ZjsContext *context,
+  ZjsValue *arguments,
+  uint32_t count
+) {
+  ZappZjsEngine *engine = entered_engine;
+  if (!engine || !engine->worker || count != 1 ||
+      !zjs_is_number(arguments[0])) {
+    return zjs_bool(0);
+  }
+  double numeric_id = zjs_is_int32(arguments[0])
+    ? (double)zjs_as_int32(arguments[0])
+    : zjs_as_double(arguments[0]);
+  if (numeric_id <= 0) return zjs_bool(0);
+  uint64_t request_id = (uint64_t)numeric_id;
+  ZappZjsPendingService *pending = find_pending_service(
+    engine->worker,
+    request_id
+  );
+  if (!pending) return zjs_bool(0);
+  if (engine->worker->service_cancel) {
+    engine->worker->service_cancel(
+      request_id,
+      engine->worker->service_cancel_context
+    );
+  }
+  settle_pending_service(
+    engine,
+    request_id,
+    0,
+    "The operation was aborted"
+  );
+  return zjs_bool(1);
 }
 
 static ZjsValue host_send(
@@ -301,7 +546,18 @@ ZappZjsEngine *zapp_zjs_engine_create(void) {
     "__zappWorkerInvokeService",
     host_invoke_service
   );
+  ZjsValue cancel_service = zjs_register_host_function(
+    engine->context,
+    "__zappWorkerCancelService",
+    host_cancel_service
+  );
   zjs_set_property(engine->context, bridge, "invokeService", invoke);
+  zjs_set_property(
+    engine->context,
+    bridge,
+    "cancelService",
+    cancel_service
+  );
   zjs_set_global(engine->context, "__zappBridge", bridge);
   ZjsValue global = zjs_get_global(engine->context, "globalThis");
   zjs_set_property(engine->context, global, "__zappBridge", bridge);
@@ -310,6 +566,12 @@ ZappZjsEngine *zapp_zjs_engine_create(void) {
     global,
     "__zappWorkerInvokeService",
     invoke
+  );
+  zjs_set_property(
+    engine->context,
+    global,
+    "__zappWorkerCancelService",
+    cancel_service
   );
   return engine;
 }
@@ -326,6 +588,23 @@ int32_t zapp_zjs_worker_service_respond(
   entered_engine->service_responded = 1;
   entered_engine->service_ok = ok != 0;
   return 0;
+}
+
+int32_t zapp_zjs_worker_service_defer(void) {
+  if (!entered_engine) return 1;
+  entered_engine->service_deferred = 1;
+  return 0;
+}
+
+int32_t zapp_zjs_worker_service_complete(
+  uintptr_t identity,
+  uint64_t request_id,
+  int32_t ok,
+  const char *payload
+) {
+  ZappZjsWorker *worker = (ZappZjsWorker *)identity;
+  if (!worker || request_id == 0 || !payload) return 1;
+  return push_service_completion(worker, request_id, ok, payload);
 }
 
 int32_t zapp_zjs_engine_evaluate_module(
@@ -434,6 +713,7 @@ const char *zapp_zjs_engine_error(ZappZjsEngine *engine) {
 void zapp_zjs_engine_destroy(ZappZjsEngine *engine) {
   if (!engine) return;
   if (engine->context) {
+    release_all_pending_services(engine);
     if (engine->has_command_handler) {
       zjs_unroot(engine->context, engine->command_handle);
     }
@@ -484,8 +764,51 @@ static int32_t push_worker_message(
     return 4;
   }
   ZappZjsWorkerMessage *message = &worker->inbox[worker->inbox_tail];
+  message->kind = ZAPP_ZJS_WORKER_MESSAGE_COMMAND;
   message->channel = channel_copy;
   message->payload = payload_copy;
+  worker->inbox_tail = (
+    worker->inbox_tail + 1
+  ) % ZAPP_ZJS_WORKER_INBOX_CAPACITY;
+  worker->inbox_count += 1;
+  pthread_cond_signal(&worker->inbox_condition);
+  pthread_mutex_unlock(&worker->inbox_mutex);
+  return 0;
+}
+
+static int32_t push_service_completion(
+  ZappZjsWorker *worker,
+  uint64_t request_id,
+  int ok,
+  const char *payload
+) {
+  char *payload_copy = strdup(payload);
+  if (!payload_copy) return 2;
+
+  pthread_mutex_lock(&worker->inbox_mutex);
+  if (atomic_load_explicit(
+        &worker->cancellation_requested,
+        memory_order_acquire
+      ) || atomic_load_explicit(
+        &worker->finished,
+        memory_order_acquire
+      )) {
+    pthread_mutex_unlock(&worker->inbox_mutex);
+    free(payload_copy);
+    return 3;
+  }
+  if (worker->inbox_count == ZAPP_ZJS_WORKER_INBOX_CAPACITY) {
+    pthread_mutex_unlock(&worker->inbox_mutex);
+    free(payload_copy);
+    return 4;
+  }
+  ZappZjsWorkerMessage *message = &worker->inbox[worker->inbox_tail];
+  *message = (ZappZjsWorkerMessage){
+    .kind = ZAPP_ZJS_WORKER_MESSAGE_SERVICE_COMPLETION,
+    .payload = payload_copy,
+    .request_id = request_id,
+    .service_ok = ok != 0,
+  };
   worker->inbox_tail = (
     worker->inbox_tail + 1
   ) % ZAPP_ZJS_WORKER_INBOX_CAPACITY;
@@ -612,6 +935,27 @@ static void *run_worker(void *context) {
 
     ZappZjsWorkerMessage message = {0};
     while (pop_worker_message(worker, &message)) {
+      if (message.kind == ZAPP_ZJS_WORKER_MESSAGE_SERVICE_COMPLETION) {
+        status = settle_pending_service(
+          engine,
+          message.request_id,
+          message.service_ok,
+          message.payload
+        );
+        destroy_worker_message(&message);
+        // A cancelled Promise has already released its continuation. Late Z
+        // completion is therefore harmless and intentionally ignored.
+        if (status == 1) continue;
+        if (status != 0) {
+          copy_error(engine, "worker service continuation failed");
+          worker->result = status;
+          atomic_store_explicit(&worker->finished, 1, memory_order_release);
+          zapp_zjs_engine_destroy(engine);
+          return NULL;
+        }
+        deliver_engine_response(worker, engine);
+        continue;
+      }
       status = zapp_zjs_engine_dispatch(
         engine,
         message.channel,
@@ -676,22 +1020,31 @@ uintptr_t zapp_zjs_worker_start(
   ZappZjsWorkerMessageRelease release,
   ZappZjsWorkerServiceCallback service,
   void *service_context,
-  ZappZjsWorkerServiceRelease service_release
+  ZappZjsWorkerServiceRelease service_release,
+  ZappZjsWorkerServiceCancelCallback service_cancel,
+  void *service_cancel_context,
+  ZappZjsWorkerServiceCancelRelease service_cancel_release
 ) {
   if (!source || !worker_id || !module_name || !message || !release ||
-      !service || !service_release) {
+      !service || !service_release || !service_cancel ||
+      !service_cancel_release) {
     if (release) release(context);
     if (service_release) service_release(service_context);
+    if (service_cancel_release) {
+      service_cancel_release(service_cancel_context);
+    }
     return 0;
   }
   ZappZjsWorker *worker = calloc(1, sizeof(ZappZjsWorker));
   if (!worker) {
     release(context);
     service_release(service_context);
+    service_cancel_release(service_cancel_context);
     return 0;
   }
   worker->runtime.cancel = cancel_worker_runtime;
   worker->runtime.dispatch = dispatch_worker_runtime;
+  worker->runtime.complete_service = complete_worker_service_runtime;
   worker->runtime.join = join_worker_runtime;
   worker->runtime.destroy = destroy_worker_runtime;
   worker->message = message;
@@ -700,6 +1053,9 @@ uintptr_t zapp_zjs_worker_start(
   worker->service = service;
   worker->service_context = service_context;
   worker->service_release = service_release;
+  worker->service_cancel = service_cancel;
+  worker->service_cancel_context = service_cancel_context;
+  worker->service_cancel_release = service_cancel_release;
   worker->source = (__bridge_retained void *)source;
   worker->worker_id = strdup(worker_id);
   worker->module_name = strdup(module_name);
@@ -710,6 +1066,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->module_name);
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
+    worker->service_cancel_release(worker->service_cancel_context);
     free(worker);
     return 0;
   }
@@ -720,6 +1077,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->module_name);
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
+    worker->service_cancel_release(worker->service_cancel_context);
     free(worker);
     return 0;
   }
@@ -733,6 +1091,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->module_name);
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
+    worker->service_cancel_release(worker->service_cancel_context);
     free(worker);
     return 0;
   }
@@ -788,6 +1147,7 @@ void zapp_zjs_worker_destroy(uintptr_t identity) {
   free(worker->module_name);
   worker->message_release(worker->message_context);
   worker->service_release(worker->service_context);
+  worker->service_cancel_release(worker->service_cancel_context);
   free(worker);
 }
 
@@ -801,6 +1161,20 @@ static int32_t dispatch_worker_runtime(
   const char *payload
 ) {
   return zapp_zjs_worker_dispatch((uintptr_t)runtime, channel, payload);
+}
+
+static int32_t complete_worker_service_runtime(
+  ZappWorkerRuntime *runtime,
+  uint64_t request_id,
+  int32_t ok,
+  const char *payload
+) {
+  return push_service_completion(
+    (ZappZjsWorker *)runtime,
+    request_id,
+    ok,
+    payload
+  );
 }
 
 static int32_t join_worker_runtime(ZappWorkerRuntime *runtime) {

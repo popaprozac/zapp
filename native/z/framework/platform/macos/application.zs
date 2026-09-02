@@ -9,8 +9,11 @@ import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 import {
   abortMacOSApplicationRuntime,
+  cancelAllMacOSApplicationWorkerServices,
+  cancelMacOSApplicationWorkerService,
   installMacOSApplicationWorkers,
   publishMacOSApplicationWorkerMessage,
+  publishMacOSApplicationWorkerService,
 } from "./application-runtime.zs";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import {
@@ -22,7 +25,9 @@ import {
   startConfiguredApplicationWorkers,
 } from "../../configured-application.zs";
 import {
+  ApplicationWorkerAsyncServiceHandler,
   ApplicationWorkerMessageHandler,
+  ApplicationWorkerServiceCancelHandler,
 } from "../../worker/application-workers.zs";
 
 export async function runMacOSApplication(
@@ -73,14 +78,21 @@ export async function runMacOSApplication(
   }
   const workerMessages: ApplicationWorkerMessageHandler =
     publishMacOSApplicationWorkerMessage;
+  const workerServices: ApplicationWorkerAsyncServiceHandler =
+    publishMacOSApplicationWorkerService;
+  const cancelWorkerService: ApplicationWorkerServiceCancelHandler =
+    cancelMacOSApplicationWorkerService;
   const workers = startConfiguredApplicationWorkers(
     config.workers,
     config.services.synchronous,
+    workerServices,
+    cancelWorkerService,
     workerMessages
   );
   installMacOSApplicationWorkers(workers);
   const status = runMacOSApplicationLoop();
   workers.requestCancellation();
+  cancelAllMacOSApplicationWorkerServices();
   workers.join();
   windows.stop();
   await updates.cancel();

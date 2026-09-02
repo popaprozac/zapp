@@ -17,6 +17,12 @@ struct ZappWorkerRuntime {
     const char *channel,
     const char *payload
   );
+  int32_t (*complete_service)(
+    ZappWorkerRuntime *runtime,
+    uint64_t request_id,
+    int32_t ok,
+    const char *payload
+  );
   int32_t (*join)(ZappWorkerRuntime *runtime);
   void (*destroy)(ZappWorkerRuntime *runtime);
 };
@@ -24,6 +30,18 @@ struct ZappWorkerRuntime {
 static inline void zapp_worker_runtime_cancel(uintptr_t identity) {
   ZappWorkerRuntime *runtime = (ZappWorkerRuntime *)identity;
   if (runtime && runtime->cancel) runtime->cancel(runtime);
+}
+
+static inline int32_t zapp_worker_runtime_complete_service(
+  uintptr_t identity,
+  uint64_t request_id,
+  int32_t ok,
+  const char *payload
+) {
+  ZappWorkerRuntime *runtime = (ZappWorkerRuntime *)identity;
+  return runtime && runtime->complete_service
+    ? runtime->complete_service(runtime, request_id, ok, payload)
+    : 1;
 }
 
 static inline int32_t zapp_worker_runtime_dispatch(

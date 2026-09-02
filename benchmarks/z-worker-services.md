@@ -28,13 +28,13 @@ in-tree ZJS compatibility archive.
 
 | Boundary | Median | Observed five-sample range |
 |---|---:|---:|
-| Direct host | 351 ns/call | 317-511 ns/call |
-| Generated Promise API | 2.275 us/call | 2.040-3.658 us/call |
+| Direct host | 399 ns/call | 346-552 ns/call |
+| Generated Promise API | 2.253 us/call | 2.139-2.703 us/call |
 | Existing no-op WebView round trip | 79 us/call | Separate established WebView checkpoint |
 
 The user-facing generated worker API is approximately 35 times faster than the
 existing WebView baseline for this small-result route. The raw direct host is
-approximately 225 times faster. These ratios are architectural evidence, not a
+approximately 198 times faster. These ratios are architectural evidence, not a
 cross-framework score: the worker measurement uses `health.status()` with no
 input, while the historical WebView figure is the framework no-op probe.
 
@@ -51,7 +51,10 @@ Three avoidable costs were removed before recording the result:
 - the worker's immutable identity is captured once by its service callback
   instead of being copied from C bytes on every authorized call; and
 - the owned method string moves into `Services.invoke` instead of being
-  deep-copied before dispatch.
+  deep-copied before dispatch; and
+- synchronous results use the minimal resolved-Promise path, while abort
+  listeners and native continuation closures are reserved for services that
+  actually suspend.
 
 The remaining material costs are explicit: conversion of the method and
 arguments into owned Z strings, splitting the full method into service and
@@ -61,6 +64,12 @@ full-method route table plus borrowed-key lookup could remove several string
 allocations without changing the public service API. Direct typed engine-value
 projection could later remove the intermediate JSON document for supported
 wire types; JSON remains the correctness-first fallback.
+
+Suspending services are intentionally outside this synchronous latency number.
+Their path retains a native Promise capability, records a Z `TaskControl`, hops
+to the service's declared executor, and queues settlement back onto the owning
+worker thread. `bun run spike:z-notes:worker-smoke` separately proves that path,
+including cancellation and a late-completion race.
 
 The current ZJS worker bundle is intentionally unminified because the legacy
 compatibility artifact misexecutes one Rolldown compact-control-flow rewrite.

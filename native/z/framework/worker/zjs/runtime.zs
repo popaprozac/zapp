@@ -3,8 +3,11 @@ import Foundation from "Foundation/Foundation.h";
 import console from "std/console";
 import { thread } from "std/thread";
 import {
+  ApplicationWorkerAsyncServiceHandler,
   ApplicationWorkerControl,
   ApplicationWorkerMessageHandler,
+  ApplicationWorkerServiceCancelHandler,
+  allowsApplicationWorkerService,
   invokeApplicationWorkerService,
 } from "../application-workers.zs";
 import { WorkerModule } from "../types.zs";
@@ -25,20 +28,60 @@ function publishZjsWorkerMessage(
 
 function publishZjsWorkerServiceResult(
   in services: Services,
+  asyncService: ApplicationWorkerAsyncServiceHandler,
   in serviceMethods: readonly Array<String>,
   in workerId: String,
+  workerIdentity: usize,
+  requestId: u64,
   method: cstring,
   arguments: cstring
 ): void on thread.any {
-  const response = invokeApplicationWorkerService(
-    in services,
-    in serviceMethods,
-    in workerId,
-    String.from(method),
-    String.from(arguments)
+  const ownedMethod = String.from(method);
+  const ownedArguments = String.from(arguments);
+  if (!allowsApplicationWorkerService(in serviceMethods, in ownedMethod)) {
+    const denied = invokeApplicationWorkerService(
+      in services,
+      in serviceMethods,
+      in workerId,
+      move ownedMethod,
+      move ownedArguments
+    );
+    native.zapp_zjs_worker_service_respond(
+      denied.ok ? 1 : 0,
+      denied.payload
+    );
+    return;
+  }
+  if (services.hasServiceForMethod(in ownedMethod)) {
+    const response = invokeApplicationWorkerService(
+      in services,
+      in serviceMethods,
+      in workerId,
+      move ownedMethod,
+      move ownedArguments
+    );
+    native.zapp_zjs_worker_service_respond(
+      response.ok ? 1 : 0,
+      response.payload
+    );
+    return;
+  }
+
+  native.zapp_zjs_worker_service_defer();
+  asyncService(
+    workerIdentity,
+    copy workerId,
+    requestId,
+    move ownedMethod,
+    move ownedArguments
   );
-  const ok: i32 = response.ok ? 1 : 0;
-  native.zapp_zjs_worker_service_respond(ok, response.payload);
+}
+
+function cancelZjsWorkerService(
+  cancelService: ApplicationWorkerServiceCancelHandler,
+  requestId: u64
+): void on thread.any {
+  cancelService(requestId);
 }
 
 export function startZjsApplicationWorker(
@@ -46,6 +89,8 @@ export function startZjsApplicationWorker(
   in module: WorkerModule,
   serviceMethods: readonly Array<String>,
   services: Services,
+  asyncService: ApplicationWorkerAsyncServiceHandler,
+  cancelService: ApplicationWorkerServiceCancelHandler,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkerControl on thread.main {
   const source = Foundation.NSData.borrow(module.source);
@@ -60,12 +105,19 @@ export function startZjsApplicationWorker(
       channel,
       payload
     ),
-    move (method, arguments): void => publishZjsWorkerServiceResult(
+    move (workerIdentity, requestId, method, arguments): void => publishZjsWorkerServiceResult(
       in services,
+      asyncService,
       in serviceMethods,
       in serviceWorkerId,
+      workerIdentity,
+      requestId,
       method,
       arguments
+    ),
+    move (requestId): void => cancelZjsWorkerService(
+      cancelService,
+      requestId
     )
   );
   if (identity == 0) {

@@ -45,8 +45,9 @@ the Z builder. The builder:
     service manifest, compiles exact grants into immutable Z collections, and
     enforces the originating window's selected profiles before dispatch; and
 12. bundles configured application workers, passes each worker only its expanded
-    immutable service-method allowlist, and routes synchronous `thread.any`
-    service calls directly into the same frozen Z router used by WebViews.
+    immutable service-method allowlist, routes synchronous `thread.any` calls
+    directly into the frozen Z router, and retains suspended service
+    continuations until their owning worker can settle them.
 
 ## One service API, environment-selected transport
 
@@ -61,10 +62,12 @@ const status = await health.status();
 The generated method always returns the same cancellable Promise shape and
 uses the same argument/result codecs and runtime error classes. A WebView sends
 the call through the asynchronous bridge protocol. A configured ZJS
-application worker instead enters an internal synchronous engine host function,
-which calls Z's frozen `Services` router in process and resolves the public
-Promise with the returned value. No renderer or WebView IPC participates in
-that path.
+application worker instead enters an internal engine host function. A
+synchronous service calls Z's frozen `Services` router in process and resolves
+the public Promise immediately. A suspending service returns a native Promise,
+records its Z `TaskControl`, runs on the declared executor, and queues
+completion back to the worker-owned engine thread. No renderer or WebView IPC
+participates in either path.
 
 Transport selection is internal; it is not an application choice and does not
 create a second worker-specific service namespace. Native Z checks the
@@ -73,15 +76,17 @@ the JavaScript facade cannot broaden authority. Structured denials and typed Z
 service failures return through the same runtime error normalization as WebView
 responses.
 
-The first direct tier supports synchronous services whose generated adapter is
-safe on `thread.any`. Services that suspend or require executor placement will
-use the same public call once the worker host can retain a continuation and
-settle it asynchronously. A pre-aborted signal prevents entry into the current
-synchronous route; after native entry there is no suspended operation left to
-cancel.
+Cancellation uses the same generated `CancellablePromise` surface in every
+environment. A pre-aborted signal prevents native entry. Cancelling a suspended
+worker request rejects locally with `AbortError`, forwards the request identity
+to native Z, and asks the recorded `TaskControl` to cancel. Completion and
+cancellation races are idempotent: the first terminal outcome releases the
+worker continuation, and a late native completion is ignored. The current ZJS
+adapter bounds each worker to 64 simultaneously suspended service calls; excess
+calls fail rather than allocating an unbounded native continuation table.
 
-The first repeatable measurement records a 351 ns median for the direct ZJS
-host boundary and 2.275 us through the actual generated Promise API on an Apple
+The post-continuation checkpoint records a 399 ns median for the direct ZJS
+host boundary and 2.253 us through the actual generated Promise API on an Apple
 M4 Pro. The latter is approximately 35 times faster than the established 79 us
 WebView no-op checkpoint. Methodology, sample ranges, boundary differences, and
 remaining ownership copies are recorded in

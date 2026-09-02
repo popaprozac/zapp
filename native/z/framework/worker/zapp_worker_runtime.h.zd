@@ -5,6 +5,12 @@ declare module "zapp_worker_runtime.h" {
     in channel: _,
     in payload: _
   ): _;
+  export function zapp_worker_runtime_complete_service(
+    identity: _,
+    request_id: _,
+    ok: _,
+    in payload: _
+  ): _;
   export function zapp_worker_runtime_join(identity: _): _;
   export function zapp_worker_runtime_destroy(identity: _): _;
 }

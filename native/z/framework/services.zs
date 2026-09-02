@@ -38,6 +38,21 @@ export struct ServicesBuilder {
 export readonly class Services {
   readonly handlers: readonly Map<String, ServiceHandler>;
 
+  internal function hasServiceForMethod(
+    in method: String
+  ): boolean {
+    let separator: usize = 0;
+    while (
+      separator < method.byteLength
+      && method.byteAt(separator) != 46
+    ) {
+      separator = separator + 1;
+    }
+    if (separator == 0 || separator == method.byteLength) return false;
+    const serviceName = method.copyBytes(0, separator);
+    return this.handlers.has(serviceName);
+  }
+
   function invoke(
     method: String,
     arguments: String

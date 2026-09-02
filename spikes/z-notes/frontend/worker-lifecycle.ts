@@ -96,6 +96,31 @@ function runWorkerBenchmark(config: WorkerBenchmarkConfig): void {
 
 __zappWorkerSend("ready", JSON.stringify({ worker: "lifecycle" }));
 
+function verifyDeniedService(payload: string): void {
+  const denied = notes.create({
+    title: "worker capability probe",
+    state: NoteState.active,
+  });
+  denied.then(
+    () => {
+      __zappWorkerSend("denial-missing", "notes.create unexpectedly ran");
+      __zappWorkerSend("pong", payload);
+    },
+    (error: unknown) => {
+      const channel = error instanceof PermissionDeniedError
+        ? "denied"
+        : "denial-wrong-error";
+      __zappWorkerSend(channel, JSON.stringify({
+        name: error instanceof Error ? error.name : "unknown",
+        permission: error instanceof PermissionDeniedError
+          ? error.permission
+          : "",
+      }));
+      __zappWorkerSend("pong", payload);
+    },
+  );
+}
+
 export function onMessage(channel: string, payload: string): void {
   if (channel === "benchmark") {
     runWorkerBenchmark(JSON.parse(payload) as WorkerBenchmarkConfig);
@@ -105,27 +130,30 @@ export function onMessage(channel: string, payload: string): void {
   const pending = health.status();
   pending.then((status: string) => {
     __zappWorkerSend("service", JSON.stringify({ status }));
-    const denied = notes.create({
-      title: "worker capability probe",
-      state: NoteState.active,
+    const suspended = notes.isEmpty();
+    suspended.then((empty: boolean) => {
+      __zappWorkerSend("async-service", JSON.stringify({ empty }));
+      const cancelled = notes.isEmpty();
+      cancelled.then(
+        () => {
+          __zappWorkerSend(
+            "async-cancellation-missing",
+            "cancelled notes.isEmpty unexpectedly completed",
+          );
+          verifyDeniedService(payload);
+        },
+        (error: unknown) => {
+          const cancelledChannel = error instanceof Error
+            && error.name === "AbortError"
+            ? "async-cancelled"
+            : "async-cancellation-wrong-error";
+          __zappWorkerSend(cancelledChannel, JSON.stringify({
+            name: error instanceof Error ? error.name : "unknown",
+          }));
+          verifyDeniedService(payload);
+        },
+      );
+      cancelled.cancel();
     });
-    denied.then(
-      () => {
-        __zappWorkerSend("denial-missing", "notes.create unexpectedly ran");
-        __zappWorkerSend("pong", payload);
-      },
-      (error: unknown) => {
-        const channel = error instanceof PermissionDeniedError
-          ? "denied"
-          : "denial-wrong-error";
-        __zappWorkerSend(channel, JSON.stringify({
-          name: error instanceof Error ? error.name : "unknown",
-          permission: error instanceof PermissionDeniedError
-            ? error.permission
-            : "",
-        }));
-        __zappWorkerSend("pong", payload);
-      },
-    );
   });
 }

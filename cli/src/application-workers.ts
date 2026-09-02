@@ -163,6 +163,8 @@ export function renderZApplicationWorkerStartup(
     return `export function startConfiguredApplicationWorkers(
   in catalog: ApplicationWorkerCatalog,
   services: Services,
+  asyncService: ApplicationWorkerAsyncServiceHandler,
+  cancelService: ApplicationWorkerServiceCancelHandler,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
@@ -196,6 +198,8 @@ export function renderZApplicationWorkerStartup(
     "export function startConfiguredApplicationWorkers(",
     "  in catalog: ApplicationWorkerCatalog,",
     "  services: Services,",
+    "  asyncService: ApplicationWorkerAsyncServiceHandler,",
+    "  cancelService: ApplicationWorkerServiceCancelHandler,",
     "  message: ApplicationWorkerMessageHandler",
     "): ApplicationWorkers on thread.main {",
     "  let controls = Array<ApplicationWorkerControl>();",
@@ -210,6 +214,8 @@ export function renderZApplicationWorkerStartup(
       "    }),",
       `    catalog.entries[${index}].serviceMethods,`,
       "    services,",
+      "    asyncService,",
+      "    cancelService,",
       "    message",
       "  );",
     );

@@ -20,11 +20,18 @@ typedef void (*ZappZjsWorkerMessageCallback)(
 );
 typedef void (*ZappZjsWorkerMessageRelease)(void *context);
 typedef void (*ZappZjsWorkerServiceCallback)(
+  uintptr_t worker_identity,
+  uint64_t request_id,
   const char *method,
   const char *arguments,
   void *context
 );
 typedef void (*ZappZjsWorkerServiceRelease)(void *context);
+typedef void (*ZappZjsWorkerServiceCancelCallback)(
+  uint64_t request_id,
+  void *context
+);
+typedef void (*ZappZjsWorkerServiceCancelRelease)(void *context);
 
 ZappZjsEngine *zapp_zjs_engine_create(void);
 int32_t zapp_zjs_engine_evaluate_module(
@@ -55,9 +62,19 @@ uintptr_t zapp_zjs_worker_start(
   ZappZjsWorkerMessageRelease release,
   ZappZjsWorkerServiceCallback service,
   void *service_context,
-  ZappZjsWorkerServiceRelease service_release
+  ZappZjsWorkerServiceRelease service_release,
+  ZappZjsWorkerServiceCancelCallback service_cancel,
+  void *service_cancel_context,
+  ZappZjsWorkerServiceCancelRelease service_cancel_release
 );
 int32_t zapp_zjs_worker_service_respond(int32_t ok, const char *payload);
+int32_t zapp_zjs_worker_service_defer(void);
+int32_t zapp_zjs_worker_service_complete(
+  uintptr_t identity,
+  uint64_t request_id,
+  int32_t ok,
+  const char *payload
+);
 void zapp_zjs_worker_cancel(uintptr_t identity);
 int32_t zapp_zjs_worker_dispatch(
   uintptr_t identity,

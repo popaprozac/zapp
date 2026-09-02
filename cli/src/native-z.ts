@@ -195,8 +195,10 @@ import {
   ConfiguredApplicationWorker,
 } from "./worker/configuration.zs";
 import {
+  ApplicationWorkerAsyncServiceHandler,
   ApplicationWorkerControl,
   ApplicationWorkerMessageHandler,
+  ApplicationWorkerServiceCancelHandler,
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
