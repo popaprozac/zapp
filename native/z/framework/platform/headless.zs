@@ -6,6 +6,7 @@ import {
 } from "../../api/zapp/service.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
+import { Once, OnceLifetime } from "std/sync";
 import {
   startConfiguredApplicationWorkers,
 } from "../configured-application.zs";
@@ -18,18 +19,44 @@ import {
 } from "../worker/application-workers.zs";
 import { ApplicationWorkerLifecycleHandler } from "../worker/lifecycle.zs";
 import { ApplicationWorkerSendOperation } from "../worker/worker-manager.zs";
+import {
+  deliverApplicationWorkerLifecycle,
+  deliverApplicationWorkerMessage,
+  installApplicationWorkerManager,
+} from "../worker/manager-runtime.zs";
 import { bridgeFailure } from "../bridge.zs";
 
-struct HeadlessApplicationRuntime {
-  exitStatus: i32;
-  configuredNameBytes: usize;
+class HeadlessApplicationRuntime {
+  readonly updates: TaskScope;
+  readonly configuredNameBytes: usize;
+  exitStatus: i32 on thread.main;
 }
 
-function discardApplicationWorkerMessage(
+const headlessApplicationRuntime = Once<HeadlessApplicationRuntime>();
+
+function installHeadlessApplicationRuntime(
+  runtime: HeadlessApplicationRuntime
+): OnceLifetime<HeadlessApplicationRuntime> on thread.main {
+  return headlessApplicationRuntime.initialize(move runtime);
+}
+
+function publishHeadlessApplicationWorkerMessage(
   workerId: String,
   channel: String,
   payload: String
-): void on thread.any {}
+): void on thread.any {
+  const current = headlessApplicationRuntime.get();
+  const updates = current.updates;
+  const scheduled = updates.schedule(
+    thread.main,
+    async move (): void => deliverApplicationWorkerMessage(
+      move workerId,
+      move channel,
+      move payload
+    )
+  );
+  if (!scheduled.accepted) return;
+}
 
 function rejectHeadlessApplicationWorkerService(
   workerIdentity: usize,
@@ -54,7 +81,7 @@ function discardHeadlessApplicationWorkerServiceCancellation(
   requestId: u64
 ): void on thread.any {}
 
-function discardHeadlessApplicationWorkerLifecycle(
+function publishHeadlessApplicationWorkerLifecycle(
   workerId: String,
   phase: i32,
   incarnation: u64,
@@ -62,16 +89,34 @@ function discardHeadlessApplicationWorkerLifecycle(
   maxRetries: u64,
   withinMilliseconds: u64,
   message: String
-): void on thread.any {}
+): void on thread.any {
+  const current = headlessApplicationRuntime.get();
+  const updates = current.updates;
+  const scheduled = updates.schedule(
+    thread.main,
+    async move (): void => deliverApplicationWorkerLifecycle(
+      move workerId,
+      phase,
+      incarnation,
+      retry,
+      maxRetries,
+      withinMilliseconds,
+      move message
+    )
+  );
+  if (!scheduled.accepted) return;
+}
 
 export async function runApplicationPlatform(
   config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
-  const runtime = HeadlessApplicationRuntime({
+  const runtime = new HeadlessApplicationRuntime({
+    updates,
     exitStatus: 0,
     configuredNameBytes: config.metadata.name.byteLength,
   });
+  const runtimeLifetime = installHeadlessApplicationRuntime(runtime);
   if (runtime.configuredNameBytes == 0) return 64;
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
@@ -85,15 +130,18 @@ export async function runApplicationPlatform(
     success => {}
     failure(startError) => throw ApplicationError.lifecycle(startError);
   }
+  let workerManager = config.workers;
+  const workerManagerLifetime = installApplicationWorkerManager(
+    workerManager
+  );
   const workerMessages: ApplicationWorkerMessageHandler =
-    discardApplicationWorkerMessage;
+    publishHeadlessApplicationWorkerMessage;
   const workerServices: ApplicationWorkerAsyncServiceHandler =
     rejectHeadlessApplicationWorkerService;
   const cancelWorkerService: ApplicationWorkerServiceCancelHandler =
     discardHeadlessApplicationWorkerServiceCancellation;
   const workerLifecycle: ApplicationWorkerLifecycleHandler =
-    discardHeadlessApplicationWorkerLifecycle;
-  let workerManager = config.workers;
+    publishHeadlessApplicationWorkerLifecycle;
   const workers = startConfiguredApplicationWorkers(
     workerManager.catalog,
     config.services.synchronous,

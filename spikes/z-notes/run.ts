@@ -59,6 +59,15 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "configured application worker did not reply to WorkerManager.send",
     );
   }
+  if (
+    !stdout.includes(
+      "worker message manager-pong: worker-manager-smoke",
+    )
+  ) {
+    throw new Error(
+      "native Z ApplicationWorker.messages did not publish the worker response",
+    );
+  }
   if (!stdout.includes("sent service")) {
     throw new Error(
       "configured application worker did not invoke the Z health service directly",

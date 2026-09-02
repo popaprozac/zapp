@@ -29,8 +29,9 @@ import {
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import {
-  deliverMacOSApplicationWorkerLifecycle,
-} from "./worker-lifecycle.zs";
+  deliverApplicationWorkerLifecycle,
+  deliverApplicationWorkerMessage,
+} from "../../worker/manager-runtime.zs";
 import {
   ApplicationWorkers,
   ApplicationWorkerDispatch,
@@ -379,6 +380,11 @@ function deliverApplicationWorkerMessageOnMain(
   channel: String,
   payload: String
 ): void on thread.main {
+  deliverApplicationWorkerMessage(
+    copy workerId,
+    copy channel,
+    copy payload
+  );
   const current = application.get();
   current.deliverApplicationWorkerMessage(
     in workerId,
@@ -418,7 +424,7 @@ internal function publishMacOSApplicationWorkerLifecycle(
   const updates = current.updates;
   const scheduled = updates.schedule(
     thread.main,
-    async move (): void => deliverMacOSApplicationWorkerLifecycle(
+    async move (): void => deliverApplicationWorkerLifecycle(
       move workerId,
       phase,
       incarnation,

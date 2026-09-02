@@ -179,7 +179,10 @@ dispatch becomes available during the run and fails with a typed error outside
 that lifetime:
 
 ```zs
-import { ApplicationWorkerEvent } from "zapp/worker";
+import {
+  ApplicationWorkerEvent,
+  ApplicationWorkerMessage,
+} from "zapp/worker";
 
 const selected = app.workers.get("lifecycle");
 const worker = match (selected) {
@@ -200,6 +203,15 @@ const lifecycleSubscription = try worker.events.all.subscribe(
     stopped(value) => console.log(`stopped ${value.workerId}`);
   }
 );
+const messageSubscription = try worker.messages.subscribe(
+  move (in message: ApplicationWorkerMessage): void => {
+    match (message.channel) {
+      "progress" => console.log(message.payload);
+      "complete" => console.log(message.payload);
+      _ => {}
+    }
+  }
+);
 
 return try await app.run();
 ```
@@ -212,6 +224,10 @@ supports one exhaustive observer. Subscriptions own their registration and
 automatically unsubscribe at lexical cleanup, or may call `unsubscribe()`
 early. `worker.send(channel, payload)` is available while `app.run()` owns the
 active engine controls; Z Notes exercises it from the `started` lifecycle arm.
+`worker.messages` carries application data rather than lifecycle state. Its
+immutable payload contains `workerId`, `channel`, and `payload`, and Z Notes
+proves that a native subscriber and authorized WebViews can independently
+observe the same worker output.
 
 The current compatibility ZJS artifact also
 receives an unminified worker module because it misexecutes one Rolldown

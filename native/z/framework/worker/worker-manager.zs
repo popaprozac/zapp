@@ -5,6 +5,10 @@ import {
 } from "./application-workers.zs";
 import { ApplicationWorkerCatalog } from "./configuration.zs";
 import {
+  ApplicationWorkerMessage,
+  Event,
+} from "../events.zs";
+import {
   ApplicationWorkerEvents,
   createApplicationWorkerEvents,
 } from "./events.zs";
@@ -47,12 +51,14 @@ class ApplicationWorkerStateStorage on thread.main {
 export readonly class ApplicationWorker on thread.main {
   readonly id: String;
   readonly events: ApplicationWorkerEvents;
+  readonly messages: Event<ApplicationWorkerMessage>;
   internal readonly manager: Weak<WorkerManager>;
   internal readonly currentState: ApplicationWorkerStateStorage;
 
   internal constructor(id: String, manager: Weak<WorkerManager>) {
     this.id = move id;
     this.events = createApplicationWorkerEvents();
+    this.messages = new Event<ApplicationWorkerMessage>();
     this.manager = manager;
     this.currentState = new ApplicationWorkerStateStorage();
   }
@@ -139,6 +145,19 @@ export readonly class ApplicationWorker on thread.main {
     events.publishFailed(in id, incarnation, retries, in message);
   }
 
+  internal function publishMessage(
+    in channel: String,
+    in payload: String
+  ): void {
+    const message = ApplicationWorkerMessage({
+      workerId: copy this.id,
+      channel: copy channel,
+      payload: copy payload,
+    });
+    let messages = this.messages;
+    messages.publish(in message);
+  }
+
   internal function publishStopped(): void {
     const id = copy this.id;
     let state = this.currentState;
@@ -146,11 +165,15 @@ export readonly class ApplicationWorker on thread.main {
     let events = this.events;
     events.publishStopped(in id);
     events.finish();
+    let messages = this.messages;
+    messages.finish();
   }
 
   internal function finishEvents(): void {
     let events = this.events;
     events.finish();
+    let messages = this.messages;
+    messages.finish();
   }
 }
 
@@ -264,6 +287,18 @@ export readonly class WorkerManager on thread.main {
           worker.publishFailed(incarnation, retry, in message);
         }
       }
+      none => {}
+    }
+  }
+
+  internal function publishMessage(
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): void {
+    const found = this.get(in workerId);
+    match (found) {
+      some(worker) => worker.publishMessage(in channel, in payload);
       none => {}
     }
   }

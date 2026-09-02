@@ -50,8 +50,9 @@ the Z builder. The builder:
     continuations until their owning worker can settle them; and
 13. creates the native Z `app.workers` manager before `run()`, installs its
     engine-neutral dispatch operation during application startup, publishes
-    typed lifecycle events on `thread.main`, and closes dispatch before worker
-    controls are destroyed during shutdown.
+    typed lifecycle and application-message events on `thread.main`, preserves
+    independent authorized WebView forwarding, and closes dispatch and event
+    sources before worker controls are destroyed during shutdown.
 
 ## One service API, environment-selected transport
 

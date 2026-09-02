@@ -8,6 +8,8 @@ import {
 import {
   ApplicationWorkerEvent,
   ApplicationWorkerEventSubscription,
+  ApplicationWorkerMessage,
+  ApplicationWorkerMessageSubscription,
   WorkerManager,
 } from "zapp/worker";
 import console from "std/console";
@@ -86,6 +88,31 @@ function observeApplicationWorker(
   };
 }
 
+function observeApplicationWorkerMessages(
+  in workers: WorkerManager,
+  in workerId: String
+): Option<ApplicationWorkerMessageSubscription> on thread.main {
+  const selected = workers.get(in workerId);
+  const worker = match (selected) {
+    some(value) => value;
+    none => return Option<ApplicationWorkerMessageSubscription>.none;
+  };
+  const subscribed = attempt worker.messages.subscribe(
+    move (in message: ApplicationWorkerMessage): void => console.log(
+      `worker message ${message.channel}: ${message.payload}`
+    )
+  );
+  return match (subscribed) {
+    success(subscription) => Option.some(subscription);
+    failure(error) => {
+      console.log(
+        `could not observe worker ${workerId} messages: ${error.message}`
+      );
+      select Option<ApplicationWorkerMessageSubscription>.none;
+    }
+  };
+}
+
 async function main(): i32 on thread.main {
   let app = Application();
   app.services.register("notes", createNotesService());
@@ -95,6 +122,10 @@ async function main(): i32 on thread.main {
     in workers,
     "lifecycle",
     true
+  );
+  const lifecycleWorkerMessageSubscription = observeApplicationWorkerMessages(
+    in workers,
+    "lifecycle"
   );
   const restartWorkerSubscription = observeApplicationWorker(
     in workers,

@@ -11,6 +11,7 @@ import {
 import {
   ApplicationWorkerEvent as FrameworkApplicationWorkerEvent,
   ApplicationWorkerFailedEvent as FrameworkApplicationWorkerFailedEvent,
+  ApplicationWorkerMessage as FrameworkApplicationWorkerMessage,
   ApplicationWorkerRestartingEvent as FrameworkApplicationWorkerRestartingEvent,
   ApplicationWorkerStartedEvent as FrameworkApplicationWorkerStartedEvent,
   ApplicationWorkerStoppedEvent as FrameworkApplicationWorkerStoppedEvent,
@@ -33,4 +34,9 @@ export type ApplicationWorkerStartedEvent = FrameworkApplicationWorkerStartedEve
 export type ApplicationWorkerRestartingEvent =
   FrameworkApplicationWorkerRestartingEvent;
 export type ApplicationWorkerFailedEvent = FrameworkApplicationWorkerFailedEvent;
+export type ApplicationWorkerMessage = FrameworkApplicationWorkerMessage;
+export type ApplicationWorkerMessageSubscription =
+  FrameworkApplicationWorkerEventSubscription;
+export type ApplicationWorkerMessageSubscriptionError =
+  FrameworkApplicationWorkerEventSubscriptionError;
 export type ApplicationWorkerStoppedEvent = FrameworkApplicationWorkerStoppedEvent;

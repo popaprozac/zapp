@@ -17,8 +17,8 @@ import {
   publishMacOSApplicationWorkerService,
 } from "./application-runtime.zs";
 import {
-  installMacOSApplicationWorkerManager,
-} from "./worker-lifecycle.zs";
+  installApplicationWorkerManager,
+} from "../../worker/manager-runtime.zs";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import {
   initializeMacOSApplicationHost,
@@ -66,7 +66,7 @@ export async function runMacOSApplication(
     updates,
     windows
   );
-  const workerManagerLifetime = installMacOSApplicationWorkerManager(
+  const workerManagerLifetime = installApplicationWorkerManager(
     workerManager
   );
   const realized = attempt windows.start(macOSWindowBackend(), true);

@@ -419,8 +419,9 @@ and maps those outcomes into descriptive frontend errors. The focused
 `send(channel, data)`, and explicitly disposable `subscribe(channel, handler)`
 without exposing the legacy worker implementation. Worker messages return
 through an arbitrary-thread Z callback, copy native bytes into owned Z strings,
-hop onto the application main executor, and publish only into WebViews whose
-immutable capability profile grants that worker. Direct typed worker-to-Z
+hop onto the application main executor, publish through the configured
+worker's multicast `messages` event source, and independently reach only
+WebViews whose immutable capability profile grants that worker. Direct typed worker-to-Z
 service invocation now uses the same generated `zapp:services` facade as a
 WebView. The runtime selects direct in-process dispatch for a configured ZJS
 worker and request/response IPC for a WebView without changing application

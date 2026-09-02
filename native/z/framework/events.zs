@@ -30,6 +30,14 @@ export readonly struct ApplicationWorkerStoppedEvent {
   workerId: String;
 }
 
+// One application-authored message emitted by a configured worker. The
+// engine boundary copies all three strings before publishing this value.
+export readonly struct ApplicationWorkerMessage {
+  workerId: String;
+  channel: String;
+  payload: String;
+}
+
 export enum ApplicationWorkerEvent {
   started ApplicationWorkerStartedEvent,
   restarting ApplicationWorkerRestartingEvent,

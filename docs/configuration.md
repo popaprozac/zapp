@@ -149,7 +149,12 @@ manager for configured application-lifetime workers. `get(id)` returns
 `Option<ApplicationWorker>`, `all()` returns the configured handles, and each
 handle exposes `state()`, typed `send(channel, payload)`, focused lifecycle
 events (`started`, `restarting`, `failed`, and `stopped`), plus an exhaustive
-`events.all` stream. Lifecycle callbacks are delivered on `thread.main`.
+`events.all` stream. `worker.messages` is the separate application-data event
+source for messages emitted by that worker. Native callback bytes are copied
+into an immutable `ApplicationWorkerMessage` before subscribers run on
+`thread.main`; subscribing in Z does not consume or suppress delivery to
+authorized WebViews. Lifecycle and message subscriptions are multicast and
+retain their registration for the lexical lifetime of their subscription.
 Dynamic worker creation and WebView-owned worker lifetimes remain later
 manager tiers rather than implicit behavior of this configured surface.
 

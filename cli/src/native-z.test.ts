@@ -615,6 +615,13 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
+    const workerManagerRuntime = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/manager-runtime.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const publicWorkerApi = readFileSync(
       new URL("../../native/z/api/zapp/worker.zs", import.meta.url),
       "utf8",
@@ -675,7 +682,7 @@ describe("Z native host inputs", () => {
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
-    expect(headless).toContain("struct HeadlessApplicationRuntime");
+    expect(headless).toContain("class HeadlessApplicationRuntime");
     expect(headless).toContain("export async function runApplicationPlatform(");
     expect(headlessSmoke).toContain("attempt await runHeadlessApplicationPlatform(");
     expect(lifecycleContract).toContain("export trait ServiceLifecycle");
@@ -719,12 +726,26 @@ describe("Z native host inputs", () => {
     expect(workerManager).toContain("function all(): Array<ApplicationWorker>");
     expect(workerManager).toContain("function send(");
     expect(workerManager).toContain("function state(): ApplicationWorkerState");
+    expect(workerManager).toContain(
+      "readonly messages: Event<ApplicationWorkerMessage>",
+    );
+    expect(workerManager).toContain("internal function publishMessage(");
     expect(workerManager).toContain("ApplicationWorkerSendErrorKind.saturated");
     expect(workerEvents).toContain("readonly all: Event<ApplicationWorkerEvent>");
     expect(workerEvents).toContain("readonly restarting: Event<ApplicationWorkerRestartingEvent>");
     expect(publicWorkerApi).toContain("export type WorkerManager = FrameworkWorkerManager");
     expect(publicWorkerApi).toContain("export type ApplicationWorkerEvent = FrameworkApplicationWorkerEvent");
+    expect(publicWorkerApi).toContain(
+      "export type ApplicationWorkerMessage = FrameworkApplicationWorkerMessage",
+    );
+    expect(publicWorkerApi).toContain(
+      "export type ApplicationWorkerMessageSubscription =",
+    );
+    expect(workerManagerRuntime).toContain(
+      "workers.publishMessage(in workerId, in channel, in payload)",
+    );
     expect(app).toContain("worker.events.all.subscribe(");
+    expect(app).toContain("worker.messages.subscribe(");
     expect(app).toContain("worker manager sent ping");
     expect(workerRuntimeHeader).toContain("int32_t (*dispatch)(");
     expect(workerRuntimeHeader).toContain("zapp_worker_runtime_dispatch(");
