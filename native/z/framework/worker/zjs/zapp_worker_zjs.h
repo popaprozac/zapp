@@ -20,7 +20,6 @@ typedef void (*ZappZjsWorkerMessageCallback)(
 );
 typedef void (*ZappZjsWorkerMessageRelease)(void *context);
 typedef void (*ZappZjsWorkerServiceCallback)(
-  const char *worker_id,
   const char *method,
   const char *arguments,
   void *context

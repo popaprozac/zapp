@@ -164,6 +164,17 @@ receives an unminified worker module because it misexecutes one Rolldown
 compact-control-flow rewrite. Other engines retain minification, and the ZJS
 rewrite must close this compatibility test before reclaiming it.
 
+The same configured worker has a repeatable fast-path benchmark:
+
+```sh
+bun run bench:z-notes:worker
+```
+
+The September 2, 2026 Apple M4 Pro checkpoint measures 351 ns/call at the
+direct host boundary and 2.275 us/call through the generated Promise API. See
+[the worker service benchmark](../../benchmarks/z-worker-services.md) for the
+exact boundary, sample ranges, and remaining allocation/copy analysis.
+
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the application-owned service. Its public `create` and

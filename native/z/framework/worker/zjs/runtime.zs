@@ -26,14 +26,14 @@ function publishZjsWorkerMessage(
 function publishZjsWorkerServiceResult(
   in services: Services,
   in serviceMethods: readonly Array<String>,
-  workerId: cstring,
+  in workerId: String,
   method: cstring,
   arguments: cstring
 ): void on thread.any {
   const response = invokeApplicationWorkerService(
     in services,
     in serviceMethods,
-    String.from(workerId),
+    in workerId,
     String.from(method),
     String.from(arguments)
   );
@@ -49,6 +49,7 @@ export function startZjsApplicationWorker(
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkerControl on thread.main {
   const source = Foundation.NSData.borrow(module.source);
+  const serviceWorkerId = copy id;
   const identity = native.zapp_zjs_worker_start(
     source,
     id,
@@ -59,10 +60,10 @@ export function startZjsApplicationWorker(
       channel,
       payload
     ),
-    move (workerId, method, arguments): void => publishZjsWorkerServiceResult(
+    move (method, arguments): void => publishZjsWorkerServiceResult(
       in services,
       in serviceMethods,
-      workerId,
+      in serviceWorkerId,
       method,
       arguments
     )

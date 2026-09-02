@@ -105,11 +105,13 @@ static void throw_service_payload(
   zjs_throw(context, message);
 }
 
-static char *stringify_service_arguments(
+static const char *stringify_service_arguments(
   ZjsContext *context,
-  ZjsValue value
+  ZjsValue value,
+  char **owned
 ) {
-  if (zjs_is_undefined(value) || zjs_is_null(value)) return strdup("null");
+  *owned = NULL;
+  if (zjs_is_undefined(value) || zjs_is_null(value)) return "null";
   ZjsValue json = zjs_get_global(context, "JSON");
   ZjsValue stringify = zjs_get_property(context, json, "stringify");
   zjs_pin(context, stringify);
@@ -124,7 +126,8 @@ static char *stringify_service_arguments(
   if (zjs_had_error(context) || !zjs_is_string(serialized)) return NULL;
   uint32_t length = 0;
   const char *bytes = zjs_string_bytes(serialized, &length);
-  return copy_string_bytes(bytes, length);
+  *owned = copy_string_bytes(bytes, length);
+  return *owned;
 }
 
 static ZjsValue parse_service_result(
@@ -168,9 +171,11 @@ static ZjsValue host_invoke_service(
     throw_service_payload(context, "application worker could not copy the service method");
     return zjs_undefined();
   }
-  char *serialized = stringify_service_arguments(
+  char *owned_serialized = NULL;
+  const char *serialized = stringify_service_arguments(
     context,
-    count > 1 ? arguments[1] : zjs_undefined()
+    count > 1 ? arguments[1] : zjs_undefined(),
+    &owned_serialized
   );
   if (!serialized) {
     free(method);
@@ -182,13 +187,12 @@ static ZjsValue host_invoke_service(
 
   clear_service_response(engine);
   engine->service(
-    engine->worker->worker_id,
     method,
     serialized,
     engine->worker->service_context
   );
   free(method);
-  free(serialized);
+  free(owned_serialized);
   if (!engine->service_responded || !engine->service_payload) {
     throw_service_payload(context, "application worker service produced no response");
     return zjs_undefined();

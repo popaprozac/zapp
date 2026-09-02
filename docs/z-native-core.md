@@ -80,6 +80,13 @@ settle it asynchronously. A pre-aborted signal prevents entry into the current
 synchronous route; after native entry there is no suspended operation left to
 cancel.
 
+The first repeatable measurement records a 351 ns median for the direct ZJS
+host boundary and 2.275 us through the actual generated Promise API on an Apple
+M4 Pro. The latter is approximately 35 times faster than the established 79 us
+WebView no-op checkpoint. Methodology, sample ranges, boundary differences, and
+remaining ownership copies are recorded in
+[Z worker service benchmark](../benchmarks/z-worker-services.md).
+
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request
 identities through the full `u64` range, and distinguishes framework responses,

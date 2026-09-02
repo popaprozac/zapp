@@ -157,7 +157,7 @@ export function zEmbeddedApplicationWorkerPath(
 /** Render application-worker startup without exposing engine details publicly. */
 export function renderZApplicationWorkerStartup(
   workers: readonly ResolvedApplicationWorker[],
-  smokeDispatch = false,
+  startupProbe?: { channel: string; payload: string },
 ): string {
   if (workers.length === 0) {
     return `export function startConfiguredApplicationWorkers(
@@ -213,9 +213,9 @@ export function renderZApplicationWorkerStartup(
       "    message",
       "  );",
     );
-    if (smokeDispatch) {
+    if (startupProbe) {
       lines.push(
-        `  match (control${index}.dispatch("ping", "configured-worker-smoke")) {`,
+        `  match (control${index}.dispatch(${JSON.stringify(startupProbe.channel)}, ${JSON.stringify(startupProbe.payload)})) {`,
         "    accepted => {}",
         `    _ => control${index}.requestCancellation();`,
         "  }",

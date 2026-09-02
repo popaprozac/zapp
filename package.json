@@ -15,6 +15,7 @@
     "spike:z-notes": "bun run spikes/z-notes/run.ts",
     "spike:z-notes:smoke": "bun run spikes/z-notes/run.ts --smoke",
     "spike:z-notes:worker-smoke": "bun run spikes/z-notes/run.ts --smoke --worker-smoke",
+    "bench:z-notes:worker": "bun run spikes/z-notes/run.ts --smoke --worker-benchmark",
     "spike:z-notes:dev": "bun run spikes/z-notes/dev.ts",
     "spike:z-notes:dev-smoke": "bun run spikes/z-notes/dev.ts --smoke",
     "spike:zjs-worker-host": "bun run spikes/zjs-worker-host/run.ts",

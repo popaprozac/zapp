@@ -45,14 +45,14 @@ function allowsApplicationWorkerService(
 export function invokeApplicationWorkerService(
   in services: Services,
   in serviceMethods: readonly Array<String>,
-  workerId: String,
+  in workerId: String,
   method: String,
   arguments: String
 ): BridgeResponse on thread.any {
   if (!allowsApplicationWorkerService(in serviceMethods, in method)) {
-    return bridgeWorkerCapabilityFailure(0, move workerId, move method);
+    return bridgeWorkerCapabilityFailure(0, copy workerId, move method);
   }
-  const invoked = services.invoke(copy method, move arguments);
+  const invoked = services.invoke(move method, move arguments);
   return match (invoked) {
     success(payload) => bridgeSuccess(0, move payload);
     failure(error) => bridgeFailure(0, "SERVICE_ERROR", move error);

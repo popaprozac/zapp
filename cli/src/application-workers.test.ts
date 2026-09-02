@@ -101,12 +101,23 @@ describe("resolveApplicationWorkers", () => {
     expect(source).toContain('name: "/_workers/_headless_indexer.mjs"');
     expect(source).toContain("controls: controls.freeze()");
 
-    const smokeSource = renderZApplicationWorkerStartup(workers, true);
+    const smokeSource = renderZApplicationWorkerStartup(workers, {
+      channel: "ping",
+      payload: "configured-worker-smoke",
+    });
     expect(smokeSource).toContain(
       'match (control0.dispatch("ping", "configured-worker-smoke"))',
     );
     expect(smokeSource).toContain("accepted => {}\n    _ => control0.requestCancellation();");
     expect(smokeSource).toContain("control0.requestCancellation()");
+
+    const benchmarkSource = renderZApplicationWorkerStartup(workers, {
+      channel: "benchmark",
+      payload: '{"directIterations":10000,"publicIterations":1000,"samples":5}',
+    });
+    expect(benchmarkSource).toContain(
+      'control0.dispatch("benchmark", "{\\"directIterations\\":10000,\\"publicIterations\\":1000,\\"samples\\":5}")',
+    );
   });
 
   test("fails closed for engines and bytecode outside the first native tier", () => {

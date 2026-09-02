@@ -66,10 +66,66 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
   }
 }
 
+function median(values: number[]): number {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.floor(ordered.length / 2)] ?? 0;
+}
+
+function range(values: number[]): string {
+  return `${Math.min(...values)}-${Math.max(...values)}`;
+}
+
+async function runWorkerBenchmark(command: string[]): Promise<void> {
+  const child = Bun.spawn(command, {
+    cwd: repository,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, status] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  if (status !== 0) {
+    throw new Error(`${command[0]} exited with status ${status}`);
+  }
+  const direct: number[] = [];
+  const publicApi: number[] = [];
+  const pattern = /sent benchmark-sample-\d+-direct-(\d+)-public-(\d+)/g;
+  for (const match of stdout.matchAll(pattern)) {
+    direct.push(Number(match[1]));
+    publicApi.push(Number(match[2]));
+  }
+  if (
+    direct.length !== 5
+    || publicApi.length !== 5
+    || !stdout.includes("sent benchmark-complete")
+    || stdout.includes("sent benchmark-error")
+  ) {
+    throw new Error("configured application worker benchmark did not complete");
+  }
+  console.log("\nZJS direct Z service benchmark (median of 5 warmed samples)");
+  console.log(
+    `  direct host: ${median(direct)} ns/call (range ${range(direct)})`,
+  );
+  console.log(
+    `  generated Promise API: ${median(publicApi)} ns/call `
+    + `(range ${range(publicApi)})`,
+  );
+}
+
 const smoke = process.argv.includes("--smoke");
 const workerSmoke = process.argv.includes("--worker-smoke");
+const workerBenchmark = process.argv.includes("--worker-benchmark");
 const originalWorkerSmoke = process.env.ZAPP_APPLICATION_WORKER_SMOKE;
-if (workerSmoke) process.env.ZAPP_APPLICATION_WORKER_SMOKE = "1";
+const originalWorkerBenchmark = process.env.ZAPP_APPLICATION_WORKER_BENCHMARK;
+if (workerSmoke || workerBenchmark) {
+  process.env.ZAPP_APPLICATION_WORKER_SMOKE = "1";
+}
+if (workerBenchmark) process.env.ZAPP_APPLICATION_WORKER_BENCHMARK = "1";
 const config = await loadConfig(
   spike,
   createConfigContext(spike, "build", "macos"),
@@ -119,7 +175,13 @@ try {
   } else {
     process.env.ZAPP_APPLICATION_WORKER_SMOKE = originalWorkerSmoke;
   }
+  if (originalWorkerBenchmark === undefined) {
+    delete process.env.ZAPP_APPLICATION_WORKER_BENCHMARK;
+  } else {
+    process.env.ZAPP_APPLICATION_WORKER_BENCHMARK = originalWorkerBenchmark;
+  }
 }
 
-if (workerSmoke) await runWorkerSmoke([output]);
+if (workerBenchmark) await runWorkerBenchmark([output]);
+else if (workerSmoke) await runWorkerSmoke([output]);
 else await run([output], process.env);
