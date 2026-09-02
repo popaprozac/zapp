@@ -9,8 +9,9 @@ import type { ResolvedCapabilityProfile } from "./capabilities";
 export interface ResolvedApplicationWorker {
   id: string;
   script: string;
+  moduleUrl: string;
   name?: string;
-  engine?: WorkerEngineName;
+  engine: WorkerEngineName;
   bytecode: boolean;
   restart: false | {
     maxRetries: number;
@@ -29,7 +30,8 @@ function normalizeEntry(
 
 /**
  * Freeze each application's configured worker authority into build metadata.
- * Runtime JavaScript receives the result; it never chooses profile names.
+ * Native Z and frontend bindings consume the same resolved evidence; runtime
+ * JavaScript never chooses profile names or expands its own authority.
  */
 export function resolveApplicationWorkers(
   config: Pick<ResolvedConfig, "applicationWorkers">,
@@ -71,8 +73,9 @@ export function resolveApplicationWorkers(
     return {
       id,
       script: entry.script,
+      moduleUrl: `/_workers/_headless_${id}.${entry.bytecode ? "zbc" : "mjs"}`,
       ...(entry.name === undefined ? {} : { name: entry.name }),
-      ...(entry.engine === undefined ? {} : { engine: entry.engine }),
+      engine: entry.engine ?? "zjs",
       bytecode: entry.bytecode ?? false,
       restart,
       capabilities,
@@ -80,4 +83,62 @@ export function resolveApplicationWorkers(
       serviceMethods,
     };
   });
+}
+
+const zWorkerEngineCases: Record<WorkerEngineName, string> = {
+  "zjs": "zjs",
+  "bare-jsc": "bareJsc",
+  "bare-v8": "bareV8",
+  "bare-quickjs": "bareQuickJs",
+  "bare-mqjs": "bareMicroQuickJs",
+  "bare-hermes": "bareHermes",
+};
+
+function renderZStringArray(
+  variable: string,
+  values: readonly string[],
+): string[] {
+  return [
+    `  let ${variable} = Array<String>();`,
+    ...values.map((value) => `  ${variable}.push(${JSON.stringify(value)});`),
+  ];
+}
+
+/** Render the immutable, runtime-consumed Z application-worker catalog. */
+export function renderZApplicationWorkerCatalog(
+  workers: readonly ResolvedApplicationWorker[],
+): string {
+  const lines = [
+    "export function configuredApplicationWorkers(): ApplicationWorkerCatalog {",
+    "  let workers = Array<ConfiguredApplicationWorker>();",
+  ];
+  workers.forEach((worker, index) => {
+    const prefix = `worker${index}`;
+    lines.push(
+      ...renderZStringArray(`${prefix}Capabilities`, worker.capabilities),
+      ...renderZStringArray(`${prefix}Permissions`, worker.permissions),
+      ...renderZStringArray(`${prefix}ServiceMethods`, worker.serviceMethods),
+      "  workers.push(ConfiguredApplicationWorker({",
+      `    id: ${JSON.stringify(worker.id)},`,
+      `    source: ${JSON.stringify(worker.script)},`,
+      `    moduleUrl: ${JSON.stringify(worker.moduleUrl)},`,
+      `    name: ${JSON.stringify(worker.name ?? "")},`,
+      `    engine: ApplicationWorkerEngine.${zWorkerEngineCases[worker.engine]},`,
+      `    bytecode: ${worker.bytecode},`,
+      "    restart: ApplicationWorkerRestartPolicy({",
+      `      enabled: ${worker.restart !== false},`,
+      `      maxRetries: ${worker.restart === false ? 0 : worker.restart.maxRetries},`,
+      `      withinMilliseconds: ${worker.restart === false ? 0 : worker.restart.withinMs},`,
+      "    }),",
+      `    capabilities: ${prefix}Capabilities.freeze(),`,
+      `    permissions: ${prefix}Permissions.freeze(),`,
+      `    serviceMethods: ${prefix}ServiceMethods.freeze(),`,
+      "  }));",
+    );
+  });
+  lines.push(
+    "  return ApplicationWorkerCatalog({ entries: workers.freeze() });",
+    "}",
+  );
+  return lines.join("\n");
 }

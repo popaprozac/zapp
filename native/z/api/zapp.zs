@@ -12,7 +12,9 @@ import {
   configuredApplicationMetadata,
   configuredApplicationPermissions,
   configuredApplicationCapabilities,
+  configuredApplicationWorkers,
 } from "../framework/configured-application.zs";
+import { ApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { runApplicationPlatform } from "../framework/platform.zs";
 import {
   ApplicationServicesBuilder,
@@ -37,6 +39,8 @@ export struct Application on thread.main {
   readonly capabilities: ApplicationCapabilities =
     configuredApplicationCapabilities();
   readonly windows: WindowManager = createWindowManager();
+  internal readonly configuredWorkers: ApplicationWorkerCatalog =
+    configuredApplicationWorkers();
   services: ApplicationServicesBuilder = createApplicationServices();
 
   async function run(
@@ -51,7 +55,14 @@ export struct Application on thread.main {
 function prepareApplication(
   app: Application
 ): PreparedApplication on thread.main {
-  const { metadata, permissions, capabilities, windows, services } = move app;
+  const {
+    metadata,
+    permissions,
+    capabilities,
+    windows,
+    configuredWorkers,
+    services,
+  } = move app;
   const { routes, asynchronous, lifecycles } =
     services.freezeConfigured();
   return new PreparedApplication({
@@ -64,5 +75,6 @@ function prepareApplication(
       asynchronous,
     }),
     lifecycles,
+    workers: configuredWorkers,
   });
 }

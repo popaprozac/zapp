@@ -185,6 +185,32 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain('serviceMethods0.push("notes.count");');
     expect(output).toContain("serviceMethods: serviceMethods0.freeze()");
   });
+
+  it("embeds the checked application-worker catalog into native Z", () => {
+    const output = renderZApplicationMetadata({
+      name: "Workers",
+      identifier: "com.example.workers",
+      version: "1.0.0",
+      assetDir: "./dist",
+    }, [], [{
+      id: "indexer",
+      script: "src/workers/indexer.ts",
+      moduleUrl: "/_workers/_headless_indexer.mjs",
+      name: "Search indexer",
+      engine: "zjs",
+      bytecode: false,
+      restart: { maxRetries: 3, withinMs: 60_000 },
+      capabilities: ["search"],
+      permissions: ["fs:read"],
+      serviceMethods: ["notes.list"],
+    }]);
+    expect(output).toContain("configuredApplicationWorkers");
+    expect(output).toContain('id: "indexer"');
+    expect(output).toContain("engine: ApplicationWorkerEngine.zjs");
+    expect(output).toContain('worker0Capabilities.push("search")');
+    expect(output).toContain('worker0Permissions.push("fs:read")');
+    expect(output).toContain('worker0ServiceMethods.push("notes.list")');
+  });
 });
 
 describe("renderZWebviewBootstrapConfig", () => {

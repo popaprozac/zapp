@@ -5,6 +5,10 @@ import {
 } from "./application-capabilities.zs";
 import { ApplicationMetadata } from "./application-metadata.zs";
 import { ApplicationPermissions } from "./application-permissions.zs";
+import {
+  ApplicationWorkerCatalog,
+  emptyApplicationWorkerCatalog,
+} from "./worker/configuration.zs";
 
 // The CLI replaces this module only inside its isolated build workspace.
 // Keeping a deterministic fallback in the source graph preserves editor,
@@ -32,4 +36,8 @@ export function configuredApplicationCapabilities(): ApplicationCapabilities {
     serviceMethods: services.freeze(),
   }));
   return new ApplicationCapabilities({ profiles: profiles.freeze() });
+}
+
+export function configuredApplicationWorkers(): ApplicationWorkerCatalog {
+  return emptyApplicationWorkerCatalog();
 }
