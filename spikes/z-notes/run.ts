@@ -28,6 +28,9 @@ async function run(
 }
 
 const smoke = process.argv.includes("--smoke");
+const workerSmoke = process.argv.includes("--worker-smoke");
+const originalWorkerSmoke = process.env.ZAPP_APPLICATION_WORKER_SMOKE;
+if (workerSmoke) process.env.ZAPP_APPLICATION_WORKER_SMOKE = "1";
 const config = await loadConfig(
   spike,
   createConfigContext(spike, "build", "macos"),
@@ -71,6 +74,11 @@ try {
     delete process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
   } else {
     process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = originalSmokeSupport;
+  }
+  if (originalWorkerSmoke === undefined) {
+    delete process.env.ZAPP_APPLICATION_WORKER_SMOKE;
+  } else {
+    process.env.ZAPP_APPLICATION_WORKER_SMOKE = originalWorkerSmoke;
   }
 }
 

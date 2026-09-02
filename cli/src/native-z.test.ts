@@ -210,6 +210,11 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain('worker0Capabilities.push("search")');
     expect(output).toContain('worker0Permissions.push("fs:read")');
     expect(output).toContain('worker0ServiceMethods.push("notes.list")');
+    expect(output).toContain("export function startConfiguredApplicationWorkers(");
+    expect(output).toContain(
+      'embed.bytes("./worker/generated/application-worker-0.mjs")',
+    );
+    expect(output).toContain("startZjsApplicationWorker(");
   });
 });
 
@@ -586,6 +591,20 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/worker/engine.zs", import.meta.url),
       "utf8",
     );
+    const applicationWorkers = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/application-workers.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const macOSApplication = readFileSync(
+      new URL(
+        "../../native/z/framework/platform/macos/application.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const workerSpike = readFileSync(
       new URL("../../native/z/smokes/zjs-worker-host/main.zs", import.meta.url),
       "utf8",
@@ -643,6 +662,27 @@ describe("Z native host inputs", () => {
     expect(workerEngine).toContain("export readonly class WorkerMailbox<Command>");
     expect(workerEngine).toContain("export struct WorkerInbox<Command>");
     expect(workerEngine).toContain("Engine: WorkerEngine<Command>");
+    expect(applicationWorkers).toContain(
+      "export readonly class ApplicationWorkers",
+    );
+    expect(applicationWorkers).toContain(
+      "readonly controls: readonly Array<ApplicationWorkerControl>",
+    );
+    expect(applicationWorkers).toContain("readonly identity: usize");
+    expect(applicationWorkers).toContain("function requestCancellation(): void");
+    expect(applicationWorkers).toContain("native.zapp_worker_runtime_join(this.identity)");
+    expect(applicationWorkers).toContain("deinit {");
+    expect(applicationWorkers).toContain("native.zapp_worker_runtime_destroy(this.identity)");
+    const serviceStart = macOSApplication.indexOf("config.lifecycles.start(in context)");
+    const workerStart = macOSApplication.indexOf("startConfiguredApplicationWorkers(");
+    const workerCancel = macOSApplication.indexOf("workers.requestCancellation()");
+    const workerJoin = macOSApplication.indexOf("workers.join()");
+    const serviceStop = macOSApplication.indexOf("config.lifecycles.stop(in context)");
+    expect(serviceStart).toBeGreaterThan(-1);
+    expect(workerStart).toBeGreaterThan(serviceStart);
+    expect(workerCancel).toBeGreaterThan(workerStart);
+    expect(workerJoin).toBeGreaterThan(workerCancel);
+    expect(serviceStop).toBeGreaterThan(workerJoin);
     expect(workerSpike).toContain(
       'from "../../framework/worker/engine.zs"',
     );

@@ -7,6 +7,8 @@ import type { ResolvedConfig } from "./config";
 import type { ResolvedCapabilityProfile } from "./capabilities";
 import {
   renderZApplicationWorkerCatalog,
+  renderZApplicationWorkerStartup,
+  zEmbeddedApplicationWorkerPath,
   type ResolvedApplicationWorker,
 } from "./application-workers";
 import type { ZServiceManifest } from "./z-service-bindings";
@@ -185,6 +187,14 @@ import {
   ApplicationWorkerRestartPolicy,
   ConfiguredApplicationWorker,
 } from "./worker/configuration.zs";
+import {
+  ApplicationWorkerControl,
+  ApplicationWorkers,
+  startEmptyApplicationWorkers,
+} from "./worker/application-workers.zs";
+${applicationWorkers.length > 0 ? `import embed from "std/embed";
+import { WorkerModule } from "./worker/types.zs";
+import { startZjsApplicationWorker } from "./worker/zjs/runtime.zs";` : ""}
 
 export function configuredApplicationMetadata(): ApplicationMetadata {
   return ApplicationMetadata({
@@ -208,6 +218,8 @@ ${renderZCapabilityProfiles(capabilityProfiles)}
 }
 
 ${renderZApplicationWorkerCatalog(applicationWorkers)}
+
+${renderZApplicationWorkerStartup(applicationWorkers)}
 `;
 }
 
@@ -431,6 +443,112 @@ async function readZApplicationLinkRequirements(
       manifest.target?.link?.frameworks,
       "target.link.frameworks",
     ),
+  };
+}
+
+function mergeZNativeLinkRequirements(
+  left: ZNativeLinkRequirements,
+  right: ZNativeLinkRequirements,
+): ZNativeLinkRequirements {
+  const unique = (values: string[]): string[] => [...new Set(values)];
+  return {
+    includeDirectories: unique([
+      ...(left.includeDirectories ?? []),
+      ...(right.includeDirectories ?? []),
+    ]),
+    directories: unique([
+      ...(left.directories ?? []),
+      ...(right.directories ?? []),
+    ]),
+    libraries: unique([
+      ...(left.libraries ?? []),
+      ...(right.libraries ?? []),
+    ]),
+    frameworks: unique([
+      ...(left.frameworks ?? []),
+      ...(right.frameworks ?? []),
+    ]),
+  };
+}
+
+function resolveZjsDevelopmentArtifacts(repositoryRoot: string): {
+  includeDirectory: string;
+  libraryDirectory: string;
+} {
+  const library = process.env.ZAPP_ZJS_LIBRARY
+    ?? path.resolve(repositoryRoot, "../zjs/build/libzjs.a");
+  const includeDirectory = process.env.ZAPP_ZJS_INCLUDE
+    ?? path.resolve(path.dirname(library), "../include");
+  if (!existsSync(library) || !existsSync(path.join(includeDirectory, "zjs.h"))) {
+    throw new Error(
+      "[zapp] a configured native Z application worker requires the ZJS "
+      + `development artifacts at ${library} and ${path.join(includeDirectory, "zjs.h")}. `
+      + "Build the sibling zjs repository or set ZAPP_ZJS_LIBRARY and ZAPP_ZJS_INCLUDE.",
+    );
+  }
+  return { includeDirectory, libraryDirectory: path.dirname(library) };
+}
+
+async function stageZApplicationWorkerRuntime(
+  options: BuildNativeZOptions,
+  source: string,
+  stage: string,
+  stagedFramework: string,
+  workers: readonly ResolvedApplicationWorker[],
+): Promise<ZNativeLinkRequirements> {
+  if (workers.length === 0) return {};
+
+  const assetRoot = path.resolve(options.root, options.config.assetDir);
+  for (const [index, worker] of workers.entries()) {
+    const relativeModule = worker.moduleUrl.replace(/^\/+/, "");
+    const builtModule = path.join(assetRoot, relativeModule);
+    if (!existsSync(builtModule)) {
+      throw new Error(
+        `[zapp] bundled application worker ${JSON.stringify(worker.id)} was not found at `
+        + `${builtModule}; build the frontend worker artifacts before the native core`,
+      );
+    }
+    const embeddedPath = zEmbeddedApplicationWorkerPath(worker, index).replace(/^\.\//, "");
+    const destination = path.join(stagedFramework, embeddedPath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(builtModule, destination);
+  }
+
+  const zjs = resolveZjsDevelopmentArtifacts(path.resolve(options.nativeDir, ".."));
+  const adapterDirectory = path.join(source, "framework", "worker", "zjs");
+  const adapterObject = path.join(stage, "zapp_worker_zjs.o");
+  const adapterArchive = path.join(stage, "libzapp_worker_zjs.a");
+  await run([
+    "clang",
+    "-O2",
+    "-mmacosx-version-min=14.0",
+    "-I",
+    zjs.includeDirectory,
+    "-I",
+    adapterDirectory,
+    "-I",
+    path.join(source, "framework", "worker"),
+    "-fobjc-arc",
+    "-c",
+    path.join(adapterDirectory, "zapp_worker_zjs.m"),
+    "-o",
+    adapterObject,
+  ], options.root);
+  await run(["ar", "rcs", adapterArchive, adapterObject], options.root);
+  await cp(
+    path.join(adapterDirectory, "zapp_worker_zjs.h"),
+    path.join(stage, "zapp_worker_zjs.h"),
+  );
+  await cp(
+    path.join(source, "framework", "worker", "zapp_worker_runtime.h"),
+    path.join(stage, "zapp_worker_runtime.h"),
+  );
+
+  return {
+    includeDirectories: [stage],
+    directories: [stage, zjs.libraryDirectory],
+    libraries: ["zapp_worker_zjs", "zjs", "z"],
+    frameworks: ["Foundation", "Security"],
   };
 }
 
@@ -935,6 +1053,30 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     options.config,
     capabilityProfiles,
   );
+  const workerLinkRequirements = await stageZApplicationWorkerRuntime(
+    options,
+    source,
+    stage,
+    stagedFramework,
+    applicationWorkers,
+  );
+  if (applicationWorkers.length > 0) {
+    await writeFile(
+      path.join(stage, "z.json"),
+      renderZNativeManifest(
+        host,
+        appEntry,
+        stage,
+        path.join(workspace, "native", "z"),
+        mergeZNativeLinkRequirements(
+          applicationLinkRequirements,
+          workerLinkRequirements,
+        ),
+        desktopSmokeSupport,
+      ),
+      "utf8",
+    );
+  }
   await writeFile(
     path.join(stagedFramework, "configured-application.zs"),
     renderZApplicationMetadata(

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   renderZApplicationWorkerCatalog,
+  renderZApplicationWorkerStartup,
   resolveApplicationWorkers,
 } from "./application-workers";
 
@@ -82,6 +83,40 @@ describe("resolveApplicationWorkers", () => {
     expect(source).toContain('worker0Permissions.push("fs:read")');
     expect(source).toContain('worker0ServiceMethods.push("notes.list")');
     expect(source).toContain("entries: workers.freeze()");
+  });
+
+  test("renders structured ZJS startup from an embedded bundled module", () => {
+    const workers = resolveApplicationWorkers({
+      applicationWorkers: {
+        indexer: { script: "src/workers/indexer.ts", engine: "zjs" },
+      },
+    }, []);
+    const source = renderZApplicationWorkerStartup(workers);
+    expect(source).toContain(
+      'embed.bytes("./worker/generated/application-worker-0.mjs")',
+    );
+    expect(source).toContain("startZjsApplicationWorker(");
+    expect(source).toContain('name: "/_workers/_headless_indexer.mjs"');
+    expect(source).toContain("controls: controls.freeze()");
+  });
+
+  test("fails closed for engines and bytecode outside the first native tier", () => {
+    const nonZjs = resolveApplicationWorkers({
+      applicationWorkers: {
+        indexer: { script: "indexer.ts", engine: "bare-jsc" },
+      },
+    }, []);
+    expect(() => renderZApplicationWorkerStartup(nonZjs)).toThrow(
+      /first native runtime tier supports "zjs"/,
+    );
+    const bytecode = resolveApplicationWorkers({
+      applicationWorkers: {
+        indexer: { script: "indexer.ts", engine: "zjs", bytecode: true },
+      },
+    }, []);
+    expect(() => renderZApplicationWorkerStartup(bytecode)).toThrow(
+      /source-module startup must land before the ZJS bytecode loader/,
+    );
   });
 
   test("fails closed when metadata resolution sees an unknown profile", () => {

@@ -33,4 +33,14 @@ export default defineConfig({
       },
     },
   },
+  ...(process.env.ZAPP_APPLICATION_WORKER_SMOKE === "1" ? {
+    workers: {
+      application: {
+        lifecycle: {
+          script: "./frontend/worker-lifecycle.ts",
+          engine: "zjs",
+        },
+      },
+    },
+  } : {}),
 });

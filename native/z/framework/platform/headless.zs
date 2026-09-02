@@ -6,6 +6,9 @@ import {
 } from "../../api/zapp/service.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
+import {
+  startConfiguredApplicationWorkers,
+} from "../configured-application.zs";
 
 struct HeadlessApplicationRuntime {
   exitStatus: i32;
@@ -33,7 +36,12 @@ export async function runApplicationPlatform(
     success => {}
     failure(startError) => throw ApplicationError.lifecycle(startError);
   }
+  const workers = startConfiguredApplicationWorkers(
+    config.workers
+  );
   const status = runtime.exitStatus;
+  workers.requestCancellation();
+  workers.join();
   await updates.close();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {

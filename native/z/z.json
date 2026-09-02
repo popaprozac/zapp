@@ -12,6 +12,7 @@
     "native": {
       "includeDirectories": [
         "framework/bridge",
+        "framework/worker",
         "framework/platform/macos"
       ],
       "link": {

@@ -1,25 +1,15 @@
 import {
-  ChannelClosed,
   Receiver,
   Sender,
   SyncReceiver,
 } from "std/channel";
 import { Mutex } from "std/sync";
 import { sleep } from "std/time";
+import { WorkerLifecycle, WorkerModule } from "./types.zs";
 
 // Private engine-neutral worker runtime. This module is intentionally absent
 // from the public zapp package exports while the product-facing Worker API is
 // pressure-tested by the first ZJS vertical slice.
-export struct WorkerModule {
-  source: cstring;
-}
-
-export enum WorkerLifecycle {
-  stopped i32,
-  cancelled i32,
-  failed i32,
-}
-
 struct WorkerCancellationState {
   cancellationRequested: boolean = false;
 }
@@ -27,12 +17,6 @@ struct WorkerCancellationState {
 export readonly class WorkerMailbox<Command> {
   readonly sender: Sender<Command>;
   readonly cancellation: Mutex<WorkerCancellationState>;
-
-  async function post(
-    command: Command
-  ): void throws ChannelClosed<Command> {
-    try await this.sender.send(move command);
-  }
 
   function requestCancellation(): boolean {
     const requested = this.cancellation.withLock((inout state): boolean => {
@@ -135,13 +119,6 @@ export function runWorkerEngine<
 
       const pumpStatus = engine.pump();
       if (pumpStatus != 0) return WorkerLifecycle.failed(pumpStatus);
-      if (engine.isComplete()) {
-        return WorkerLifecycle.stopped(engine.result());
-      }
-    }
-
-    if (engine.isComplete()) {
-      return WorkerLifecycle.stopped(engine.result());
     }
   }
 

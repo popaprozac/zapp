@@ -127,6 +127,19 @@ stop before those services during application teardown. Each map key is a
 worker identity; its `capabilities` array selects trusted profiles declared
 under `security.capabilities`.
 
+The first native Z runtime tier is executable on macOS for source-module ZJS
+workers. The build bundles each declared entry as one retained ES module,
+embeds those bytes in the native core, starts the worker after service startup,
+then requests cancellation and joins it before service shutdown. This is an
+application lifetime, not a WebView lifetime: closing or replacing one window
+does not implicitly destroy the worker.
+
+That tier intentionally fails closed for other engines and ZJS bytecode. The
+resolved restart policy is retained as immutable configuration evidence but is
+not yet enacted by the runtime supervisor. Native/frontend message routing and
+the public `app.workers` manager are also later slices; declaring a worker today
+proves module loading and deterministic lifetime rather than those future APIs.
+
 Capability selection is additive and frozen at build time. Omitting a worker's
 `capabilities` grants no native permissions or service methods. Unknown and
 duplicate profile names fail configuration loading. The generated native worker

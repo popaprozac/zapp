@@ -142,3 +142,72 @@ export function renderZApplicationWorkerCatalog(
   );
   return lines.join("\n");
 }
+
+function embeddedWorkerExtension(worker: ResolvedApplicationWorker): string {
+  return worker.bytecode ? "zbc" : "mjs";
+}
+
+export function zEmbeddedApplicationWorkerPath(
+  worker: ResolvedApplicationWorker,
+  index: number,
+): string {
+  return `./worker/generated/application-worker-${index}.${embeddedWorkerExtension(worker)}`;
+}
+
+/** Render application-worker startup without exposing engine details publicly. */
+export function renderZApplicationWorkerStartup(
+  workers: readonly ResolvedApplicationWorker[],
+): string {
+  if (workers.length === 0) {
+    return `export function startConfiguredApplicationWorkers(
+  in catalog: ApplicationWorkerCatalog
+): ApplicationWorkers {
+  return startEmptyApplicationWorkers();
+}`;
+  }
+
+  for (const worker of workers) {
+    if (worker.engine !== "zjs") {
+      throw new Error(
+        `[zapp] native Z application worker ${JSON.stringify(worker.id)} uses `
+        + `engine ${JSON.stringify(worker.engine)}; the first native runtime tier supports "zjs"`,
+      );
+    }
+    if (worker.bytecode) {
+      throw new Error(
+        `[zapp] native Z application worker ${JSON.stringify(worker.id)} requests bytecode; `
+        + "source-module startup must land before the ZJS bytecode loader",
+      );
+    }
+  }
+
+  const lines: string[] = [];
+  workers.forEach((worker, index) => {
+    lines.push(
+      `const applicationWorkerSource${index}: embed.StaticBytes = `
+      + `embed.bytes(${JSON.stringify(zEmbeddedApplicationWorkerPath(worker, index))});`,
+    );
+  });
+  lines.push(
+    "",
+    "export function startConfiguredApplicationWorkers(",
+    "  in catalog: ApplicationWorkerCatalog",
+    "): ApplicationWorkers on thread.main {",
+    "  let controls = Array<ApplicationWorkerControl>();",
+  );
+  workers.forEach((worker, index) => {
+    lines.push(
+      "  controls.push(startZjsApplicationWorker(",
+      "    WorkerModule({",
+      `      source: applicationWorkerSource${index},`,
+      `      name: ${JSON.stringify(worker.moduleUrl)},`,
+      "    })",
+      "  ));",
+    );
+  });
+  lines.push(
+    "  return new ApplicationWorkers({ controls: controls.freeze() });",
+    "}",
+  );
+  return lines.join("\n");
+}

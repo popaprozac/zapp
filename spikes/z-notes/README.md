@@ -126,6 +126,20 @@ This spike now builds and runs through Z's fixed-point native driver. Manual
 `TaskScope` construction, owned capture transfer, main-executor placement, and
 scope close/join all execute without a Stage 0 override.
 
+An opt-in worker smoke also declares a ZJS application worker through the same
+`zapp.config.ts` surface an application will use. The CLI bundles and embeds
+its source module, native Z starts it after the Notes services, and application
+shutdown requests cancellation and joins the worker before those services
+stop:
+
+```sh
+bun run spike:z-notes:worker-smoke
+```
+
+This first configured tier proves module load and deterministic lifetime. It
+does not yet expose frontend messaging, an `app.workers` manager, or restart
+execution; those remain the next worker composition slices.
+
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.
 `NotesService` is the application-owned service. Its public `create` and

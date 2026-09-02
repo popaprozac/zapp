@@ -14,6 +14,9 @@ import {
   runMacOSApplicationLoop,
 } from "./application-host.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
+import {
+  startConfiguredApplicationWorkers,
+} from "../../configured-application.zs";
 
 export async function runMacOSApplication(
   config: PreparedApplication,
@@ -61,7 +64,12 @@ export async function runMacOSApplication(
       throw ApplicationError.lifecycle(startError);
     }
   }
+  const workers = startConfiguredApplicationWorkers(
+    config.workers
+  );
   const status = runMacOSApplicationLoop();
+  workers.requestCancellation();
+  workers.join();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);

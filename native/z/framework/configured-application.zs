@@ -9,6 +9,10 @@ import {
   ApplicationWorkerCatalog,
   emptyApplicationWorkerCatalog,
 } from "./worker/configuration.zs";
+import {
+  ApplicationWorkers,
+  startEmptyApplicationWorkers,
+} from "./worker/application-workers.zs";
 
 // The CLI replaces this module only inside its isolated build workspace.
 // Keeping a deterministic fallback in the source graph preserves editor,
@@ -40,4 +44,10 @@ export function configuredApplicationCapabilities(): ApplicationCapabilities {
 
 export function configuredApplicationWorkers(): ApplicationWorkerCatalog {
   return emptyApplicationWorkerCatalog();
+}
+
+export function startConfiguredApplicationWorkers(
+  in catalog: ApplicationWorkerCatalog
+): ApplicationWorkers {
+  return startEmptyApplicationWorkers();
 }

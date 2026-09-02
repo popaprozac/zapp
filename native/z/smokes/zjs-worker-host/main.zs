@@ -4,6 +4,7 @@ import json from "std/json";
 import { Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";
 import { delay } from "std/time";
+import embed from "std/embed";
 import native from "zapp_worker_zjs.h";
 import {
   Service,
@@ -15,21 +16,23 @@ import {
   WorkerCommand,
   WorkerMessage,
   WorkerResponse,
-} from "./worker-command.zs";
+} from "../../framework/worker/message.zs";
 import {
   createWorkerProbeService,
 } from "./probe-service.zs";
 import {
   WorkerEngine,
   WorkerInbox,
-  WorkerLifecycle,
-  WorkerModule,
   createWorkerInbox,
   createWorkerMailbox,
   runWorkerEngine,
 } from "../../framework/worker/engine.zs";
+import {
+  WorkerLifecycle,
+  WorkerModule,
+} from "../../framework/worker/types.zs";
 
-const workerModule: cstring = "const handlers = new Map(); const worker = { receive(channel, handler) { handlers.set(channel, handler); }, send(channel, payload) { __zappWorkerSend(channel, payload); } }; worker.receive('add', (payload) => { const request = JSON.parse(payload); setTimeout(() => { const value = __zappServiceAdd(request.left, request.right); worker.send('added', JSON.stringify(value)); }, 5); }); export function onMessage(channel, payload) { const handler = handlers.get(channel); if (!handler) throw new Error(`unhandled worker channel: ${channel}`); handler(payload); }";
+const workerModuleSource: embed.StaticBytes = embed.bytes("./worker-proof.mjs");
 
 readonly class WorkerServicesStore {
   readonly services: Services;
@@ -126,7 +129,8 @@ struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand> {
   ): i32 {
     return native.zapp_zjs_engine_evaluate_module(
       this.handle,
-      module.source
+      module.source,
+      module.name
     );
   }
 
@@ -174,10 +178,23 @@ function executeWorkerModule(
   if (engine == null) return ZjsWorkerRun.failed(100);
 
   let adapter = ZjsWorkerEngine({ handle: move engine });
-  const module = WorkerModule({ source: workerModule });
+  const module = WorkerModule({
+    source: workerModuleSource,
+    name: "/zapp/internal/worker-proof.mjs",
+  });
   const lifecycle = runWorkerEngine(inout adapter, in module, in inbox);
   return match (lifecycle) {
-    cancelled(code) => ZjsWorkerRun.cancelled(code);
+    cancelled(code) => {
+      const channel = native.zapp_zjs_engine_response_channel(adapter.handle);
+      const payload = native.zapp_zjs_engine_response_payload(adapter.handle);
+      if (channel == null || payload == null) {
+        return ZjsWorkerRun.cancelled(code);
+      }
+      return ZjsWorkerRun.completed(WorkerResponse({
+        channel: String.from(channel),
+        payload: String.from(payload),
+      }));
+    }
     failed(code) => ZjsWorkerRun.failed(code);
     stopped(_) => {
       const channel = native.zapp_zjs_engine_response_channel(adapter.handle);
@@ -200,7 +217,7 @@ async function runWorkerProof(): i32 {
   );
   await delay(1);
   console.log("ZJS worker channel ready");
-  const posted = attempt await mailbox.post(WorkerCommand.message(WorkerMessage({
+  const posted = attempt await mailbox.sender.send(WorkerCommand.message(WorkerMessage({
     channel: "add",
     payload: "{\"left\":20,\"right\":22}",
   })));
@@ -210,6 +227,8 @@ async function runWorkerProof(): i32 {
   }
   console.log("ZJS worker accepted channel add");
 
+  await delay(10);
+  if (!mailbox.requestCancellation()) return 2;
   const result = await worker;
   let value = 0;
   match (result) {

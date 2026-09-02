@@ -606,6 +606,11 @@ async function bundleWorker(
         ssr: false,
         rollupOptions: {
           input: entry.sourcePath,
+          // Application workers expose their checked host entrypoints as
+          // module exports (for example `onMessage`). Keep those exports even
+          // when the bundle has no JavaScript importer; the native engine is
+          // the consumer Rollup cannot see.
+          preserveEntrySignatures: "exports-only",
           // Inline EVERYTHING. The worker bundle is loaded via
           // `js_run_script` in *script* context (not module context),
           // so any external `import` statement Vite leaves on the
@@ -850,7 +855,10 @@ export function zapp(options?: ZappOptions): Plugin {
         "services.ts",
       );
       srcDir = path.join(root, "src");
-      outDir = path.join(root, "dist", "_workers");
+      outDir = path.join(
+        path.resolve(root, config.build?.outDir ?? "dist"),
+        "_workers",
+      );
       isDev = config.command === "serve";
       mode = config.mode;
 
@@ -886,12 +894,15 @@ export function zapp(options?: ZappOptions): Plugin {
     },
 
     async buildStart() {
-      workerOptions = await resolveWorkerOptions(root, options);
+      workerOptions = await resolveWorkerOptions(projectRoot, options);
       // Webview-spawned workers: discovered by scanning source.
       workers = await discoverWorkers(srcDir);
 
       // Headless workers: declared in zapp.config.ts.
-      headlessEntries = resolveHeadlessEntries(root, workerOptions.headless);
+      headlessEntries = resolveHeadlessEntries(
+        projectRoot,
+        workerOptions.headless,
+      );
 
       // Auto-discovered workers don't carry an explicit engine, but if
       // any headless worker is `bare-hermes` they'll likely land on
@@ -941,8 +952,8 @@ export function zapp(options?: ZappOptions): Plugin {
     // configureServer runs before buildStart, so we re-discover workers here
     // (buildStart's results aren't yet available).
     async configureServer(server: ViteDevServer) {
-      workerOptions = await resolveWorkerOptions(root, options);
-      const devOutDir = path.join(root, ".zapp", "workers");
+      workerOptions = await resolveWorkerOptions(projectRoot, options);
+      const devOutDir = path.join(projectRoot, ".zapp", "workers");
       // Wipe stale bundles first — otherwise renaming/deleting a worker,
       // changing a headless id, or flipping `bytecode` leaves orphaned
       // artifacts behind that the middleware (and the native filesystem
@@ -953,12 +964,22 @@ export function zapp(options?: ZappOptions): Plugin {
       await mkdir(devOutDir, { recursive: true });
 
       workers = await discoverWorkers(srcDir);
-      headlessEntries = resolveHeadlessEntries(root, workerOptions.headless);
+      headlessEntries = resolveHeadlessEntries(
+        projectRoot,
+        workerOptions.headless,
+      );
       inheritAutoWorkerEngine(workers, headlessEntries);
 
       const allEntries = [...workers, ...headlessEntries];
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, devOutDir, aliases, root, mode, workerOptions.workerModules ?? []);
+        const ok = await bundleWorker(
+          entry,
+          devOutDir,
+          aliases,
+          projectRoot,
+          mode,
+          workerOptions.workerModules ?? [],
+        );
         if (ok && zappLogLevel() >= 1) console.log(`[zapp] dev-bundled worker: ${entry.outputName}`);
       }
 
@@ -1005,7 +1026,14 @@ export function zapp(options?: ZappOptions): Plugin {
       const allEntries = [...workers, ...headlessEntries];
 
       for (const entry of allEntries) {
-        const ok = await bundleWorker(entry, outDir, aliases, root, mode, workerOptions.workerModules ?? []);
+        const ok = await bundleWorker(
+          entry,
+          outDir,
+          aliases,
+          projectRoot,
+          mode,
+          workerOptions.workerModules ?? [],
+        );
         if (ok && zappLogLevel() >= 1) {
           console.log(`[zapp] bundled worker: ${entry.outputName}`);
         }

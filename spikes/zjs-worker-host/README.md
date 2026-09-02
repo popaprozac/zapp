@@ -13,7 +13,7 @@ It proves that:
 
 - Z owns the move-only lifetime of an opaque ZJS engine adapter;
 - the engine runs on a dedicated `thread.spawn` worker and is joined;
-- an ES module is evaluated through ZJS's stable C embedding ABI;
+- an embedded ES module is evaluated through ZJS's stable C embedding ABI;
 - Z owns the worker loop, sleeps until ZJS's next wake, and pumps a real timer;
 - a bounded typed Z channel transfers owned `channel` + serialized `payload`
   envelopes into the running worker with ownership safety and backpressure;
@@ -53,9 +53,10 @@ public worker model. The spike now imports Zapp's private generic
 That contract is engine-neutral and command-neutral: load a module, dispatch
 one application-selected command type, report pending work and its next wake,
 pump one turn, and expose a lifecycle status. The temporary `WorkerCommand`
-and `WorkerResponse` envelopes remain local to this spike rather than becoming
-framework or public API. This is executable evidence for a future API, not that
-API itself.
+and `WorkerResponse` envelopes live in the private framework worker layer so
+the configured-worker implementation and this deeper channel proof share one
+shape. They are not public Zapp API. This is executable evidence for a future
+API, not that API itself.
 
 The embedded JavaScript deliberately mirrors the product vocabulary being
 pressure-tested:
