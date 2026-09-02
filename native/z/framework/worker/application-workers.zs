@@ -8,6 +8,19 @@ export readonly class ApplicationWorkerControl {
     native.zapp_worker_runtime_cancel(this.identity);
   }
 
+  // Private engine-neutral transport proof. The product-facing manager and
+  // authorization surface deliberately remain outside this first slice.
+  internal function dispatch(
+    in channel: String,
+    in payload: String
+  ): boolean {
+    return native.zapp_worker_runtime_dispatch(
+      this.identity,
+      channel,
+      payload
+    ) == 0;
+  }
+
   function join(): void {
     const status = native.zapp_worker_runtime_join(this.identity);
     if (status != 0) {

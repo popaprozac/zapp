@@ -598,6 +598,20 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
+    const workerRuntimeHeader = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/zapp_worker_runtime.h",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const zjsWorkerRuntime = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/zjs/zapp_worker_zjs.m",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const macOSApplication = readFileSync(
       new URL(
         "../../native/z/framework/platform/macos/application.zs",
@@ -673,6 +687,12 @@ describe("Z native host inputs", () => {
     expect(applicationWorkers).toContain("native.zapp_worker_runtime_join(this.identity)");
     expect(applicationWorkers).toContain("deinit {");
     expect(applicationWorkers).toContain("native.zapp_worker_runtime_destroy(this.identity)");
+    expect(workerRuntimeHeader).toContain("int32_t (*dispatch)(");
+    expect(workerRuntimeHeader).toContain("zapp_worker_runtime_dispatch(");
+    expect(zjsWorkerRuntime).toContain("ZAPP_ZJS_WORKER_INBOX_CAPACITY 64");
+    expect(zjsWorkerRuntime).toContain("pthread_cond_wait(");
+    expect(zjsWorkerRuntime).toContain("pthread_cond_timedwait(");
+    expect(zjsWorkerRuntime).toContain("&worker->finished");
     const serviceStart = macOSApplication.indexOf("config.lifecycles.start(in context)");
     const workerStart = macOSApplication.indexOf("startConfiguredApplicationWorkers(");
     const workerCancel = macOSApplication.indexOf("workers.requestCancellation()");

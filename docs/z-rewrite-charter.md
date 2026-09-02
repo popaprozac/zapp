@@ -407,8 +407,12 @@ Notes smoke. The generated immutable catalog preserves each worker's expanded
 capability, permission, service-method, engine, module, and restart evidence.
 The first runtime deliberately executes only the source-module ZJS subset;
 other engines and bytecode fail during the build instead of silently changing
-semantics. Direct typed worker-to-Z invocation, real command/response routing,
-and restart execution remain before the Phase 3 exit criterion is complete.
+semantics. A bounded private host-to-worker queue now proves command wakeup and
+dispatch through an engine-neutral runtime vtable: the Z Notes worker smoke
+queues `ping` before initialization and requires the worker's `pong` response.
+Worker-to-Z delivery, the authorized public manager/frontend bridge, direct typed
+service invocation, and restart execution remain before the Phase 3 exit
+criterion is complete.
 
 The current lifetime control uses a private engine-neutral native vtable behind
 an opaque identity. Z still owns every control object and the service/worker

@@ -27,6 +27,28 @@ async function run(
   }
 }
 
+async function runWorkerSmoke(command: string[]): Promise<void> {
+  const child = Bun.spawn(command, {
+    cwd: repository,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, status] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  if (status !== 0) {
+    throw new Error(`${command[0]} exited with status ${status}`);
+  }
+  if (!stdout.includes("sent pong")) {
+    throw new Error("configured application worker did not reply on channel pong");
+  }
+}
+
 const smoke = process.argv.includes("--smoke");
 const workerSmoke = process.argv.includes("--worker-smoke");
 const originalWorkerSmoke = process.env.ZAPP_APPLICATION_WORKER_SMOKE;
@@ -82,4 +104,5 @@ try {
   }
 }
 
-await run([output], process.env);
+if (workerSmoke) await runWorkerSmoke([output]);
+else await run([output], process.env);

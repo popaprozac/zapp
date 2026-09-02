@@ -38,6 +38,11 @@ uintptr_t zapp_zjs_worker_start(
   const char *module_name
 );
 void zapp_zjs_worker_cancel(uintptr_t identity);
+int32_t zapp_zjs_worker_dispatch(
+  uintptr_t identity,
+  const char *channel,
+  const char *payload
+);
 int32_t zapp_zjs_worker_join(uintptr_t identity);
 void zapp_zjs_worker_destroy(uintptr_t identity);
 

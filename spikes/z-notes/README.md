@@ -136,9 +136,12 @@ stop:
 bun run spike:z-notes:worker-smoke
 ```
 
-This first configured tier proves module load and deterministic lifetime. It
-does not yet expose frontend messaging, an `app.workers` manager, or restart
-execution; those remain the next worker composition slices.
+This configured tier proves module load, deterministic lifetime, and a bounded
+private host-to-worker command path. The smoke queues `ping` immediately—even
+before the module may have initialized—and fails unless the worker dispatches it
+and replies on `pong`. It does not yet expose frontend messaging, worker-to-Z
+delivery, an `app.workers` manager, or restart execution; those remain the next
+worker composition slices.
 
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.

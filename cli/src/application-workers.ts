@@ -157,6 +157,7 @@ export function zEmbeddedApplicationWorkerPath(
 /** Render application-worker startup without exposing engine details publicly. */
 export function renderZApplicationWorkerStartup(
   workers: readonly ResolvedApplicationWorker[],
+  smokeDispatch = false,
 ): string {
   if (workers.length === 0) {
     return `export function startConfiguredApplicationWorkers(
@@ -197,13 +198,21 @@ export function renderZApplicationWorkerStartup(
   );
   workers.forEach((worker, index) => {
     lines.push(
-      "  controls.push(startZjsApplicationWorker(",
+      `  const control${index} = startZjsApplicationWorker(`,
       "    WorkerModule({",
       `      source: applicationWorkerSource${index},`,
       `      name: ${JSON.stringify(worker.moduleUrl)},`,
       "    })",
-      "  ));",
+      "  );",
     );
+    if (smokeDispatch) {
+      lines.push(
+        `  if (!control${index}.dispatch("ping", "configured-worker-smoke")) {`,
+        `    control${index}.requestCancellation();`,
+        "  }",
+      );
+    }
+    lines.push(`  controls.push(control${index});`);
   });
   lines.push(
     "  return new ApplicationWorkers({ controls: controls.freeze() });",

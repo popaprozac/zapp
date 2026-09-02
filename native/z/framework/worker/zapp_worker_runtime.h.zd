@@ -1,5 +1,10 @@
 declare module "zapp_worker_runtime.h" {
   export function zapp_worker_runtime_cancel(identity: _): _;
+  export function zapp_worker_runtime_dispatch(
+    identity: _,
+    in channel: _,
+    in payload: _
+  ): _;
   export function zapp_worker_runtime_join(identity: _): _;
   export function zapp_worker_runtime_destroy(identity: _): _;
 }

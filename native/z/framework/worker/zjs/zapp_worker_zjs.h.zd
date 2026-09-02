@@ -37,6 +37,11 @@ declare module "zapp_worker_zjs.h" {
     in module_name: _
   ): _;
   export function zapp_zjs_worker_cancel(identity: _): _;
+  export function zapp_zjs_worker_dispatch(
+    identity: _,
+    in channel: _,
+    in payload: _
+  ): _;
   export function zapp_zjs_worker_join(identity: _): _;
   export function zapp_zjs_worker_destroy(identity: _): _;
 }

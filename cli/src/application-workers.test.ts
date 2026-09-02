@@ -98,6 +98,12 @@ describe("resolveApplicationWorkers", () => {
     expect(source).toContain("startZjsApplicationWorker(");
     expect(source).toContain('name: "/_workers/_headless_indexer.mjs"');
     expect(source).toContain("controls: controls.freeze()");
+
+    const smokeSource = renderZApplicationWorkerStartup(workers, true);
+    expect(smokeSource).toContain(
+      'control0.dispatch("ping", "configured-worker-smoke")',
+    );
+    expect(smokeSource).toContain("control0.requestCancellation()");
   });
 
   test("fails closed for engines and bytecode outside the first native tier", () => {
