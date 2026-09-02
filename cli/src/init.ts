@@ -35,9 +35,13 @@ export function ensureViewportFitCover(html: string): string {
   );
 }
 
-/** Add editor resolution for the compiler-owned `zapp:services` module. */
+/** Add editor resolution for compiler-owned `zapp:*` generated modules. */
 export function ensureZappServicePathMapping(source: string): string {
-  if (source.includes('"zapp:services"')) return source;
+  const mappings = [
+    ['"zapp:services"', '"./.zapp/generated/services.ts"'],
+    ['"zapp:workers"', '"./.zapp/generated/workers.ts"'],
+  ].filter(([name]) => !source.includes(name));
+  if (mappings.length === 0) return source;
   const compilerOptions = source.indexOf('"compilerOptions"');
   if (compilerOptions < 0) return source;
   const objectStart = source.indexOf("{", compilerOptions);
@@ -48,13 +52,15 @@ export function ensureZappServicePathMapping(source: string): string {
     const pathsStart = source.indexOf("{", paths);
     if (pathsStart >= 0) {
       return source.slice(0, pathsStart + 1)
-        + '\n      "zapp:services": ["./.zapp/generated/services.ts"],'
+        + mappings.map(([name, target]) => `\n      ${name}: [${target}],`).join("")
         + source.slice(pathsStart + 1);
     }
   }
 
   return source.slice(0, objectStart + 1)
-    + '\n    "paths": {\n      "zapp:services": ["./.zapp/generated/services.ts"]\n    },'
+    + '\n    "paths": {'
+    + mappings.map(([name, target]) => `\n      ${name}: [${target}],`).join("")
+    + '\n    },'
     + source.slice(objectStart + 1);
 }
 

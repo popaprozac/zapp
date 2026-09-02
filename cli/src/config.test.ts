@@ -161,6 +161,10 @@ test("validateWorkers keeps runtime modules separate from native authority", () 
         script: "src/workers/search-indexer.ts",
         engine: "zjs",
         capabilities: ["backgroundSearch"],
+        protocol: {
+          module: "src/workers/search-protocol.zs",
+          type: "SearchProtocol",
+        },
       },
     },
     modules: ["encoding"],
@@ -187,6 +191,39 @@ test("validateWorkers keeps runtime modules separate from native authority", () 
   expect(() => validateWorkers({
     modules: ["encoding", "encoding"],
   }, profiles)).toThrow(/workers.modules repeats "encoding"/);
+
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        protocol: { module: "src/workers/search-protocol.zs", type: "SearchProtocol" },
+      },
+    },
+  }, profiles)).not.toThrow();
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        protocol: { module: "../search-protocol.zs", type: "SearchProtocol" },
+      },
+    },
+  } as any, profiles)).toThrow(/protocol\.module must stay relative/);
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        protocol: { module: "src/workers/search-protocol.ts", type: "SearchProtocol" },
+      },
+    },
+  } as any, profiles)).toThrow(/protocol\.module must name a \.zs/);
+  expect(() => validateWorkers({
+    application: {
+      searchIndexer: {
+        script: "src/workers/search-indexer.ts",
+        protocol: { module: "src/workers/search-protocol.zs", type: "Search.Protocol" },
+      },
+    },
+  } as any, profiles)).toThrow(/protocol\.type must be a Z identifier/);
 });
 
 test("validateWorkers requires a bounded positive restart policy", () => {

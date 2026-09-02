@@ -249,7 +249,7 @@ async function runDev(root: string) {
   let preparedZServices: PreparedZFrontendServices | undefined;
   if (selectedNativeLanguage === "z") {
     clog(1, "generating typed Z service module...");
-    preparedZServices = await prepareZFrontendServices({ root, nativeDir });
+    preparedZServices = await prepareZFrontendServices({ root, nativeDir, config });
     clog(1, `generated ${path.relative(root, preparedZServices.bindingPath)}`);
   } else {
     clog(1, "scanning for services...");
@@ -592,7 +592,7 @@ async function runBuild(
   let preparedZServices: PreparedZFrontendServices | undefined;
   if (selectedNativeLanguage === "z") {
     clog(1, "generating typed Z service module...");
-    preparedZServices = await prepareZFrontendServices({ root, nativeDir });
+    preparedZServices = await prepareZFrontendServices({ root, nativeDir, config });
     clog(1, `generated ${path.relative(root, preparedZServices.bindingPath)}`);
   } else {
     clog(1, "scanning for services...");

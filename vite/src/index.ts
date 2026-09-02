@@ -812,6 +812,7 @@ function resolveHeadlessEntries(root: string, headless?: ZappOptions["headless"]
 }
 
 const ZAPP_SERVICES_MODULE = "zapp:services";
+const ZAPP_WORKERS_MODULE = "zapp:workers";
 
 function findZappProjectRoot(viteRoot: string): string {
   const configured = process.env.ZAPP_PROJECT_ROOT;
@@ -836,6 +837,7 @@ export function zapp(options?: ZappOptions): Plugin {
   let root = "";
   let projectRoot = "";
   let generatedServices = "";
+  let generatedWorkers = "";
   let srcDir = "";
   let workers: WorkerEntry[] = [];
   let headlessEntries: WorkerEntry[] = [];
@@ -857,6 +859,12 @@ export function zapp(options?: ZappOptions): Plugin {
         ".zapp",
         "generated",
         "services.ts",
+      );
+      generatedWorkers = path.join(
+        projectRoot,
+        ".zapp",
+        "generated",
+        "workers.ts",
       );
       srcDir = path.join(root, "src");
       outDir = path.join(
@@ -884,17 +892,24 @@ export function zapp(options?: ZappOptions): Plugin {
         aliases = resolvedAlias as Record<string, string>;
       }
       aliases[ZAPP_SERVICES_MODULE] = generatedServices;
+      aliases[ZAPP_WORKERS_MODULE] = generatedWorkers;
     },
 
     resolveId(id) {
-      if (id !== ZAPP_SERVICES_MODULE) return null;
-      if (!existsSync(generatedServices)) {
+      const generated = id === ZAPP_SERVICES_MODULE
+        ? generatedServices
+        : id === ZAPP_WORKERS_MODULE
+          ? generatedWorkers
+          : null;
+      if (generated === null) return null;
+      if (!existsSync(generated)) {
         throw new Error(
-          `[zapp] generated services are missing at ${generatedServices}. `
-          + "Run the frontend through `zapp dev` or `zapp build` so Z service metadata is generated first.",
+          `[zapp] generated ${id === ZAPP_SERVICES_MODULE ? "services" : "workers"} `
+          + `are missing at ${generated}. Run the frontend through \`zapp dev\` or `
+          + "`zapp build` so checked Z metadata is generated first.",
         );
       }
-      return generatedServices;
+      return generated;
     },
 
     async buildStart() {

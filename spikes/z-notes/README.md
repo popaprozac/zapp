@@ -138,6 +138,45 @@ and the authorized WebView subscription. A welcome note seeded by native Z
 makes the automated path exercise a real `Note` value rather than an empty
 collection; notes created from either WebView appear in later manual indexes.
 
+The indexer also exercises Z-authored worker protocols rather than duplicating
+payload interfaces by hand. `zapp/note-indexer-protocol.zs` declares exported
+command/message enums and aliases
+`WorkerProtocol<NoteIndexerCommand, NoteIndexerMessage>`. The config names that
+checked alias, and the build generates `zapp:workers` for both environments:
+
+```ts
+// WebView
+import { noteIndexer } from "zapp:workers";
+
+await noteIndexer.commands.indexNotes({ requestId: "manual-1" });
+const subscription = noteIndexer.messages.subscribe((message) => {
+  switch (message.kind) {
+    case "started":
+    case "progress":
+    case "complete":
+    case "failed":
+      console.log(message.value);
+      break;
+  }
+});
+```
+
+```ts
+// ZJS application worker
+import { defineNoteIndexerWorker } from "zapp:workers";
+
+const dispatch = defineNoteIndexerWorker({
+  indexNotes(input, messages) {
+    messages.started({ requestId: input.requestId });
+    // Analyze notes through the same generated `zapp:services` API.
+  },
+});
+```
+
+The Z marker disappears at build time. Variant names use the existing worker
+channels directly, while generated codecs validate every payload and preserve
+the `u64` note identity exactly.
+
 The opt-in worker smoke proves that workflow without manual UI interaction:
 
 ```sh
@@ -192,7 +231,7 @@ import {
   ApplicationWorkerMessage,
 } from "zapp/worker";
 
-const selected = app.workers.get("lifecycle");
+const selected = app.workers.get("noteIndexer");
 const worker = match (selected) {
   some(value) => value;
   none => return 1;

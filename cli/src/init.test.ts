@@ -29,6 +29,9 @@ test("adds zapp:services editor resolution to compiler options", () => {
   expect(mapped).toContain(
     '"zapp:services": ["./.zapp/generated/services.ts"]',
   );
+  expect(mapped).toContain(
+    '"zapp:workers": ["./.zapp/generated/workers.ts"]',
+  );
   expect(ensureZappServicePathMapping(mapped)).toBe(mapped);
 });
 
@@ -42,5 +45,6 @@ test("extends an existing TypeScript paths map", () => {
 }`;
   const mapped = ensureZappServicePathMapping(source);
   expect(mapped).toContain('"zapp:services"');
+  expect(mapped).toContain('"zapp:workers"');
   expect(mapped).toContain('"@/*"');
 });

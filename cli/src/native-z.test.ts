@@ -720,7 +720,7 @@ describe("Z native host inputs", () => {
     expect(applicationWorkers).toContain("deinit {");
     expect(applicationWorkers).toContain("native.zapp_worker_runtime_destroy(this.identity)");
     expect(applicationWorkers).toContain(
-      "internal class ApplicationWorkerServiceRequest",
+      "internal readonly class ApplicationWorkerServiceRequest",
     );
     expect(workerManager).toContain("export readonly class WorkerManager on thread.main");
     expect(workerManager).toContain("function get(in id: String): Option<ApplicationWorker>");

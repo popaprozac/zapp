@@ -15,6 +15,10 @@ describe("resolveApplicationWorkers", () => {
           bytecode: true,
           capabilities: ["backgroundSearch", "diagnostics"],
           restart: {},
+          protocol: {
+            module: "src/workers/search-protocol.zs",
+            type: "SearchProtocol",
+          },
         },
         calculator: "src/workers/calculator.ts",
       },
@@ -42,6 +46,10 @@ describe("resolveApplicationWorkers", () => {
         capabilities: ["backgroundSearch", "diagnostics"],
         permissions: ["fs:read"],
         serviceMethods: ["notes.list", "notes.updateIndex", "health.status"],
+        protocol: {
+          module: "src/workers/search-protocol.zs",
+          type: "SearchProtocol",
+        },
       },
       {
         id: "calculator",

@@ -42,17 +42,13 @@ export type ApplicationWorkerServiceCancelHandler = (
   requestId: u64
 ) => void on thread.any;
 
-internal class ApplicationWorkerServiceRequest {
+internal readonly class ApplicationWorkerServiceRequest {
   readonly generation: u64;
-  control: Option<TaskControl>;
-
-  function attach(inout this, control: TaskControl): void {
-    this.control = Option.some(control);
-  }
+  readonly control: Option<TaskControl>;
 
   function requestCancel(): boolean {
     return match (in this.control) {
-      some(control) => control.requestCancel();
+      some(value) => value.requestCancel();
       none => false;
     };
   }
@@ -105,12 +101,20 @@ internal function attachApplicationWorkerServiceRequest(
 ): void {
   const attached = requests.withLock(
     (inout state): boolean => {
-      const found = state.requests.remove(requestId);
-      return match (found) {
+      const found = state.requests.get(requestId);
+      const generation = match (in found) {
+        some(request) => Option<u64>.some(request.generation);
+        none => Option<u64>.none;
+      };
+      return match (generation) {
         some(value) => {
-          let request = value;
-          request.attach(control);
-          state.requests.set(requestId, request);
+          state.requests.set(
+            requestId,
+            new ApplicationWorkerServiceRequest({
+              generation: value,
+              control: Option.some(control),
+            })
+          );
           select true;
         }
         none => false;
@@ -127,16 +131,12 @@ internal function finishApplicationWorkerServiceRequest(
 ): void {
   requests.withLock(
     (inout state): void => {
-      const found = state.requests.remove(requestId);
-      match (found) {
-        some(value) => {
-          let request = value;
-          if (request.generation != generation) {
-            state.requests.set(requestId, request);
-          }
-        }
-        none => {}
-      }
+      const found = state.requests.get(requestId);
+      const matches = match (in found) {
+        some(request) => request.generation == generation;
+        none => false;
+      };
+      if (matches) state.requests.delete(requestId);
     }
   );
 }
@@ -147,14 +147,13 @@ internal function cancelApplicationWorkerServiceRequest(
 ): boolean {
   return requests.withLock(
     (inout state): boolean => {
-      const found = state.requests.remove(requestId);
-      return match (found) {
-        some(value) => {
-          let request = value;
-          select request.requestCancel();
-        }
+      const found = state.requests.get(requestId);
+      const requested: boolean = match (in found) {
+        some(request) => request.requestCancel();
         none => false;
       };
+      state.requests.delete(requestId);
+      return requested;
     }
   );
 }
@@ -165,7 +164,8 @@ internal function cancelAllApplicationWorkerServiceRequests(
   requests.withLock(
     (inout state): void => {
       for (const entry of state.requests) {
-        entry.value.requestCancel();
+        const request: ApplicationWorkerServiceRequest = entry.value;
+        request.requestCancel();
       }
       state.requests.clear();
     }

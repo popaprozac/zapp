@@ -2,6 +2,9 @@
 // the Zapp Vite plugin resolves this generated public module for the spike.
 import { health, type Note, NoteState, notes } from "zapp:services";
 import { PermissionDeniedError } from "@zappdev/runtime";
+// @ts-expect-error The monorepo root is not an initialized Zapp application;
+// the Zapp Vite plugin resolves this generated public module for the spike.
+import { defineNoteIndexerWorker, type IndexNotes, type NoteIndexerMessages } from "zapp:workers";
 
 declare function __zappWorkerSend(channel: string, payload: string): void;
 
@@ -11,23 +14,9 @@ interface WorkerBenchmarkConfig {
   samples: number;
 }
 
-interface NoteIndexRequest {
-  requestId?: string;
-}
-
-function noteIndexRequestId(payload: string): string {
-  try {
-    const request = JSON.parse(payload) as NoteIndexRequest;
-    if (typeof request?.requestId === "string" && request.requestId.length > 0) {
-      return request.requestId;
-    }
-  } catch {}
-  return payload.length > 0 ? payload : "anonymous";
-}
-
-function indexNotes(payload: string): void {
-  const requestId = noteIndexRequestId(payload);
-  __zappWorkerSend("index-started", JSON.stringify({ requestId }));
+function indexNotes(input: IndexNotes, messages: NoteIndexerMessages): void {
+  const requestId = input.requestId;
+  messages.started({ requestId });
   notes.list().then(
     (values: Note[]) => {
       let active = 0;
@@ -38,30 +27,36 @@ function indexNotes(payload: string): void {
         if (note.state === NoteState.active) active += 1;
         else archived += 1;
         titleCharacters += note.title.length;
-        __zappWorkerSend("index-progress", JSON.stringify({
+        messages.progress({
           requestId,
           completed: index + 1,
           total: values.length,
-          noteId: note.id.toString(),
+          noteId: note.id,
           title: note.title,
-        }));
+        });
       }
-      __zappWorkerSend("index-complete", JSON.stringify({
+      messages.complete({
         requestId,
         total: values.length,
         active,
         archived,
         titleCharacters,
-      }));
+      });
     },
     (error: unknown) => {
-      __zappWorkerSend("index-error", JSON.stringify({
+      messages.failed({
         requestId,
         message: error instanceof Error ? error.message : String(error),
-      }));
+      });
     },
   );
 }
+
+const handleNoteIndexerCommand = defineNoteIndexerWorker({
+  indexNotes(input: IndexNotes, messages: NoteIndexerMessages): void {
+    indexNotes(input, messages);
+  },
+});
 
 function nowMilliseconds(): number {
   const performance = (globalThis as any).performance;
@@ -146,7 +141,7 @@ function runWorkerBenchmark(config: WorkerBenchmarkConfig): void {
   measurePublicService(200, advanceSample);
 }
 
-__zappWorkerSend("ready", JSON.stringify({ worker: "lifecycle" }));
+__zappWorkerSend("ready", JSON.stringify({ worker: "noteIndexer" }));
 
 function verifyDeniedService(payload: string): void {
   const denied = notes.create({
@@ -174,10 +169,7 @@ function verifyDeniedService(payload: string): void {
 }
 
 export function onMessage(channel: string, payload: string): void {
-  if (channel === "index-notes") {
-    indexNotes(payload);
-    return;
-  }
+  if (handleNoteIndexerCommand(channel, payload)) return;
   if (channel === "benchmark") {
     runWorkerBenchmark(JSON.parse(payload) as WorkerBenchmarkConfig);
     return;

@@ -9,7 +9,7 @@ import {
   NoteDescription,
   notes,
 } from "zapp:services";
-import { applicationWorkers } from "@zappdev/runtime/worker";
+import { noteIndexer } from "zapp:workers";
 
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
@@ -58,29 +58,32 @@ windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
 });
 renderWindowEvents();
 
-const noteIndexer = applicationWorkers.get("lifecycle");
 let nextIndexRequest = 1;
 
-noteIndexer.subscribe("index-started", (message) => {
-  workerIndex.textContent = `Worker started index ${message.requestId}`;
-});
-noteIndexer.subscribe("index-progress", (message) => {
-  workerIndex.textContent = [
-    `Index ${message.requestId}`,
-    `${message.completed}/${message.total}: ${message.title}`,
-  ].join("\n");
-});
-noteIndexer.subscribe("index-complete", (message) => {
-  workerIndex.textContent = [
-    `Indexed ${message.total} note${message.total === 1 ? "" : "s"}`,
-    `Active: ${message.active}; archived: ${message.archived}`,
-    `Title characters: ${message.titleCharacters}`,
-  ].join("\n");
-  document.body.dataset.workerIndex = "ok";
-});
-noteIndexer.subscribe("index-error", (message) => {
-  workerIndex.textContent = `Worker index failed\n${message.message}`;
-  document.body.dataset.workerIndex = "error";
+noteIndexer.messages.subscribe((message) => {
+  switch (message.kind) {
+    case "started":
+      workerIndex.textContent = `Worker started index ${message.value.requestId}`;
+      break;
+    case "progress":
+      workerIndex.textContent = [
+        `Index ${message.value.requestId}`,
+        `${message.value.completed}/${message.value.total}: ${message.value.title}`,
+      ].join("\n");
+      break;
+    case "complete":
+      workerIndex.textContent = [
+        `Indexed ${message.value.total} note${message.value.total === 1 ? "" : "s"}`,
+        `Active: ${message.value.active}; archived: ${message.value.archived}`,
+        `Title characters: ${message.value.titleCharacters}`,
+      ].join("\n");
+      document.body.dataset.workerIndex = "ok";
+      break;
+    case "failed":
+      workerIndex.textContent = `Worker index failed\n${message.value.message}`;
+      document.body.dataset.workerIndex = "error";
+      break;
+  }
 });
 
 indexButton.addEventListener("click", async () => {
@@ -88,7 +91,7 @@ indexButton.addEventListener("click", async () => {
   nextIndexRequest += 1;
   workerIndex.textContent = `Queueing index ${requestId}…`;
   try {
-    await noteIndexer.send("index-notes", { requestId });
+    await noteIndexer.commands.indexNotes({ requestId });
   } catch (error) {
     workerIndex.textContent = `Worker unavailable\n${String(error)}`;
     document.body.dataset.workerIndex = "error";

@@ -44,7 +44,9 @@ the Z builder. The builder:
 11. expands `security.capabilities` service selectors against the checked
     service manifest, compiles exact grants into immutable Z collections, and
     enforces the originating window's selected profiles before dispatch;
-12. bundles configured application workers, passes each worker only its expanded
+12. checks optional Z-authored `WorkerProtocol<Command, Message>` aliases,
+    generates transport-neutral TypeScript command/message codecs, bundles
+    configured application workers, passes each worker only its expanded
     immutable service-method allowlist, routes synchronous `thread.any` calls
     directly into the frozen Z router, and retains suspended service
     continuations until their owning worker can settle them; and
@@ -89,6 +91,28 @@ cancellation races are idempotent: the first terminal outcome releases the
 worker continuation, and a late native completion is ignored. The current ZJS
 adapter bounds each worker to 64 simultaneously suspended service calls; excess
 calls fail rather than allocating an unbounded native continuation table.
+
+## Checked worker protocols
+
+Application workers may additionally name a checked Z protocol in
+`zapp.config.ts`. The protocol is an exported alias of
+`WorkerProtocol<Command, Message>`, where both roots are exported Z enums and
+their payloads use the same supported wire-value graph as services. The marker
+is compile-time evidence only. Its enum variants map directly onto the existing
+worker channel names, so typed commands do not add an envelope or another IPC
+layer.
+
+The generated `zapp:workers` module serves both environments. WebViews receive
+`worker.commands.<variant>(payload)` and a discriminated
+`worker.messages.subscribe(...)` stream. Worker modules receive a generated
+`define<Worker>Worker(...)` dispatcher and a message publisher whose methods
+are limited to declared variants. Raw `send` and `subscribe` remain available
+as an explicit escape hatch and can coexist with the generated dispatcher.
+
+Worker bundling removes the unused WebView client half of the generated module.
+Collection codecs use explicit checked loops rather than depending on optional
+or engine-specific `Array.map` behavior, while exact `u64`/`i64` values retain
+their decimal-string wire representation.
 
 Configured ZJS restart policy is executable in this replacement path too. An
 uncaught module, message, continuation, or event-loop failure destroys the

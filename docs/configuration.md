@@ -91,6 +91,10 @@ export default defineConfig({
         script: "src/workers/sync.ts",
         engine: "zjs",
         capabilities: ["backgroundSync"],
+        protocol: {
+          module: "./zapp/sync-worker-protocol.zs",
+          type: "SyncWorkerProtocol",
+        },
         restart: { maxRetries: 3, withinMs: 60_000 },
       },
     },
@@ -157,6 +161,79 @@ authorized WebViews. Lifecycle and message subscriptions are multicast and
 retain their registration for the lexical lifetime of their subscription.
 Dynamic worker creation and WebView-owned worker lifetimes remain later
 manager tiers rather than implicit behavior of this configured surface.
+
+`protocol` is optional. Without it, `send(channel, payload)` and
+`subscribe(channel, handler)` remain the explicit raw transport escape hatch.
+With it, ordinary exported Z structs and enums become the checked source of
+truth for both sides of the worker boundary:
+
+```zs
+import { WorkerProtocol } from "zapp/worker";
+
+export readonly struct RefreshIndex {
+  requestId: String;
+}
+
+export readonly struct IndexComplete {
+  requestId: String;
+  total: usize;
+}
+
+export enum SyncWorkerCommand {
+  refresh RefreshIndex,
+}
+
+export enum SyncWorkerMessage {
+  complete IndexComplete,
+}
+
+export type SyncWorkerProtocol =
+  WorkerProtocol<SyncWorkerCommand, SyncWorkerMessage>;
+```
+
+The build checks that module with Z, requires the two protocol roots to be
+exported enums, follows their exported payload graph, and generates
+`zapp:workers`. WebView code receives a typed command namespace and one
+discriminated message stream:
+
+```ts
+import { sync } from "zapp:workers";
+
+await sync.commands.refresh({ requestId: "startup" });
+
+const subscription = sync.messages.subscribe((message) => {
+  switch (message.kind) {
+    case "complete":
+      console.log(message.value.total);
+      break;
+  }
+});
+```
+
+The worker module imports the generated implementation helper from that same
+module. It handles checked command payloads and can only publish message
+variants declared by the Z protocol:
+
+```ts
+import { defineSyncWorker } from "zapp:workers";
+
+const dispatch = defineSyncWorker({
+  refresh(input, messages) {
+    messages.complete({ requestId: input.requestId, total: 0 });
+  },
+});
+
+export function onMessage(channel: string, payload: string): void {
+  if (dispatch(channel, payload)) return;
+  // Optional raw channels can coexist for diagnostics or benchmarking.
+}
+```
+
+The marker has no runtime representation and adds no transport envelope. Enum
+variant names become the existing native channel names; generated codecs
+validate payloads and preserve exact 64-bit integers as decimal strings on the
+wire. Native Z's current `app.workers` manager intentionally remains on the raw
+channel/payload surface until a later native typed-facade slice.
 
 Capability selection is additive and frozen at build time. Omitting a worker's
 `capabilities` grants no native permissions or service methods. Unknown and

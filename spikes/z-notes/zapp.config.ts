@@ -15,7 +15,7 @@ export default defineConfig({
       default: {
         permissions: ["window:create"],
         services: ["notes", "health"],
-        workers: ["lifecycle"],
+        workers: ["noteIndexer"],
       },
       diagnostics: {
         services: ["notes.count", "notes.isEmpty", "notes.list", "health.status"],
@@ -36,10 +36,14 @@ export default defineConfig({
   },
   workers: {
     application: {
-      lifecycle: {
-        script: "./frontend/worker-lifecycle.ts",
+      noteIndexer: {
+        script: "./frontend/note-indexer.ts",
         engine: "zjs",
         capabilities: ["diagnostics"],
+        protocol: {
+          module: "./zapp/note-indexer-protocol.zs",
+          type: "NoteIndexerProtocol",
+        },
       },
       ...(process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE === "1" ? {
         restartProbe: {

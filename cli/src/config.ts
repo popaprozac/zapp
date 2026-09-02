@@ -323,6 +323,14 @@ type ScriptOnlyEngine = "bare-jsc" | "bare-v8" | "bare-quickjs" | "bare-mqjs";
 /** Union of all engine identifiers. */
 export type WorkerEngineName = BytecodeCapableEngine | ScriptOnlyEngine;
 
+/** Checked Z protocol used to generate typed worker command/message facades. */
+export interface ApplicationWorkerProtocolConfig {
+  /** Z source module relative to the application root. */
+  module: string;
+  /** Exported WorkerProtocol<Command, Message> alias in that module. */
+  type: string;
+}
+
 interface ApplicationWorkerConfigBase {
   /** Script path (same as the bare-string form). */
   script: string;
@@ -332,6 +340,8 @@ interface ApplicationWorkerConfigBase {
   capabilities?: string[];
   /** Optional restart policy. Omit / `false` to disable auto-restart. */
   restart?: RestartPolicy | false;
+  /** Optional checked command/message protocol authored in ordinary Z types. */
+  protocol?: ApplicationWorkerProtocolConfig;
 }
 
 /**
@@ -1014,6 +1024,7 @@ export function validateWorkers(
     "restart",
     "engine",
     "bytecode",
+    "protocol",
   ]);
   const knownProfiles = new Set(profiles ? Object.keys(profiles) : ["default"]);
   const knownWorkers = new Set(Object.keys(application));
@@ -1027,13 +1038,13 @@ export function validateWorkers(
       }
     }
   }
-  const validateScript = (id: string, script: unknown): void => {
-    if (typeof script !== "string" || script.trim().length === 0) {
-      throw new Error(`[zapp] workers.application.${id}.script must be a non-empty string`);
+  const validateRelativeSource = (description: string, source: unknown): void => {
+    if (typeof source !== "string" || source.trim().length === 0) {
+      throw new Error(`[zapp] ${description} must be a non-empty string`);
     }
-    if (path.isAbsolute(script) || script.split(/[\\/]+/).includes("..")) {
+    if (path.isAbsolute(source) || source.split(/[\\/]+/).includes("..")) {
       throw new Error(
-        `[zapp] workers.application.${id}.script must stay relative to the application root`,
+        `[zapp] ${description} must stay relative to the application root`,
       );
     }
   };
@@ -1046,7 +1057,7 @@ export function validateWorkers(
       );
     }
     if (typeof entry === "string") {
-      validateScript(id, entry);
+      validateRelativeSource(`workers.application.${id}.script`, entry);
       continue;
     }
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
@@ -1057,7 +1068,46 @@ export function validateWorkers(
         throw new Error(`[zapp] workers.application.${id}.${key} is unknown`);
       }
     }
-    validateScript(id, entry.script);
+    validateRelativeSource(`workers.application.${id}.script`, entry.script);
+    if (entry.protocol !== undefined) {
+      if (
+        entry.protocol === null
+        || typeof entry.protocol !== "object"
+        || Array.isArray(entry.protocol)
+      ) {
+        throw new Error(
+          `[zapp] workers.application.${id}.protocol must be an object with module and type`,
+        );
+      }
+      const protocolKeys = new Set(["module", "type"]);
+      for (const key of Object.keys(entry.protocol)) {
+        if (!protocolKeys.has(key)) {
+          throw new Error(`[zapp] workers.application.${id}.protocol.${key} is unknown`);
+        }
+      }
+      validateRelativeSource(
+        `workers.application.${id}.protocol.module`,
+        entry.protocol.module,
+      );
+      if (!entry.protocol.module.endsWith(".zs")) {
+        throw new Error(
+          `[zapp] workers.application.${id}.protocol.module must name a .zs source file`,
+        );
+      }
+      if (
+        typeof entry.protocol.type !== "string"
+        || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.protocol.type)
+      ) {
+        throw new Error(
+          `[zapp] workers.application.${id}.protocol.type must be a Z identifier`,
+        );
+      }
+      if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id)) {
+        throw new Error(
+          `[zapp] typed application worker ID ${JSON.stringify(id)} must be a Z/TypeScript identifier`,
+        );
+      }
+    }
     if (entry.capabilities !== undefined) {
       if (!Array.isArray(entry.capabilities)) {
         throw new Error(`[zapp] workers.application.${id}.capabilities must be a string[]`);

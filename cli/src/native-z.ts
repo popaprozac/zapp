@@ -12,7 +12,10 @@ import {
   type ResolvedApplicationWorker,
 } from "./application-workers";
 import type { ZServiceManifest } from "./z-service-bindings";
-import type { ZProgramMetadata } from "./z-program-metadata";
+import type {
+  ZProgramMetadata,
+  ZWorkerProtocolManifest,
+} from "./z-program-metadata";
 import { isPermissionAllowed, resolvePermissions } from "./permissions";
 import {
   buildWebviewInjections,
@@ -56,6 +59,7 @@ interface BuildNativeZOptions {
 export interface PrepareZFrontendServicesOptions {
   root: string;
   nativeDir: string;
+  config: Pick<ResolvedConfig, "applicationWorkers">;
 }
 
 export interface PreparedZFrontendServices {
@@ -63,6 +67,8 @@ export interface PreparedZFrontendServices {
   manifest: ZServiceManifest;
   programMetadataSource: string;
   inputHashes: Record<string, string>;
+  workerBindingPath: string;
+  workerProtocols: ZWorkerProtocolManifest[];
 }
 
 interface ZFrontendServicesCache {
@@ -688,7 +694,7 @@ async function hashZProgramInputs(
 }
 
 export async function preparedZServicesAreCurrent(
-  prepared: PreparedZFrontendServices,
+  prepared: Pick<PreparedZFrontendServices, "inputHashes">,
 ): Promise<boolean> {
   for (const [inputPath, expectedHash] of Object.entries(prepared.inputHashes)) {
     if (!existsSync(inputPath) || await hashFile(inputPath) !== expectedHash) return false;
@@ -816,9 +822,11 @@ export async function prepareZFrontendServices(
 
   const {
     deriveZServiceManifest,
+    deriveZWorkerProtocolManifest,
     parseZProgramMetadata,
   } = await import("./z-program-metadata");
   const { generateZServiceBindings } = await import("./z-service-bindings");
+  const { generateZWorkerBindings } = await import("./z-worker-bindings");
   const outputDirectory = path.join(options.root, ".zapp", "generated");
   await mkdir(outputDirectory, { recursive: true });
   const programMetadataPath = path.join(outputDirectory, "program.zmeta.json");
@@ -841,12 +849,7 @@ export async function prepareZFrontendServices(
     }
     manifest = deriveZServiceManifest(programMetadata);
     inputHashes = cache.inputHashes;
-    if (!await preparedZServicesAreCurrent({
-      bindingPath: path.join(outputDirectory, "services.ts"),
-      manifest,
-      programMetadataSource,
-      inputHashes,
-    })) {
+    if (!await preparedZServicesAreCurrent({ inputHashes })) {
       throw new Error("cached Z service inputs changed");
     }
     console.log("[zapp] reused persistent checked Z service metadata");
@@ -874,11 +877,48 @@ export async function prepareZFrontendServices(
     "utf8",
   );
   const bindingPath = await generateZServiceBindings(manifest, outputDirectory);
+  const workerProtocols: ZWorkerProtocolManifest[] = [];
+  for (const [workerId, authored] of Object.entries(
+    options.config.applicationWorkers ?? {},
+  )) {
+    const entry = typeof authored === "string" ? { script: authored } : authored;
+    if (!entry.protocol) continue;
+    const protocolModule = path.resolve(options.root, entry.protocol.module);
+    if (!existsSync(protocolModule)) {
+      throw new Error(
+        `[zapp] worker ${JSON.stringify(workerId)} protocol module does not exist: `
+        + protocolModule,
+      );
+    }
+    const protocolMetadataSource = await run(
+      [...compiler, "metadata", protocolModule],
+      options.root,
+      true,
+    );
+    const protocolMetadata = parseZProgramMetadata(protocolMetadataSource);
+    workerProtocols.push(deriveZWorkerProtocolManifest(
+      protocolMetadata,
+      workerId,
+      protocolModule,
+      entry.protocol.type,
+    ));
+  }
+  await writeFile(
+    path.join(outputDirectory, "workers.zmeta.json"),
+    `${JSON.stringify({ schemaVersion: 1, protocols: workerProtocols }, null, 2)}\n`,
+    "utf8",
+  );
+  const workerBindingPath = await generateZWorkerBindings(
+    workerProtocols,
+    outputDirectory,
+  );
   return {
     bindingPath,
     manifest,
     programMetadataSource,
     inputHashes,
+    workerBindingPath,
+    workerProtocols,
   };
 }
 

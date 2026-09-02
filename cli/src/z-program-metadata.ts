@@ -44,6 +44,7 @@ interface ZProgramSymbolMetadata {
   name: string;
   kind: string;
   exported: boolean;
+  importedName: string;
   typeSignature: ZProgramTypeSignature | null;
 }
 
@@ -76,6 +77,17 @@ export interface ZProgramMetadata {
   schemaVersion: 1;
   entry: number;
   modules: ZProgramModuleMetadata[];
+}
+
+export interface ZWorkerProtocolManifest {
+  schemaVersion: 1;
+  workerId: string;
+  module: string;
+  protocolType: string;
+  commandType: string;
+  messageType: string;
+  types: ZServiceTypeMetadata[];
+  enums: ZServiceEnumMetadata[];
 }
 
 const scalarTypes = new Set([
@@ -426,6 +438,94 @@ export function deriveZServiceManifest(
   const errors = types.filter((type) => errorNames.has(type.name));
   const values = types.filter((type) => !errorNames.has(type.name));
   return { schemaVersion: 5, types: values, enums, errors, services };
+}
+
+function workerProtocolArguments(typeName: string): [string, string] | null {
+  const prefix = "WorkerProtocol<";
+  if (!typeName.startsWith(prefix) || !typeName.endsWith(">")) return null;
+  const body = typeName.slice(prefix.length, -1);
+  let depth = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index];
+    if (character === "<") depth += 1;
+    else if (character === ">") depth -= 1;
+    else if (character === "," && depth === 0) {
+      const command = body.slice(0, index).trim();
+      const message = body.slice(index + 1).trim();
+      return command.length > 0 && message.length > 0
+        ? [command, message]
+        : null;
+    }
+    if (depth < 0) return null;
+  }
+  return null;
+}
+
+/** Derive one checked worker protocol from an exported marker alias. */
+export function deriveZWorkerProtocolManifest(
+  metadata: ZProgramMetadata,
+  workerId: string,
+  modulePath: string,
+  protocolType: string,
+): ZWorkerProtocolManifest {
+  const normalizedModule = modulePath.replaceAll("\\", "/");
+  const module = metadata.modules.find((candidate) => (
+    candidate.path.replaceAll("\\", "/") === normalizedModule
+  ));
+  if (!module) {
+    throw new Error(
+      `[zapp] worker ${JSON.stringify(workerId)} protocol module `
+      + `${JSON.stringify(modulePath)} was not present in checked Z metadata`,
+    );
+  }
+  const aliases = module.symbols.filter((symbol) => (
+    symbol.name === protocolType && symbol.exported && symbol.kind === "type"
+  ));
+  if (aliases.length !== 1) {
+    throw new Error(
+      `[zapp] worker ${JSON.stringify(workerId)} protocol type `
+      + `${JSON.stringify(protocolType)} must be one exported Z type alias`,
+    );
+  }
+  const arguments_ = workerProtocolArguments(aliases[0].importedName);
+  if (!arguments_) {
+    throw new Error(
+      `[zapp] worker ${JSON.stringify(workerId)} protocol type `
+      + `${JSON.stringify(protocolType)} must alias WorkerProtocol<Command, Message>`,
+    );
+  }
+  const [commandType, messageType] = arguments_;
+  if (commandType.includes("<") || messageType.includes("<")) {
+    throw new Error(
+      `[zapp] worker ${JSON.stringify(workerId)} protocol roots must be named exported enums`,
+    );
+  }
+  const types: ZServiceTypeMetadata[] = [];
+  const enums: ZServiceEnumMetadata[] = [];
+  const seen = new Set<string>();
+  addWireType(metadata, commandType, types, enums, seen);
+  addWireType(metadata, messageType, types, enums, seen);
+  for (const [role, name] of [
+    ["command", commandType],
+    ["message", messageType],
+  ] as const) {
+    if (!enums.some((enumeration) => enumeration.name === name)) {
+      throw new Error(
+        `[zapp] worker ${JSON.stringify(workerId)} ${role} type `
+        + `${JSON.stringify(name)} must be an exported Z enum`,
+      );
+    }
+  }
+  return {
+    schemaVersion: 1,
+    workerId,
+    module: module.path,
+    protocolType,
+    commandType,
+    messageType,
+    types,
+    enums,
+  };
 }
 
 export function zServiceMethodId(qualifiedName: string): number {

@@ -70,13 +70,13 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
   }
   if (
     !stdout.includes("worker manager requested note index")
-    || !stdout.includes("sent index-started")
-    || !stdout.includes("sent index-complete")
+    || !stdout.includes("sent started")
+    || !stdout.includes("sent complete")
     || !stdout.includes(
-      'worker message index-progress: {"requestId":"native-smoke","completed":1,"total":1',
+      'worker message progress: {"requestId":"native-smoke","completed":1,"total":1',
     )
     || !stdout.includes(
-      'worker message index-complete: {"requestId":"native-smoke","total":1,"active":1',
+      'worker message complete: {"requestId":"native-smoke","total":1,"active":1',
     )
   ) {
     throw new Error(
@@ -234,6 +234,7 @@ try {
   const preparedZServices = await prepareZFrontendServices({
     root: spike,
     nativeDir: resolve(repository, "native"),
+    config,
   });
   await run(
     ["bunx", "vite", "build"],

@@ -20,6 +20,10 @@ export interface ResolvedApplicationWorker {
   capabilities: string[];
   permissions: ZappPermission[];
   serviceMethods: string[];
+  protocol?: {
+    module: string;
+    type: string;
+  };
 }
 
 function normalizeEntry(
@@ -81,6 +85,12 @@ export function resolveApplicationWorkers(
       capabilities,
       permissions,
       serviceMethods,
+      ...(entry.protocol === undefined ? {} : {
+        protocol: {
+          module: entry.protocol.module,
+          type: entry.protocol.type,
+        },
+      }),
     };
   });
 }

@@ -48,8 +48,8 @@ function pingApplicationWorker(
         success => {
           console.log("worker manager sent ping");
           const indexed = attempt activeWorker.send(
-            "index-notes",
-            "native-smoke"
+            "indexNotes",
+            "{\"requestId\":\"native-smoke\"}"
           );
           match (indexed) {
             success => console.log("worker manager requested note index");
@@ -144,14 +144,14 @@ async function main(): i32 on thread.main {
   app.services.register("notes", move notesService);
   app.services.register("health", createHealthService());
   const workers = app.workers;
-  const lifecycleWorkerSubscription = observeApplicationWorker(
+  const noteIndexerSubscription = observeApplicationWorker(
     in workers,
-    "lifecycle",
+    "noteIndexer",
     true
   );
-  const lifecycleWorkerMessageSubscription = observeApplicationWorkerMessages(
+  const noteIndexerMessageSubscription = observeApplicationWorkerMessages(
     in workers,
-    "lifecycle"
+    "noteIndexer"
   );
   const restartWorkerSubscription = observeApplicationWorker(
     in workers,

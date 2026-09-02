@@ -19,6 +19,11 @@ import {
   EventSubscriptionError as FrameworkApplicationWorkerEventSubscriptionError,
 } from "../../framework/events.zs";
 
+// Compile-time marker for one typed application-worker protocol. Commands and
+// messages remain ordinary exported Z enums/structs; this type has no runtime
+// storage or behavior.
+export readonly struct WorkerProtocol<Command, Message> {}
+
 export type ApplicationWorker = FrameworkApplicationWorker;
 export type WorkerManager = FrameworkWorkerManager;
 export type ApplicationWorkerState = FrameworkApplicationWorkerState;

@@ -133,7 +133,7 @@ describe("Z service binding generation", () => {
       "function decodeArrayOfArrayOfNote(value: unknown): Array<Array<Note>>",
     );
     expect(bindings).toContain("notes: decodeArrayOfNote(record.notes)");
-    expect(bindings).toContain("return value.map(decodeNumber)");
+    expect(bindings).toContain("decoded.push(decodeNumber(value[index]))");
 
   });
 
