@@ -9,11 +9,20 @@ import { TaskScope } from "std/async";
 import {
   startConfiguredApplicationWorkers,
 } from "../configured-application.zs";
+import {
+  ApplicationWorkerMessageHandler,
+} from "../worker/application-workers.zs";
 
 struct HeadlessApplicationRuntime {
   exitStatus: i32;
   configuredNameBytes: usize;
 }
+
+function discardApplicationWorkerMessage(
+  workerId: String,
+  channel: String,
+  payload: String
+): void on thread.any {}
 
 export async function runApplicationPlatform(
   config: PreparedApplication,
@@ -36,8 +45,11 @@ export async function runApplicationPlatform(
     success => {}
     failure(startError) => throw ApplicationError.lifecycle(startError);
   }
+  const workerMessages: ApplicationWorkerMessageHandler =
+    discardApplicationWorkerMessage;
   const workers = startConfiguredApplicationWorkers(
-    config.workers
+    config.workers,
+    workerMessages
   );
   const status = runtime.exitStatus;
   workers.requestCancellation();

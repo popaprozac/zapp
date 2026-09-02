@@ -12,6 +12,13 @@ extern "C" {
 
 typedef struct ZappZjsEngine ZappZjsEngine;
 typedef struct ZappZjsWorker ZappZjsWorker;
+typedef void (*ZappZjsWorkerMessageCallback)(
+  const char *worker_id,
+  const char *channel,
+  const char *payload,
+  void *context
+);
+typedef void (*ZappZjsWorkerMessageRelease)(void *context);
 
 ZappZjsEngine *zapp_zjs_engine_create(void);
 int32_t zapp_zjs_engine_evaluate_module(
@@ -35,7 +42,11 @@ void zapp_zjs_engine_destroy(ZappZjsEngine *engine);
 
 uintptr_t zapp_zjs_worker_start(
   NSData *source,
-  const char *module_name
+  const char *worker_id,
+  const char *module_name,
+  ZappZjsWorkerMessageCallback message,
+  void *context,
+  ZappZjsWorkerMessageRelease release
 );
 void zapp_zjs_worker_cancel(uintptr_t identity);
 int32_t zapp_zjs_worker_dispatch(

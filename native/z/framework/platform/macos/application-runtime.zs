@@ -22,9 +22,17 @@ import {
 } from "./message-handler.zs";
 import { createMacOSWindowRuntime } from "./window-construction.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
-import { deliverWebViewResponse } from "./response-delivery.zs";
+import {
+  deliverWebViewApplicationWorkerMessage,
+  deliverWebViewResponse,
+} from "./response-delivery.zs";
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
+import {
+  ApplicationWorkers,
+  ApplicationWorkerDispatch,
+  emptyApplicationWorkers,
+} from "../../worker/application-workers.zs";
 
 internal class MacOSApplicationRuntime {
   readonly name: String;
@@ -35,6 +43,7 @@ internal class MacOSApplicationRuntime {
   readonly windowManager: WindowManager on thread.main;
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
+  applicationWorkers: ApplicationWorkers on thread.main;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
   retiredNativeWindows: Array<MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
@@ -249,6 +258,42 @@ internal class MacOSApplicationRuntime {
     };
   }
 
+  function installApplicationWorkers(
+    inout this,
+    workers: ApplicationWorkers
+  ): void on thread.main {
+    this.applicationWorkers = move workers;
+  }
+
+  function dispatchApplicationWorker(
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): ApplicationWorkerDispatch on thread.main {
+    return this.applicationWorkers.dispatch(
+      in workerId,
+      in channel,
+      in payload
+    );
+  }
+
+  function deliverApplicationWorkerMessage(
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.capabilitySelection.allowsWorker(in workerId)) {
+        deliverWebViewApplicationWorkerMessage(
+          entry.value.webView,
+          in workerId,
+          in channel,
+          in payload
+        );
+      }
+    }
+  }
+
   function deliverResponse(
     in response: BridgeResponse,
     windowId: i32
@@ -286,6 +331,44 @@ internal function abortMacOSApplicationRuntime(): void on thread.main {
   current.closeAllNativeWindows();
 }
 
+internal function installMacOSApplicationWorkers(
+  workers: ApplicationWorkers
+): void on thread.main {
+  const current = application.get();
+  current.installApplicationWorkers(move workers);
+}
+
+function deliverApplicationWorkerMessageOnMain(
+  workerId: String,
+  channel: String,
+  payload: String
+): void on thread.main {
+  const current = application.get();
+  current.deliverApplicationWorkerMessage(
+    in workerId,
+    in channel,
+    in payload
+  );
+}
+
+internal function publishMacOSApplicationWorkerMessage(
+  workerId: String,
+  channel: String,
+  payload: String
+): void on thread.any {
+  const current = application.get();
+  const updates = current.updates;
+  const scheduled = updates.schedule(
+    thread.main,
+    async move (): void => deliverApplicationWorkerMessageOnMain(
+      move workerId,
+      move channel,
+      move payload
+    )
+  );
+  if (!scheduled.accepted) return;
+}
+
 internal function initializeMacOSApplicationRuntimeState(
   name: String,
   permissions: ApplicationPermissions,
@@ -305,6 +388,7 @@ internal function initializeMacOSApplicationRuntimeState(
     windowManager,
     routeMessage,
     deliverMessageResponse: deliverResponse,
+    applicationWorkers: emptyApplicationWorkers(),
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,

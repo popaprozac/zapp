@@ -19,6 +19,11 @@ import {
   WindowBridgeRoute,
   routeWindowBridgeMessage,
 } from "../../window-bridge.zs";
+import {
+  ApplicationWorkerBridgeRoute,
+  routeApplicationWorkerBridgeMessage,
+} from "../../worker-bridge.zs";
+import { ApplicationWorkers } from "../../worker/application-workers.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
 
 enum WindowMessageRoute {
@@ -169,11 +174,13 @@ function selectWindowMessageRoute(
   const current = currentMacOSApplication();
   const permissions = current.permissions;
   const selected = current.capabilitiesForWindow(windowId);
+  const workers = current.applicationWorkers;
   match (selected) {
     some(capabilities) => return selectWindowMessageRouteWithCapabilities(
       move message,
       in permissions,
       capabilities,
+      workers,
       inout windows
     );
     none => return WindowMessageRoute.framework(bridgeFailure(
@@ -188,6 +195,7 @@ function selectWindowMessageRouteWithCapabilities(
   message: BridgeMessage,
   in permissions: ApplicationPermissions,
   selectedCapabilities: CapabilitySelection,
+  workers: ApplicationWorkers,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
   const routed = routeWindowBridgeMessage(
@@ -200,6 +208,15 @@ function selectWindowMessageRouteWithCapabilities(
     response(value) => WindowMessageRoute.framework(value);
     handled => WindowMessageRoute.handled;
     unhandled => {
+      const workerRoute = routeApplicationWorkerBridgeMessage(
+        in message,
+        selectedCapabilities,
+        workers
+      );
+      match (workerRoute) {
+        response(value) => return WindowMessageRoute.framework(value);
+        unhandled => {}
+      }
       const denied = authorizeServiceInvocation(
         in message,
         selectedCapabilities

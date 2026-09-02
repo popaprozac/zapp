@@ -49,6 +49,7 @@ describe("resolveCapabilityProfiles", () => {
       name: "default",
       permissions: ["window:create"],
       serviceMethods: ["notes.create", "notes.count"],
+      workerIds: [],
     }]);
   });
 
@@ -59,20 +60,24 @@ describe("resolveCapabilityProfiles", () => {
         default: {
           permissions: ["window:create"],
           services: ["notes"],
+          workers: ["indexer"],
         },
         diagnostics: { services: ["notes.count"] },
       },
+      applicationWorkers: { indexer: "./indexer.ts" },
     }, manifest);
     expect(resolved).toEqual([
       {
         name: "default",
         permissions: ["window:create"],
         serviceMethods: ["notes.create", "notes.count"],
+        workerIds: ["indexer"],
       },
       {
         name: "diagnostics",
         permissions: [],
         serviceMethods: ["notes.count"],
+        workerIds: [],
       },
     ]);
   });

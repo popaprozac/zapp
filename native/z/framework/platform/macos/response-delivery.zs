@@ -21,6 +21,12 @@ readonly struct WebViewWindowEventEnvelope {
   dataJson: String;
 }
 
+readonly struct WebViewApplicationWorkerMessageEnvelope {
+  workerId: String;
+  channel: String;
+  payload: String;
+}
+
 readonly struct WebViewWindowSizePayload {
   width: u32;
   height: u32;
@@ -78,6 +84,21 @@ function windowEventScript(
   return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchWindowEvent!=='function')return;b.dispatchWindowEvent(e.windowId,e.eventName,e.dataJson||undefined)})()`;
 }
 
+function applicationWorkerMessageScript(
+  in workerId: String,
+  in channel: String,
+  in payload: String
+): String {
+  const envelope = WebViewApplicationWorkerMessageEnvelope({
+    workerId: copy workerId,
+    channel: copy channel,
+    payload: copy payload,
+  });
+  const encoded = json.encode(in envelope);
+  const source = javascriptJSON(in encoded);
+  return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchApplicationWorkerMessage!=='function')return;b.dispatchApplicationWorkerMessage(e.workerId,e.channel,e.payload)})()`;
+}
+
 internal function deliverWebViewWindowEvent(
   in webView: WebKit.WKWebView,
   in windowId: String,
@@ -99,6 +120,23 @@ internal function deliverWebViewWindowResize(
   const payload = WebViewWindowSizePayload({ width, height });
   const dataJson = json.encode(in payload);
   const script = windowEventScript(in windowId, "resize", in dataJson);
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
+}
+
+internal function deliverWebViewApplicationWorkerMessage(
+  in webView: WebKit.WKWebView,
+  in workerId: String,
+  in channel: String,
+  in payload: String
+): void on thread.main {
+  const script = applicationWorkerMessageScript(
+    in workerId,
+    in channel,
+    in payload
+  );
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}

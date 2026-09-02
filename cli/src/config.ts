@@ -573,6 +573,8 @@ export interface CapabilityProfileConfig {
   permissions?: ZappPermission[];
   /** Registered Z services or exact `service.method` selectors. */
   services?: string[];
+  /** Configured application workers this profile may address. */
+  workers?: string[];
 }
 
 export interface NativeConfig {
@@ -878,7 +880,7 @@ export function validateCapabilityProfiles(
     );
   }
   const profileName = /^[A-Za-z][A-Za-z0-9._-]*$/;
-  const allowedKeys = new Set(["permissions", "services"]);
+  const allowedKeys = new Set(["permissions", "services", "workers"]);
   const global = resolvePermissions(globalPermissions);
   for (const [name, profile] of Object.entries(profiles)) {
     if (!profileName.test(name)) {
@@ -894,7 +896,7 @@ export function validateCapabilityProfiles(
       if (!allowedKeys.has(key)) {
         throw new Error(
           `[zapp] security.capabilities.${name}.${key} is unknown; ` +
-          "use permissions or services",
+          "use permissions, services, or workers",
         );
       }
     }
@@ -942,7 +944,17 @@ export function validateWorkers(
   workers: WorkersConfig | undefined,
   profiles: Record<string, CapabilityProfileConfig> | undefined,
 ): void {
-  if (workers === undefined) return;
+  if (workers === undefined) {
+    for (const [profileName, profile] of Object.entries(profiles ?? {})) {
+      if ((profile.workers?.length ?? 0) > 0) {
+        throw new Error(
+          `[zapp] security.capabilities.${profileName}.workers references configured ` +
+          "application workers, but workers.application is absent",
+        );
+      }
+    }
+    return;
+  }
   if (workers === null || typeof workers !== "object" || Array.isArray(workers)) {
     throw new Error("[zapp] workers must be an object");
   }
@@ -976,7 +988,17 @@ export function validateWorkers(
   }
 
   const application = workers.application;
-  if (application === undefined) return;
+  if (application === undefined) {
+    for (const [profileName, profile] of Object.entries(profiles ?? {})) {
+      if ((profile.workers?.length ?? 0) > 0) {
+        throw new Error(
+          `[zapp] security.capabilities.${profileName}.workers references configured ` +
+          "application workers, but workers.application is absent",
+        );
+      }
+    }
+    return;
+  }
   if (
     application === null
     || typeof application !== "object"
@@ -994,6 +1016,17 @@ export function validateWorkers(
     "bytecode",
   ]);
   const knownProfiles = new Set(profiles ? Object.keys(profiles) : ["default"]);
+  const knownWorkers = new Set(Object.keys(application));
+  for (const [profileName, profile] of Object.entries(profiles ?? {})) {
+    for (const id of profile.workers ?? []) {
+      if (!knownWorkers.has(id)) {
+        throw new Error(
+          `[zapp] security.capabilities.${profileName}.workers contains unknown ` +
+          `application worker ${JSON.stringify(id)}`,
+        );
+      }
+    }
+  }
   const validateScript = (id: string, script: unknown): void => {
     if (typeof script !== "string" || script.trim().length === 0) {
       throw new Error(`[zapp] workers.application.${id}.script must be a non-empty string`);

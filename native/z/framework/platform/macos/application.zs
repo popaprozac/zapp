@@ -7,7 +7,11 @@ import { ApplicationMetadata } from "../../application-metadata.zs";
 import { ApplicationContext } from "../../../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
-import { abortMacOSApplicationRuntime } from "./application-runtime.zs";
+import {
+  abortMacOSApplicationRuntime,
+  installMacOSApplicationWorkers,
+  publishMacOSApplicationWorkerMessage,
+} from "./application-runtime.zs";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import {
   initializeMacOSApplicationHost,
@@ -17,6 +21,9 @@ import { macOSWindowBackend } from "./window-backend.zs";
 import {
   startConfiguredApplicationWorkers,
 } from "../../configured-application.zs";
+import {
+  ApplicationWorkerMessageHandler,
+} from "../../worker/application-workers.zs";
 
 export async function runMacOSApplication(
   config: PreparedApplication,
@@ -64,9 +71,13 @@ export async function runMacOSApplication(
       throw ApplicationError.lifecycle(startError);
     }
   }
+  const workerMessages: ApplicationWorkerMessageHandler =
+    publishMacOSApplicationWorkerMessage;
   const workers = startConfiguredApplicationWorkers(
-    config.workers
+    config.workers,
+    workerMessages
   );
+  installMacOSApplicationWorkers(workers);
   const status = runMacOSApplicationLoop();
   workers.requestCancellation();
   workers.join();

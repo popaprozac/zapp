@@ -3,12 +3,14 @@ import { Map, Set } from "std/collections";
 export readonly struct CapabilityProfile {
   permissions: readonly Array<String>;
   serviceMethods: readonly Array<String>;
+  workerIds: readonly Array<String>;
 }
 
 export readonly class CapabilitySelection {
   readonly names: readonly Array<String>;
   readonly permissions: readonly Set<String>;
   readonly serviceMethods: readonly Set<String>;
+  readonly workerIds: readonly Set<String>;
 
   function allowsPermission(in permission: String): boolean {
     return this.permissions.has(permission);
@@ -16,6 +18,10 @@ export readonly class CapabilitySelection {
 
   function allowsService(in method: String): boolean {
     return this.serviceMethods.has(method);
+  }
+
+  function allowsWorker(in id: String): boolean {
+    return this.workerIds.has(id);
   }
 
   function copyNames(): Array<String> {
@@ -48,6 +54,7 @@ export readonly class ApplicationCapabilities {
     let names = Array<String>();
     let permissions = Set<String>();
     let serviceMethods = Set<String>();
+    let workerIds = Set<String>();
     for (const name of selectedProfiles) {
       const found = this.profiles.get(name);
       match (in found) {
@@ -75,6 +82,17 @@ export readonly class ApplicationCapabilities {
             serviceMethods.add(move method);
             methodIndex = methodIndex + 1;
           }
+          let workerIndex: usize = 0;
+          while (workerIndex < profile.workerIds.length) {
+            const workerId: String = profile.workerIds[
+              workerIndex
+            ].copyBytes(
+              0,
+              profile.workerIds[workerIndex].byteLength
+            );
+            workerIds.add(move workerId);
+            workerIndex = workerIndex + 1;
+          }
         }
         none => return Option<CapabilitySelection>.none;
       }
@@ -83,6 +101,7 @@ export readonly class ApplicationCapabilities {
       names: names.freeze(),
       permissions: permissions.freeze(),
       serviceMethods: serviceMethods.freeze(),
+      workerIds: workerIds.freeze(),
     }));
   }
 }

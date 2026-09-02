@@ -89,10 +89,15 @@ function renderZCapabilityProfiles(
     for (const method of profile.serviceMethods) {
       statements.push(`  serviceMethods${index}.push(${JSON.stringify(method)});`);
     }
+    statements.push(`  let workerIds${index} = Array<String>();`);
+    for (const workerId of profile.workerIds) {
+      statements.push(`  workerIds${index}.push(${JSON.stringify(workerId)});`);
+    }
     statements.push(
       `  profiles.set(${JSON.stringify(profile.name)}, CapabilityProfile({`,
       `    permissions: permissions${index}.freeze(),`,
       `    serviceMethods: serviceMethods${index}.freeze(),`,
+      `    workerIds: workerIds${index}.freeze(),`,
       "  }));",
     );
   });
@@ -170,6 +175,7 @@ export function renderZApplicationMetadata(
     name: "default",
     permissions: [],
     serviceMethods: [],
+    workerIds: [],
   }],
   applicationWorkers: readonly ResolvedApplicationWorker[] = [],
   workerSmoke = false,
@@ -190,6 +196,7 @@ import {
 } from "./worker/configuration.zs";
 import {
   ApplicationWorkerControl,
+  ApplicationWorkerMessageHandler,
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";

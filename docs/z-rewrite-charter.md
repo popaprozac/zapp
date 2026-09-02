@@ -410,8 +410,16 @@ other engines and bytecode fail during the build instead of silently changing
 semantics. A bounded private host-to-worker queue now proves command wakeup and
 dispatch through an engine-neutral runtime vtable: the Z Notes worker smoke
 queues `ping` before initialization and requires the worker's `pong` response.
-Worker-to-Z delivery, the authorized public manager/frontend bridge, direct typed
-service invocation, and restart execution remain before the Phase 3 exit
+The checked bridge now routes authorized frontend messages to configured
+application workers, distinguishes unavailable, saturated, and failed dispatch,
+and maps those outcomes into descriptive frontend errors. The focused
+`@zappdev/runtime/worker` surface exposes `applicationWorkers.get(id)`, awaited
+`send(channel, data)`, and explicitly disposable `subscribe(channel, handler)`
+without exposing the legacy worker implementation. Worker messages return
+through an arbitrary-thread Z callback, copy native bytes into owned Z strings,
+hop onto the application main executor, and publish only into WebViews whose
+immutable capability profile grants that worker. Direct typed worker-to-Z
+service invocation and restart execution remain before the Phase 3 exit
 criterion is complete.
 
 The current lifetime control uses a private engine-neutral native vtable behind

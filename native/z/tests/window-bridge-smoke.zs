@@ -26,10 +26,12 @@ function testCapabilities(
   if (windowCreate) permissions.push("window:create");
   let serviceMethods = Array<String>();
   if (notesCreate) serviceMethods.push("notes.create");
+  let workerIds = Array<String>();
   let profiles = Map<String, CapabilityProfile>();
   profiles.set("default", CapabilityProfile({
     permissions: permissions.freeze(),
     serviceMethods: serviceMethods.freeze(),
+    workerIds: workerIds.freeze(),
   }));
   return new ApplicationCapabilities({ profiles: profiles.freeze() });
 }
@@ -47,10 +49,12 @@ function testSelection(
       let names = Array<String>();
       let permissions = Set<String>();
       let serviceMethods = Set<String>();
+      let workerIds = Set<String>();
       select new CapabilitySelection({
         names: names.freeze(),
         permissions: permissions.freeze(),
         serviceMethods: serviceMethods.freeze(),
+        workerIds: workerIds.freeze(),
       });
     }
   };

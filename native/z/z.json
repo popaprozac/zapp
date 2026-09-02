@@ -13,6 +13,7 @@
       "includeDirectories": [
         "framework/bridge",
         "framework/worker",
+        "framework/worker/zjs",
         "framework/platform/macos"
       ],
       "link": {

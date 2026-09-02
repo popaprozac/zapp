@@ -161,7 +161,8 @@ export function renderZApplicationWorkerStartup(
 ): string {
   if (workers.length === 0) {
     return `export function startConfiguredApplicationWorkers(
-  in catalog: ApplicationWorkerCatalog
+  in catalog: ApplicationWorkerCatalog,
+  message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
 }`;
@@ -192,23 +193,27 @@ export function renderZApplicationWorkerStartup(
   lines.push(
     "",
     "export function startConfiguredApplicationWorkers(",
-    "  in catalog: ApplicationWorkerCatalog",
+    "  in catalog: ApplicationWorkerCatalog,",
+    "  message: ApplicationWorkerMessageHandler",
     "): ApplicationWorkers on thread.main {",
     "  let controls = Array<ApplicationWorkerControl>();",
   );
   workers.forEach((worker, index) => {
     lines.push(
       `  const control${index} = startZjsApplicationWorker(`,
+      `    ${JSON.stringify(worker.id)},`,
       "    WorkerModule({",
       `      source: applicationWorkerSource${index},`,
       `      name: ${JSON.stringify(worker.moduleUrl)},`,
-      "    })",
+      "    }),",
+      "    message",
       "  );",
     );
     if (smokeDispatch) {
       lines.push(
-        `  if (!control${index}.dispatch("ping", "configured-worker-smoke")) {`,
-        `    control${index}.requestCancellation();`,
+        `  match (control${index}.dispatch("ping", "configured-worker-smoke")) {`,
+        "    accepted => {}",
+        `    _ => control${index}.requestCancellation();`,
         "  }",
       );
     }

@@ -179,11 +179,14 @@ describe("renderZApplicationMetadata", () => {
       name: "diagnostics",
       permissions: [],
       serviceMethods: ["notes.count"],
+      workerIds: ["indexer"],
     }]);
     expect(output).toContain("configuredApplicationCapabilities");
     expect(output).toContain('profiles.set("diagnostics", CapabilityProfile({');
     expect(output).toContain('serviceMethods0.push("notes.count");');
+    expect(output).toContain('workerIds0.push("indexer");');
     expect(output).toContain("serviceMethods: serviceMethods0.freeze()");
+    expect(output).toContain("workerIds: workerIds0.freeze()");
   });
 
   it("embeds the checked application-worker catalog into native Z", () => {

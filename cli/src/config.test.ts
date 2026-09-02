@@ -150,7 +150,7 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   }
 });
 
-test("validateWorkers keeps runtime modules separate from native authority", () => {
+  test("validateWorkers keeps runtime modules separate from native authority", () => {
   const profiles = {
     default: { services: ["notes"] },
     backgroundSearch: { services: ["notes.updateIndex"] },
@@ -268,6 +268,22 @@ test("resolveNative reads the grouped native block", () => {
   expect(resolveNative(cfg, "macos")).toEqual({
     frameworks: ["CoreLocation"], linkFlags: ["-lfoo"], sources: ["a.m"],
   });
+});
+
+test("capability worker grants must name configured application workers", () => {
+  expect(() => validateWorkers(undefined, {
+    default: { workers: ["indexer"] },
+  })).toThrow(/workers\.application is absent/);
+  expect(() => validateWorkers({
+    application: { lifecycle: "./lifecycle.ts" },
+  }, {
+    default: { workers: ["indexer"] },
+  })).toThrow(/unknown application worker "indexer"/);
+  expect(() => validateWorkers({
+    application: { indexer: "./indexer.ts" },
+  }, {
+    default: { workers: ["indexer"] },
+  })).not.toThrow();
 });
 
 test("resolveNative resolves per-platform PlatformValue maps for the target", () => {

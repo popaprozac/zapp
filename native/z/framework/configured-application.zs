@@ -1,4 +1,5 @@
 import { Map } from "std/collections";
+import { thread } from "std/thread";
 import {
   ApplicationCapabilities,
   CapabilityProfile,
@@ -10,6 +11,7 @@ import {
   emptyApplicationWorkerCatalog,
 } from "./worker/configuration.zs";
 import {
+  ApplicationWorkerMessageHandler,
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
@@ -34,10 +36,12 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
 export function configuredApplicationCapabilities(): ApplicationCapabilities {
   let permissions = Array<String>("window:create");
   let services = Array<String>();
+  let workers = Array<String>();
   let profiles = Map<String, CapabilityProfile>();
   profiles.set("default", CapabilityProfile({
     permissions: permissions.freeze(),
     serviceMethods: services.freeze(),
+    workerIds: workers.freeze(),
   }));
   return new ApplicationCapabilities({ profiles: profiles.freeze() });
 }
@@ -47,7 +51,8 @@ export function configuredApplicationWorkers(): ApplicationWorkerCatalog {
 }
 
 export function startConfiguredApplicationWorkers(
-  in catalog: ApplicationWorkerCatalog
+  in catalog: ApplicationWorkerCatalog,
+  message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
 }

@@ -238,6 +238,16 @@
       bridge._onEvent("panel:" + panelId, JSON.stringify({ event: eventName, data }));
     },
 
+    dispatchApplicationWorkerMessage(
+      workerId: string,
+      channel: string,
+      payload: string,
+    ): void {
+      const name = "__zapp:application-worker:" + encodeURIComponent(workerId)
+        + ":" + encodeURIComponent(channel);
+      bridge._onEvent(name, payload);
+    },
+
     // --- Worker lifecycle ---
 
     createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string {

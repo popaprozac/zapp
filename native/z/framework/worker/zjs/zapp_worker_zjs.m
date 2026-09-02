@@ -34,7 +34,11 @@ struct ZappZjsWorker {
   int joined;
   int32_t result;
   void *source;
+  char *worker_id;
   char *module_name;
+  ZappZjsWorkerMessageCallback message;
+  void *message_context;
+  ZappZjsWorkerMessageRelease message_release;
   pthread_mutex_t inbox_mutex;
   pthread_cond_t inbox_condition;
   ZappZjsWorkerMessage inbox[ZAPP_ZJS_WORKER_INBOX_CAPACITY];
@@ -290,11 +294,17 @@ static int32_t push_worker_message(
       ) || atomic_load_explicit(
         &worker->finished,
         memory_order_acquire
-      ) || worker->inbox_count == ZAPP_ZJS_WORKER_INBOX_CAPACITY) {
+      )) {
     pthread_mutex_unlock(&worker->inbox_mutex);
     free(channel_copy);
     free(payload_copy);
     return 3;
+  }
+  if (worker->inbox_count == ZAPP_ZJS_WORKER_INBOX_CAPACITY) {
+    pthread_mutex_unlock(&worker->inbox_mutex);
+    free(channel_copy);
+    free(payload_copy);
+    return 4;
   }
   ZappZjsWorkerMessage *message = &worker->inbox[worker->inbox_tail];
   message->channel = channel_copy;
@@ -358,6 +368,30 @@ static void wait_for_worker_work(
   pthread_mutex_unlock(&worker->inbox_mutex);
 }
 
+static void deliver_engine_response(
+  ZappZjsWorker *worker,
+  ZappZjsEngine *engine
+) {
+  const char *channel = zapp_zjs_engine_response_channel(engine);
+  const char *payload = zapp_zjs_engine_response_payload(engine);
+  if (channel && payload && worker->message) {
+    worker->message(
+      worker->worker_id,
+      channel,
+      payload,
+      worker->message_context
+    );
+    fprintf(
+      stdout,
+      "application worker %s sent %s\n",
+      worker->module_name,
+      channel
+    );
+    fflush(stdout);
+  }
+  clear_engine_response(engine);
+}
+
 static void *run_worker(void *context) {
   ZappZjsWorker *worker = context;
   ZappZjsEngine *engine = zapp_zjs_engine_create();
@@ -389,16 +423,7 @@ static void *run_worker(void *context) {
     return NULL;
   }
 
-  const char *ready = zapp_zjs_engine_response_channel(engine);
-  if (ready) {
-    fprintf(
-      stdout,
-      "application worker %s sent %s\n",
-      worker->module_name,
-      ready
-    );
-    fflush(stdout);
-  }
+  deliver_engine_response(worker, engine);
 
   while (1) {
     if (atomic_load_explicit(
@@ -429,16 +454,7 @@ static void *run_worker(void *context) {
         zapp_zjs_engine_destroy(engine);
         return NULL;
       }
-      const char *response = zapp_zjs_engine_response_channel(engine);
-      if (response) {
-        fprintf(
-          stdout,
-          "application worker %s sent %s\n",
-          worker->module_name,
-          response
-        );
-        fflush(stdout);
-      }
+      deliver_engine_response(worker, engine);
     }
 
     if (zapp_zjs_engine_has_pending_work(engine)) {
@@ -458,6 +474,7 @@ static void *run_worker(void *context) {
         zapp_zjs_engine_destroy(engine);
         return NULL;
       }
+      deliver_engine_response(worker, engine);
     }
     wait_for_worker_work(
       worker,
@@ -473,27 +490,46 @@ static void *run_worker(void *context) {
 
 uintptr_t zapp_zjs_worker_start(
   NSData *source,
-  const char *module_name
+  const char *worker_id,
+  const char *module_name,
+  ZappZjsWorkerMessageCallback message,
+  void *context,
+  ZappZjsWorkerMessageRelease release
 ) {
-  if (!source || !module_name) return 0;
+  if (!source || !worker_id || !module_name || !message || !release) {
+    if (release) release(context);
+    return 0;
+  }
   ZappZjsWorker *worker = calloc(1, sizeof(ZappZjsWorker));
-  if (!worker) return 0;
+  if (!worker) {
+    release(context);
+    return 0;
+  }
   worker->runtime.cancel = cancel_worker_runtime;
   worker->runtime.dispatch = dispatch_worker_runtime;
   worker->runtime.join = join_worker_runtime;
   worker->runtime.destroy = destroy_worker_runtime;
+  worker->message = message;
+  worker->message_context = context;
+  worker->message_release = release;
   worker->source = (__bridge_retained void *)source;
+  worker->worker_id = strdup(worker_id);
   worker->module_name = strdup(module_name);
-  if (!worker->module_name || pthread_mutex_init(&worker->inbox_mutex, NULL) != 0) {
+  if (!worker->worker_id || !worker->module_name ||
+      pthread_mutex_init(&worker->inbox_mutex, NULL) != 0) {
     CFBridgingRelease(worker->source);
+    free(worker->worker_id);
     free(worker->module_name);
+    worker->message_release(worker->message_context);
     free(worker);
     return 0;
   }
   if (pthread_cond_init(&worker->inbox_condition, NULL) != 0) {
     pthread_mutex_destroy(&worker->inbox_mutex);
     CFBridgingRelease(worker->source);
+    free(worker->worker_id);
     free(worker->module_name);
+    worker->message_release(worker->message_context);
     free(worker);
     return 0;
   }
@@ -503,7 +539,9 @@ uintptr_t zapp_zjs_worker_start(
     pthread_cond_destroy(&worker->inbox_condition);
     pthread_mutex_destroy(&worker->inbox_mutex);
     CFBridgingRelease(worker->source);
+    free(worker->worker_id);
     free(worker->module_name);
+    worker->message_release(worker->message_context);
     free(worker);
     return 0;
   }
@@ -555,7 +593,9 @@ void zapp_zjs_worker_destroy(uintptr_t identity) {
   pthread_cond_destroy(&worker->inbox_condition);
   pthread_mutex_destroy(&worker->inbox_mutex);
   CFBridgingRelease(worker->source);
+  free(worker->worker_id);
   free(worker->module_name);
+  worker->message_release(worker->message_context);
   free(worker);
 }
 

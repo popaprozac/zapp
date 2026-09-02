@@ -11,6 +11,7 @@ export interface ResolvedCapabilityProfile {
   name: string;
   permissions: ZappPermission[];
   serviceMethods: string[];
+  workerIds: string[];
 }
 
 function allServiceMethods(manifest: ZServiceManifest): string[] {
@@ -62,7 +63,10 @@ function expandedPermissions(
 }
 
 export function resolveCapabilityProfiles(
-  config: Pick<ResolvedConfig, "permissions" | "capabilityProfiles">,
+  config: Pick<
+    ResolvedConfig,
+    "permissions" | "capabilityProfiles" | "applicationWorkers"
+  >,
   manifest: ZServiceManifest,
 ): ResolvedCapabilityProfile[] {
   const profiles = config.capabilityProfiles;
@@ -74,11 +78,13 @@ export function resolveCapabilityProfiles(
         isPermissionAllowed(permission, global)
       )),
       serviceMethods: allServiceMethods(manifest),
+      workerIds: Object.keys(config.applicationWorkers ?? {}),
     }];
   }
   return Object.entries(profiles).map(([name, profile]: [string, CapabilityProfileConfig]) => ({
     name,
     permissions: expandedPermissions(profile.permissions),
     serviceMethods: expandServiceSelectors(name, profile.services ?? [], manifest),
+    workerIds: [...(profile.workers ?? [])],
   }));
 }

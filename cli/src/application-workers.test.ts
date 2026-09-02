@@ -101,8 +101,9 @@ describe("resolveApplicationWorkers", () => {
 
     const smokeSource = renderZApplicationWorkerStartup(workers, true);
     expect(smokeSource).toContain(
-      'control0.dispatch("ping", "configured-worker-smoke")',
+      'match (control0.dispatch("ping", "configured-worker-smoke"))',
     );
+    expect(smokeSource).toContain("accepted => {}\n    _ => control0.requestCancellation();");
     expect(smokeSource).toContain("control0.requestCancellation()");
   });
 

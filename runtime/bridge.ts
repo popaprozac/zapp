@@ -17,6 +17,7 @@ export interface ZappBridge {
   _onEvent(name: string, payload: string): void;
   dispatchWindowEvent(windowId: string, eventName: string, dataJson?: string): void;
   dispatchPanelEvent(panelId: string, eventName: string, dataJson?: string): void;
+  dispatchApplicationWorkerMessage(workerId: string, channel: string, payload: string): void;
   createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string;
   listWorkers(): Promise<unknown> | string;
 }

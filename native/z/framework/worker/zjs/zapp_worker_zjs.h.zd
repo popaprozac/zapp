@@ -34,8 +34,19 @@ declare module "zapp_worker_zjs.h" {
   export function zapp_zjs_engine_destroy(move engine: _): _;
   export function zapp_zjs_worker_start(
     in source: _,
-    in module_name: _
-  ): _;
+    in worker_id: _,
+    in module_name: _,
+    move message: _,
+    context: _,
+    release: _
+  ): _ {
+    callback message {
+      context context;
+      deinit release;
+      thread any;
+      invoked repeatedly;
+    }
+  }
   export function zapp_zjs_worker_cancel(identity: _): _;
   export function zapp_zjs_worker_dispatch(
     identity: _,

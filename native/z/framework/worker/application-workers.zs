@@ -1,7 +1,25 @@
 import native from "zapp_worker_runtime.h";
 import console from "std/console";
+import { thread } from "std/thread";
+
+export enum ApplicationWorkerDispatch {
+  accepted,
+  unavailable,
+  saturated,
+  failed,
+}
+
+// Engine adapters retain this callable through a checked `thread any`
+// callback contract. Engine-specific boundaries copy borrowed native bytes
+// before publishing these ordinary owned Z strings.
+export type ApplicationWorkerMessageHandler = (
+  workerId: String,
+  channel: String,
+  payload: String
+) => void on thread.any;
 
 export readonly class ApplicationWorkerControl {
+  readonly id: String;
   readonly identity: usize;
 
   function requestCancellation(): void {
@@ -13,12 +31,16 @@ export readonly class ApplicationWorkerControl {
   internal function dispatch(
     in channel: String,
     in payload: String
-  ): boolean {
-    return native.zapp_worker_runtime_dispatch(
+  ): ApplicationWorkerDispatch {
+    const status = native.zapp_worker_runtime_dispatch(
       this.identity,
       channel,
       payload
-    ) == 0;
+    );
+    if (status == 0) return ApplicationWorkerDispatch.accepted;
+    if (status == 3) return ApplicationWorkerDispatch.unavailable;
+    if (status == 4) return ApplicationWorkerDispatch.saturated;
+    return ApplicationWorkerDispatch.failed;
   }
 
   function join(): void {
@@ -48,6 +70,22 @@ export readonly class ApplicationWorkers {
       control.requestCancellation();
       index = index + 1;
     }
+  }
+
+  internal function dispatch(
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): ApplicationWorkerDispatch {
+    let index: usize = 0;
+    while (index < this.controls.length) {
+      const control: ApplicationWorkerControl = this.controls[index];
+      if (control.id == workerId) {
+        return control.dispatch(in channel, in payload);
+      }
+      index = index + 1;
+    }
+    return ApplicationWorkerDispatch.unavailable;
   }
 
   function join(): void {
