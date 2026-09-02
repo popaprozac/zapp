@@ -15,14 +15,16 @@ int32_t zapp_zjs_engine_evaluate_module(
 );
 int32_t zapp_zjs_engine_dispatch(
   ZappZjsEngine *engine,
-  int32_t left,
-  int32_t right
+  const char *channel,
+  const char *payload
 );
 int32_t zapp_zjs_engine_has_pending_work(ZappZjsEngine *engine);
 int64_t zapp_zjs_engine_next_wake_milliseconds(ZappZjsEngine *engine);
 int32_t zapp_zjs_engine_pump(ZappZjsEngine *engine);
 int32_t zapp_zjs_engine_is_complete(ZappZjsEngine *engine);
 int32_t zapp_zjs_engine_result(ZappZjsEngine *engine);
+const char *zapp_zjs_engine_response_channel(ZappZjsEngine *engine);
+const char *zapp_zjs_engine_response_payload(ZappZjsEngine *engine);
 const char *zapp_zjs_engine_error(ZappZjsEngine *engine);
 void zapp_zjs_engine_destroy(ZappZjsEngine *engine);
 

@@ -6,8 +6,8 @@
     "platform": "macos",
     "minimumVersion": "14.0",
     "includeDirectories": [
-      "adapter",
-      "../../../zjs/include"
+      "../../../../spikes/zjs-worker-host/adapter",
+      "../../../../../zjs/include"
     ]
   }
 }

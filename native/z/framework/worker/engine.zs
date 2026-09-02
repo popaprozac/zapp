@@ -31,7 +31,7 @@ export readonly class WorkerMailbox<Command> {
   async function post(
     command: Command
   ): void throws ChannelClosed<Command> {
-    try await this.sender.send(command);
+    try await this.sender.send(move command);
   }
 
   function requestCancellation(): boolean {

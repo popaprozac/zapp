@@ -1,8 +1,13 @@
 export struct WorkerMessage {
-  left: i32;
-  right: i32;
+  channel: String;
+  payload: String;
 }
 
 export enum WorkerCommand {
   message WorkerMessage,
+}
+
+export struct WorkerResponse {
+  channel: String;
+  payload: String;
 }

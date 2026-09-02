@@ -14,6 +14,7 @@ import {
 import {
   WorkerCommand,
   WorkerMessage,
+  WorkerResponse,
 } from "./worker-command.zs";
 import {
   createWorkerProbeService,
@@ -28,7 +29,7 @@ import {
   runWorkerEngine,
 } from "../../framework/worker/engine.zs";
 
-const workerModule: cstring = "export function onCommand(left, right) { setTimeout(() => { __zappServiceAdd(left, right); }, 5); }";
+const workerModule: cstring = "const handlers = new Map(); const worker = { receive(channel, handler) { handlers.set(channel, handler); }, send(channel, payload) { __zappWorkerSend(channel, payload); } }; worker.receive('add', (payload) => { const request = JSON.parse(payload); setTimeout(() => { const value = __zappServiceAdd(request.left, request.right); worker.send('added', JSON.stringify(value)); }, 5); }); export function onMessage(channel, payload) { const handler = handlers.get(channel); if (!handler) throw new Error(`unhandled worker channel: ${channel}`); handler(payload); }";
 
 readonly class WorkerServicesStore {
   readonly services: Services;
@@ -137,8 +138,8 @@ struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand> {
     return match (in command) {
       message(value) => native.zapp_zjs_engine_dispatch(
         this.handle,
-        value.left,
-        value.right
+        value.channel,
+        value.payload
       );
     };
   }
@@ -160,15 +161,34 @@ struct ZjsWorkerEngine implements WorkerEngine<WorkerCommand> {
   }
 }
 
+enum ZjsWorkerRun {
+  completed WorkerResponse,
+  cancelled i32,
+  failed i32,
+}
+
 function executeWorkerModule(
   in inbox: WorkerInbox<WorkerCommand>
-): WorkerLifecycle {
+): ZjsWorkerRun {
   const engine = native.zapp_zjs_engine_create();
-  if (engine == null) return WorkerLifecycle.failed(100);
+  if (engine == null) return ZjsWorkerRun.failed(100);
 
   let adapter = ZjsWorkerEngine({ handle: move engine });
   const module = WorkerModule({ source: workerModule });
-  return runWorkerEngine(inout adapter, in module, in inbox);
+  const lifecycle = runWorkerEngine(inout adapter, in module, in inbox);
+  return match (lifecycle) {
+    cancelled(code) => ZjsWorkerRun.cancelled(code);
+    failed(code) => ZjsWorkerRun.failed(code);
+    stopped(_) => {
+      const channel = native.zapp_zjs_engine_response_channel(adapter.handle);
+      const payload = native.zapp_zjs_engine_response_payload(adapter.handle);
+      if (channel == null || payload == null) return ZjsWorkerRun.failed(101);
+      return ZjsWorkerRun.completed(WorkerResponse({
+        channel: String.from(channel),
+        payload: String.from(payload),
+      }));
+    }
+  };
 }
 
 async function runWorkerProof(): i32 {
@@ -176,26 +196,30 @@ async function runWorkerProof(): i32 {
   const mailbox = createWorkerMailbox<WorkerCommand>(move sender);
   const inbox = createWorkerInbox<WorkerCommand>(move receiver, mailbox);
   const worker = thread.spawn(
-    move (): WorkerLifecycle => executeWorkerModule(in inbox)
+    move (): ZjsWorkerRun => executeWorkerModule(in inbox)
   );
   await delay(1);
   console.log("ZJS worker channel ready");
   const posted = attempt await mailbox.post(WorkerCommand.message(WorkerMessage({
-    left: 20,
-    right: 22,
+    channel: "add",
+    payload: "{\"left\":20,\"right\":22}",
   })));
   match (posted) {
     success => {}
     failure(_) => return 1;
   }
-  console.log("ZJS worker command accepted");
+  console.log("ZJS worker accepted channel add");
 
   const result = await worker;
-  const value = match (result) {
-    stopped(observed) => observed;
-    cancelled(_) => -2;
-    failed(code) => -code;
-  };
+  let value = 0;
+  match (result) {
+    completed(response) => {
+      if (response.channel != "added") return 2;
+      value = decodeWorkerServiceResult(in response.payload);
+    }
+    cancelled(_) => return 2;
+    failed(_) => return 2;
+  }
   if (value != 42) return 2;
 
   const {
@@ -210,7 +234,7 @@ async function runWorkerProof(): i32 {
     cancellation
   );
   const cancelledWorker = thread.spawn(
-    move (): WorkerLifecycle => executeWorkerModule(in cancellationInbox)
+    move (): ZjsWorkerRun => executeWorkerModule(in cancellationInbox)
   );
   await delay(1);
   if (!cancellation.requestCancellation()) return 3;
@@ -221,7 +245,7 @@ async function runWorkerProof(): i32 {
   };
   if (!cancelledCleanly) return 4;
 
-  console.log(`ZJS worker processed a Z command and returned ${value}`);
+  console.log(`ZJS worker replied on channel added with ${value}`);
   console.log("ZJS worker observed cancellation and joined cleanly");
   return 0;
 }

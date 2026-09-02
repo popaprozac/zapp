@@ -14,8 +14,9 @@ struct ZappZjsEngine {
   ZjsContext *context;
   uint32_t command_handle;
   int has_command_handler;
-  int32_t result;
-  int result_ready;
+  char *response_channel;
+  char *response_payload;
+  int response_ready;
   char error[512];
 };
 
@@ -24,6 +25,61 @@ struct ZappZjsEngine {
 // for the duration of each evaluation or pump. This remains safe when several
 // engines share an OS thread because calls into an engine are synchronous.
 static _Thread_local ZappZjsEngine *entered_engine;
+
+static char *copy_string_bytes(const char *bytes, uint32_t length) {
+  if (!bytes || memchr(bytes, '\0', length)) return NULL;
+  char *copy = malloc((size_t) length + 1);
+  if (!copy) return NULL;
+  memcpy(copy, bytes, length);
+  copy[length] = '\0';
+  return copy;
+}
+
+static ZjsValue host_send(
+  ZjsContext *context,
+  ZjsValue *arguments,
+  uint32_t count
+) {
+  if (count != 2 ||
+      !zjs_is_string(arguments[0]) ||
+      !zjs_is_string(arguments[1]) ||
+      !entered_engine) {
+    ZjsValue message = zjs_new_string(
+      context,
+      "worker.send expects a channel and serialized payload",
+      (uint32_t) (
+        sizeof("worker.send expects a channel and serialized payload") - 1
+      )
+    );
+    zjs_throw(context, message);
+    return zjs_undefined();
+  }
+
+  uint32_t channel_length = 0;
+  uint32_t payload_length = 0;
+  const char *channel = zjs_string_bytes(arguments[0], &channel_length);
+  const char *payload = zjs_string_bytes(arguments[1], &payload_length);
+  char *channel_copy = copy_string_bytes(channel, channel_length);
+  char *payload_copy = copy_string_bytes(payload, payload_length);
+  if (!channel_copy || !payload_copy) {
+    free(channel_copy);
+    free(payload_copy);
+    ZjsValue message = zjs_new_string(
+      context,
+      "worker.send could not copy its message",
+      (uint32_t) (sizeof("worker.send could not copy its message") - 1)
+    );
+    zjs_throw(context, message);
+    return zjs_undefined();
+  }
+
+  free(entered_engine->response_channel);
+  free(entered_engine->response_payload);
+  entered_engine->response_channel = channel_copy;
+  entered_engine->response_payload = payload_copy;
+  entered_engine->response_ready = 1;
+  return zjs_undefined();
+}
 
 static ZjsValue host_add(
   ZjsContext *context,
@@ -46,10 +102,6 @@ static ZjsValue host_add(
     zjs_as_int32(arguments[0]),
     zjs_as_int32(arguments[1])
   );
-  if (entered_engine) {
-    entered_engine->result = result;
-    entered_engine->result_ready = 1;
-  }
   return zjs_int32(result);
 }
 
@@ -87,6 +139,7 @@ ZappZjsEngine *zapp_zjs_engine_create(void) {
   }
 
   zjs_register_host_function(engine->context, "__zappServiceAdd", host_add);
+  zjs_register_host_function(engine->context, "__zappWorkerSend", host_send);
   return engine;
 }
 
@@ -96,8 +149,11 @@ int32_t zapp_zjs_engine_evaluate_module(
 ) {
   if (!engine || !engine->context || !source) return 1;
   engine->error[0] = '\0';
-  engine->result = 0;
-  engine->result_ready = 0;
+  free(engine->response_channel);
+  free(engine->response_payload);
+  engine->response_channel = NULL;
+  engine->response_payload = NULL;
+  engine->response_ready = 0;
   if (engine->has_command_handler) {
     zjs_unroot(engine->context, engine->command_handle);
     engine->has_command_handler = 0;
@@ -117,9 +173,9 @@ int32_t zapp_zjs_engine_evaluate_module(
     return 2;
   }
 
-  ZjsValue command = zjs_get_property(engine->context, exports, "onCommand");
+  ZjsValue command = zjs_get_property(engine->context, exports, "onMessage");
   if (!zjs_is_callable(command)) {
-    copy_error(engine, "worker module must export callable onCommand");
+    copy_error(engine, "worker module must export callable onMessage");
     return 3;
   }
   engine->command_handle = zjs_root(engine->context, command);
@@ -130,12 +186,16 @@ int32_t zapp_zjs_engine_evaluate_module(
 
 int32_t zapp_zjs_engine_dispatch(
   ZappZjsEngine *engine,
-  int32_t left,
-  int32_t right
+  const char *channel,
+  const char *payload
 ) {
-  if (!engine || !engine->context || !engine->has_command_handler) return 1;
+  if (!engine || !engine->context || !engine->has_command_handler ||
+      !channel || !payload) return 1;
   ZjsValue command = zjs_root_get(engine->context, engine->command_handle);
-  ZjsValue arguments[2] = { zjs_int32(left), zjs_int32(right) };
+  ZjsValue arguments[2] = {
+    zjs_new_string(engine->context, channel, (uint32_t) strlen(channel)),
+    zjs_new_string(engine->context, payload, (uint32_t) strlen(payload))
+  };
   ZappZjsEngine *previous_engine = entered_engine;
   entered_engine = engine;
   zjs_call(
@@ -179,12 +239,19 @@ int32_t zapp_zjs_engine_pump(ZappZjsEngine *engine) {
 }
 
 int32_t zapp_zjs_engine_is_complete(ZappZjsEngine *engine) {
-  return engine ? engine->result_ready : 0;
+  return engine ? engine->response_ready : 0;
 }
 
 int32_t zapp_zjs_engine_result(ZappZjsEngine *engine) {
-  if (!engine || !engine->context) return 0;
-  return engine->result;
+  return engine && engine->context ? 0 : 1;
+}
+
+const char *zapp_zjs_engine_response_channel(ZappZjsEngine *engine) {
+  return engine ? engine->response_channel : NULL;
+}
+
+const char *zapp_zjs_engine_response_payload(ZappZjsEngine *engine) {
+  return engine ? engine->response_payload : NULL;
 }
 
 const char *zapp_zjs_engine_error(ZappZjsEngine *engine) {
@@ -200,5 +267,7 @@ void zapp_zjs_engine_destroy(ZappZjsEngine *engine) {
     }
     zjs_free_context(engine->context);
   }
+  free(engine->response_channel);
+  free(engine->response_payload);
   free(engine);
 }
