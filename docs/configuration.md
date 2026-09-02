@@ -134,14 +134,18 @@ then requests cancellation and joins it before service shutdown. This is an
 application lifetime, not a WebView lifetime: closing or replacing one window
 does not implicitly destroy the worker.
 
+When `restart` is present, the native ZJS runtime recreates a failed engine
+context from the same embedded module. `maxRetries` is the number of
+replacement incarnations allowed inside `withinMs`; both values must be
+positive safe integers. Pending Z service work owned by the failed JavaScript
+context is cancelled before replacement, while messages already accepted by
+the bounded native inbox remain queued. Omit `restart` or set it to `false` to
+make the first uncaught worker failure terminal.
+
 That tier intentionally fails closed for other engines and ZJS bytecode. The
-resolved restart policy is retained as immutable configuration evidence but is
-not yet enacted by the runtime supervisor. The private runtime now also has a
-bounded engine-neutral host-to-worker command queue. The configured-worker smoke
-uses it to enqueue a command before module initialization and requires the worker
-to reply, proving wakeup, dispatch, and backpressure plumbing without exposing a
-premature product API. Worker-to-Z routing, frontend authorization, and the public
-`app.workers` manager remain later slices.
+focused frontend facade already provides authorized send/subscribe and the
+same generated service API inside workers. A native Z `app.workers` manager
+and public worker lifecycle events remain later slices.
 
 Capability selection is additive and frozen at build time. Omitting a worker's
 `capabilities` grants no native permissions or service methods. Unknown and

@@ -136,6 +136,15 @@ stop:
 bun run spike:z-notes:worker-smoke
 ```
 
+A second smoke selects an intentionally failing build-only worker and proves
+the existing restart contract end to end. With `maxRetries: 2`, native ZJS
+creates exactly three engine incarnations, then gives up while the application
+and its services still shut down normally:
+
+```sh
+bun run spike:z-notes:worker-restart-smoke
+```
+
 This configured tier proves module load, deterministic lifetime, a bounded
 private host-to-worker command path, and the first direct worker-to-Z service
 route. Worker code imports the same generated facade used by the WebView:
@@ -160,10 +169,11 @@ The smoke queues `ping` immediately—even before the module may have
 initialized—and fails unless the worker dispatches it, calls synchronous and
 suspending authorized services, cancels a second suspended request, observes
 the typed denial, and replies on `pong`. Cancellation forwards to the native Z
-task rather than merely dropping the JavaScript result. The spike does not yet
-expose frontend-to-worker messaging, an `app.workers` manager, or restart
-execution; those remain the next worker composition slices. The current
-compatibility ZJS artifact also
+task rather than merely dropping the JavaScript result. The focused
+`@zappdev/runtime/worker` facade also exposes authorized frontend-to-worker
+`send` and worker-to-frontend `subscribe` without exposing the legacy runtime.
+A native Z `app.workers` manager and public restart/give-up lifecycle events
+remain future composition slices. The current compatibility ZJS artifact also
 receives an unminified worker module because it misexecutes one Rolldown
 compact-control-flow rewrite. Other engines retain minification, and the ZJS
 rewrite must close this compatibility test before reclaiming it.

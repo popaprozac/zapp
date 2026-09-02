@@ -33,7 +33,17 @@ export default defineConfig({
       },
     },
   },
-  ...(process.env.ZAPP_APPLICATION_WORKER_SMOKE === "1" ? {
+  ...(process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE === "1" ? {
+    workers: {
+      application: {
+        restartProbe: {
+          script: "./frontend/worker-restart.ts",
+          engine: "zjs",
+          restart: { maxRetries: 2, withinMs: 60_000 },
+        },
+      },
+    },
+  } : process.env.ZAPP_APPLICATION_WORKER_SMOKE === "1" ? {
     workers: {
       application: {
         lifecycle: {

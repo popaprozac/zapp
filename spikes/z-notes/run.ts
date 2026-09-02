@@ -81,6 +81,34 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
   }
 }
 
+async function runWorkerRestartSmoke(command: string[]): Promise<void> {
+  const child = Bun.spawn(command, {
+    cwd: repository,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, status] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  if (status !== 0) {
+    throw new Error(`${command[0]} exited with status ${status}`);
+  }
+  const failures = stderr.match(/restartProbe\.mjs incarnation \d+ failed/g) ?? [];
+  if (
+    failures.length !== 3
+    || !stderr.includes("restarting as incarnation 2 (retry 1/2 in 60000ms)")
+    || !stderr.includes("restarting as incarnation 3 (retry 2/2 in 60000ms)")
+    || !stderr.includes("restartProbe.mjs gave up after 2 retries")
+  ) {
+    throw new Error("configured application worker did not enforce its restart cap");
+  }
+}
+
 function median(values: number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
   return ordered[Math.floor(ordered.length / 2)] ?? 0;
@@ -134,13 +162,19 @@ async function runWorkerBenchmark(command: string[]): Promise<void> {
 
 const smoke = process.argv.includes("--smoke");
 const workerSmoke = process.argv.includes("--worker-smoke");
+const workerRestartSmoke = process.argv.includes("--worker-restart-smoke");
 const workerBenchmark = process.argv.includes("--worker-benchmark");
 const originalWorkerSmoke = process.env.ZAPP_APPLICATION_WORKER_SMOKE;
+const originalWorkerRestartSmoke =
+  process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE;
 const originalWorkerBenchmark = process.env.ZAPP_APPLICATION_WORKER_BENCHMARK;
 if (workerSmoke || workerBenchmark) {
   process.env.ZAPP_APPLICATION_WORKER_SMOKE = "1";
 }
 if (workerBenchmark) process.env.ZAPP_APPLICATION_WORKER_BENCHMARK = "1";
+if (workerRestartSmoke) {
+  process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE = "1";
+}
 const config = await loadConfig(
   spike,
   createConfigContext(spike, "build", "macos"),
@@ -195,8 +229,15 @@ try {
   } else {
     process.env.ZAPP_APPLICATION_WORKER_BENCHMARK = originalWorkerBenchmark;
   }
+  if (originalWorkerRestartSmoke === undefined) {
+    delete process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE;
+  } else {
+    process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE =
+      originalWorkerRestartSmoke;
+  }
 }
 
 if (workerBenchmark) await runWorkerBenchmark([output]);
+else if (workerRestartSmoke) await runWorkerRestartSmoke([output]);
 else if (workerSmoke) await runWorkerSmoke([output]);
 else await run([output], process.env);

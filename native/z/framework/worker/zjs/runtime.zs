@@ -11,6 +11,7 @@ import {
   invokeApplicationWorkerService,
 } from "../application-workers.zs";
 import { WorkerModule } from "../types.zs";
+import { ApplicationWorkerRestartPolicy } from "../configuration.zs";
 import { Services } from "../../services.zs";
 
 function publishZjsWorkerMessage(
@@ -88,6 +89,7 @@ export function startZjsApplicationWorker(
   id: String,
   in module: WorkerModule,
   serviceMethods: readonly Array<String>,
+  restart: ApplicationWorkerRestartPolicy,
   services: Services,
   asyncService: ApplicationWorkerAsyncServiceHandler,
   cancelService: ApplicationWorkerServiceCancelHandler,
@@ -99,6 +101,9 @@ export function startZjsApplicationWorker(
     source,
     id,
     module.name,
+    restart.enabled ? 1 : 0,
+    u64(restart.maxRetries),
+    restart.withinMilliseconds,
     move (workerId, channel, payload): void => publishZjsWorkerMessage(
       message,
       workerId,

@@ -85,6 +85,16 @@ worker continuation, and a late native completion is ignored. The current ZJS
 adapter bounds each worker to 64 simultaneously suspended service calls; excess
 calls fail rather than allocating an unbounded native continuation table.
 
+Configured ZJS restart policy is executable in this replacement path too. An
+uncaught module, message, continuation, or event-loop failure destroys the
+failed engine context, cancels any service tasks whose JavaScript continuations
+were owned by it, and creates a fresh context from the same immutable embedded
+module. `maxRetries` bounds replacement incarnations inside `withinMs`; the
+next failure gives up instead of looping forever. Messages already accepted
+into the native inbox remain queued across an engine replacement. Public
+restart/crash lifecycle events are a later manager slice; the current runtime
+reports each incarnation and terminal give-up through application diagnostics.
+
 The post-continuation checkpoint records a 399 ns median for the direct ZJS
 host boundary and 2.253 us through the actual generated Promise API on an Apple
 M4 Pro. The latter is approximately 35 times faster than the established 79 us

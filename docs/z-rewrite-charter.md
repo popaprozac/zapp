@@ -422,29 +422,39 @@ through an arbitrary-thread Z callback, copy native bytes into owned Z strings,
 hop onto the application main executor, and publish only into WebViews whose
 immutable capability profile grants that worker. Direct typed worker-to-Z
 service invocation now uses the same generated `zapp:services` facade as a
-WebView. The runtime selects direct in-process dispatch for the configured ZJS
+WebView. The runtime selects direct in-process dispatch for a configured ZJS
 worker and request/response IPC for a WebView without changing application
-code. The first direct tier deliberately admits only synchronous services
-already proven callable on `thread.any`; its ordinary Promise surface still
-restores typed capability and service failures. The Z Notes smoke proves an
-authorized `health.status()` call and an ungranted `notes.create()` rejection
-before service code executes. The first repeatable performance proof measures
-the direct ZJS-to-Z host path at a 351 ns median per call and the unchanged
-generated Promise API at a 2.275 us median per sequential call on an Apple M4
-Pro. This is intentionally architectural evidence rather than a
-cross-framework score: the established WebView no-op round trip is 79 us, so
-the direct worker path preserves the expected order-of-magnitude advantage.
-Direct suspended-service continuation routing and restart execution remain
-before the full Phase 3 exit criterion is complete.
+code. Synchronous methods stay on the minimal resolved-Promise path;
+suspending methods retain a bounded native Promise capability, record the Z
+`TaskControl`, and settle back on the owning worker thread. Cancellation
+reaches that task and late completion is harmless. The Z Notes smoke proves an
+authorized `health.status()` call, suspended `notes.isEmpty()`, cancellation,
+and an ungranted `notes.create()` rejection before service code executes. The
+post-continuation performance proof measures the direct ZJS-to-Z host path at a
+399 ns median per call and the unchanged generated Promise API at a 2.253 us
+median per sequential call on an Apple M4 Pro. This is intentionally
+architectural evidence rather than a cross-framework score: the established
+WebView no-op round trip is 79 us, so the direct worker path preserves the
+expected order-of-magnitude advantage.
+
+Configured restart policy is now executable in the replacement runtime. Each
+uncaught failure destroys the failed engine context, cancels its pending native
+service continuations, and creates a fresh context from the immutable embedded
+module until `maxRetries` inside `withinMs` is exhausted. A dedicated Z Notes
+smoke proves two replacements followed by terminal give-up without preventing
+normal application teardown. This completes the Phase 3 reference vertical
+slice; public lifecycle events, a native `app.workers` manager, additional
+engines, and bytecode remain product-expansion work rather than exit blockers.
 
 The current lifetime control uses a private engine-neutral native vtable behind
-an opaque identity. Z still owns every control object and the service/worker
-shutdown order. This narrow seam exists because fixed-point storage of imported
-generic channel endpoints and supervision of an ownership-bearing
-`thread.spawn` task do not yet compose in the generated application frame. The
-separate worker-host spike proves those channel and direct-service behaviors;
-the production supervisor should move back into ordinary Z as those two
-general compiler tiers land.
+an opaque identity. Z still owns every control object, immutable restart
+evidence, and the service/worker shutdown order; the ZJS adapter currently owns
+the per-engine incarnation loop. This narrow seam exists because fixed-point
+storage of imported generic channel endpoints and supervision of an
+ownership-bearing `thread.spawn` task do not yet compose in the generated
+application frame. The separate worker-host spike proves those channel and
+direct-service behaviors; the incarnation loop should move back into ordinary
+Z as those two general compiler tiers land.
 
 ### Phase 4: expand product surface
 
@@ -491,7 +501,7 @@ inside Zapp.
 | ARC application state | `Application.run(move this)` owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
 | Message protocol | Z has strings, collections, enums, matching, errors, and exported C functions. | Is JSON parsing/encoding production-ready and allocation-conscious at the bridge boundary? |
 | Async and executors | A WebKit callback now submits owned messages through an application `TaskScope`; suspended Z services publish on main and shutdown cancels and joins accepted work. | Can per-request cancellation, richer errors, worker executors, and multiple windows preserve the same structured boundary? |
-| zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking; a configured bundled module starts, calls authorized synchronous Z services directly through the same generated API used by WebViews, receives typed denials, cancels, joins, and releases through the ordinary Z Notes application lifecycle. The first repeatable probe measures 351 ns for the direct host path and 2.275 us through the generated Promise API on an Apple M4 Pro. | Can suspended service continuations, restart policy, broader wire values, and callback lifetimes preserve the same environment-neutral API without reducing every internal representation to JSON? |
+| zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking; a configured bundled module starts, calls synchronous and suspended Z services directly through the same generated API used by WebViews, receives typed denials, propagates cancellation, restarts within a bounded policy, joins, and releases through the ordinary Z Notes lifecycle. The post-continuation probe measures 399 ns for the direct host path and 2.253 us through the generated Promise API on an Apple M4 Pro. | Can broader wire values, multiple engines, public lifecycle observation, and callback lifetimes preserve the same environment-neutral API without reducing every internal representation to JSON? |
 | Worker supervision | Z owns immutable worker authority plus application-lifetime cancel/join controls; the engine adapter owns only its thread and context behind a private vtable. | When fixed-point generic channel storage and ownership-bearing thread-task joins land, can the temporary lifetime seam be replaced by the already-proven Z `Channel<T>` / worker-engine supervisor? |
 | Resources and packaging | The existing CLI already bundles bootstraps, assets, and native sources. | What should the stable Z build/library contract be before the CLI depends on it? |
 | Portability | Portable `Application` configuration now crosses one selected `runApplicationPlatform` module seam; macOS and headless implementations prove that private runtime layouts may differ. | When Windows pressure begins, which conditional-module and `std/target` spelling selects every implementation and checks the target matrix? |

@@ -150,7 +150,7 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   }
 });
 
-  test("validateWorkers keeps runtime modules separate from native authority", () => {
+test("validateWorkers keeps runtime modules separate from native authority", () => {
   const profiles = {
     default: { services: ["notes"] },
     backgroundSearch: { services: ["notes.updateIndex"] },
@@ -187,6 +187,27 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   expect(() => validateWorkers({
     modules: ["encoding", "encoding"],
   }, profiles)).toThrow(/workers.modules repeats "encoding"/);
+});
+
+test("validateWorkers requires a bounded positive restart policy", () => {
+  const valid = (restart: unknown) => validateWorkers({
+    application: {
+      indexer: {
+        script: "src/workers/indexer.ts",
+        restart,
+      } as any,
+    },
+  });
+
+  expect(() => valid({})).not.toThrow();
+  expect(() => valid({ maxRetries: 2, withinMs: 5_000 })).not.toThrow();
+  expect(() => valid(false)).not.toThrow();
+  expect(() => valid({ maxRetries: 0 })).toThrow(/positive safe integer/);
+  expect(() => valid({ withinMs: -1 })).toThrow(/positive safe integer/);
+  expect(() => valid({ maxRetries: 1.5 })).toThrow(/positive safe integer/);
+  expect(() => valid({ maxRetries: Number.MAX_VALUE })).toThrow(/positive safe integer/);
+  expect(() => valid({ retries: 2 })).toThrow(/restart\.retries is unknown/);
+  expect(() => valid(true)).toThrow(/must be false or an object/);
 });
 
 test("validateWebviewInject rejects ambiguous or escaping profile inputs", () => {

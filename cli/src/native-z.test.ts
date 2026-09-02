@@ -696,6 +696,9 @@ describe("Z native host inputs", () => {
     expect(zjsWorkerRuntime).toContain("pthread_cond_wait(");
     expect(zjsWorkerRuntime).toContain("pthread_cond_timedwait(");
     expect(zjsWorkerRuntime).toContain("&worker->finished");
+    expect(zjsWorkerRuntime).toContain("record_worker_failure(");
+    expect(zjsWorkerRuntime).toContain("worker->restart_max_retries");
+    expect(zjsWorkerRuntime).toContain("cancel_and_release_all_pending_services(");
     const serviceStart = macOSApplication.indexOf("config.lifecycles.start(in context)");
     const workerStart = macOSApplication.indexOf("startConfiguredApplicationWorkers(");
     const workerCancel = macOSApplication.indexOf("workers.requestCancellation()");

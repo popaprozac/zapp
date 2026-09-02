@@ -56,6 +56,11 @@ struct ZappZjsWorker {
   int started;
   int joined;
   int32_t result;
+  uint64_t restart_max_retries;
+  uint64_t restart_within_milliseconds;
+  uint64_t restart_failures;
+  uint64_t restart_window_started_milliseconds;
+  uint64_t incarnation;
   void *source;
   char *worker_id;
   char *module_name;
@@ -338,14 +343,21 @@ static int32_t settle_pending_service(
   return status;
 }
 
-static void release_all_pending_services(ZappZjsEngine *engine) {
+static void cancel_and_release_all_pending_services(ZappZjsEngine *engine) {
   if (!engine || !engine->worker) return;
   for (size_t index = 0;
        index < ZAPP_ZJS_WORKER_PENDING_SERVICE_CAPACITY;
        index += 1) {
+    ZappZjsPendingService *pending = &engine->worker->pending_services[index];
+    if (pending->active && engine->worker->service_cancel) {
+      engine->worker->service_cancel(
+        pending->request_id,
+        engine->worker->service_cancel_context
+      );
+    }
     release_pending_service(
       engine,
-      &engine->worker->pending_services[index]
+      pending
     );
   }
 }
@@ -713,7 +725,7 @@ const char *zapp_zjs_engine_error(ZappZjsEngine *engine) {
 void zapp_zjs_engine_destroy(ZappZjsEngine *engine) {
   if (!engine) return;
   if (engine->context) {
-    release_all_pending_services(engine);
+    cancel_and_release_all_pending_services(engine);
     if (engine->has_command_handler) {
       zjs_unroot(engine->context, engine->command_handle);
     }
@@ -892,13 +904,61 @@ static void deliver_engine_response(
   clear_engine_response(engine);
 }
 
-static void *run_worker(void *context) {
-  ZappZjsWorker *worker = context;
+static uint64_t worker_monotonic_milliseconds(void) {
+  struct timespec current;
+  if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) return 0;
+  return (uint64_t)current.tv_sec * 1000u
+    + (uint64_t)current.tv_nsec / 1000000u;
+}
+
+// Returns 0 when restart is disabled, 1 when another incarnation is allowed,
+// and 2 once the configured retry cap is exhausted. This preserves the
+// established Zapp policy: maxRetries counts replacement incarnations, and a
+// failure outside the current time window begins a fresh retry window.
+static int record_worker_failure(ZappZjsWorker *worker) {
+  if (!worker || worker->restart_max_retries == 0) return 0;
+  uint64_t now = worker_monotonic_milliseconds();
+  if (worker->restart_failures == 0 ||
+      now < worker->restart_window_started_milliseconds ||
+      now - worker->restart_window_started_milliseconds >
+        worker->restart_within_milliseconds) {
+    worker->restart_failures = 1;
+    worker->restart_window_started_milliseconds = now;
+  } else {
+    worker->restart_failures += 1;
+  }
+  return worker->restart_failures > worker->restart_max_retries ? 2 : 1;
+}
+
+static void copy_worker_failure(
+  ZappZjsEngine *engine,
+  const char *fallback,
+  char *destination,
+  size_t capacity
+) {
+  const char *error = engine ? zapp_zjs_engine_error(engine) : NULL;
+  snprintf(
+    destination,
+    capacity,
+    "%s",
+    error && error[0] != '\0' ? error : fallback
+  );
+}
+
+static int32_t run_worker_incarnation(
+  ZappZjsWorker *worker,
+  char *failure,
+  size_t failure_capacity
+) {
   ZappZjsEngine *engine = zapp_zjs_engine_create();
   if (!engine) {
-    worker->result = 100;
-    atomic_store_explicit(&worker->finished, 1, memory_order_release);
-    return NULL;
+    copy_worker_failure(
+      NULL,
+      "worker engine allocation failed",
+      failure,
+      failure_capacity
+    );
+    return 100;
   }
   engine->service = worker->service;
   engine->worker = worker;
@@ -910,29 +970,22 @@ static void *run_worker(void *context) {
     worker->module_name
   );
   if (status != 0) {
-    const char *error = zapp_zjs_engine_error(engine);
-    fprintf(
-      stderr,
-      "application worker %s failed to load%s%s\n",
-      worker->module_name,
-      error ? ": " : "",
-      error ? error : ""
+    copy_worker_failure(
+      engine,
+      "worker module evaluation failed",
+      failure,
+      failure_capacity
     );
-    fflush(stderr);
-    worker->result = status;
-    atomic_store_explicit(&worker->finished, 1, memory_order_release);
     zapp_zjs_engine_destroy(engine);
-    return NULL;
+    return status;
   }
 
   deliver_engine_response(worker, engine);
 
-  while (1) {
-    if (atomic_load_explicit(
-      &worker->cancellation_requested,
-      memory_order_acquire
-    )) break;
-
+  while (!atomic_load_explicit(
+    &worker->cancellation_requested,
+    memory_order_acquire
+  )) {
     ZappZjsWorkerMessage message = {0};
     while (pop_worker_message(worker, &message)) {
       if (message.kind == ZAPP_ZJS_WORKER_MESSAGE_SERVICE_COMPLETION) {
@@ -943,15 +996,19 @@ static void *run_worker(void *context) {
           message.payload
         );
         destroy_worker_message(&message);
-        // A cancelled Promise has already released its continuation. Late Z
-        // completion is therefore harmless and intentionally ignored.
+        // A cancelled Promise or an earlier incarnation has already released
+        // this continuation. Its late Z completion is intentionally ignored.
         if (status == 1) continue;
         if (status != 0) {
           copy_error(engine, "worker service continuation failed");
-          worker->result = status;
-          atomic_store_explicit(&worker->finished, 1, memory_order_release);
+          copy_worker_failure(
+            engine,
+            "worker service continuation failed",
+            failure,
+            failure_capacity
+          );
           zapp_zjs_engine_destroy(engine);
-          return NULL;
+          return status;
         }
         deliver_engine_response(worker, engine);
         continue;
@@ -963,19 +1020,14 @@ static void *run_worker(void *context) {
       );
       destroy_worker_message(&message);
       if (status != 0) {
-        const char *error = zapp_zjs_engine_error(engine);
-        fprintf(
-          stderr,
-          "application worker %s rejected a message%s%s\n",
-          worker->module_name,
-          error ? ": " : "",
-          error ? error : ""
+        copy_worker_failure(
+          engine,
+          "worker rejected a message",
+          failure,
+          failure_capacity
         );
-        fflush(stderr);
-        worker->result = status;
-        atomic_store_explicit(&worker->finished, 1, memory_order_release);
         zapp_zjs_engine_destroy(engine);
-        return NULL;
+        return status;
       }
       deliver_engine_response(worker, engine);
     }
@@ -983,19 +1035,14 @@ static void *run_worker(void *context) {
     if (zapp_zjs_engine_has_pending_work(engine)) {
       status = zapp_zjs_engine_pump(engine);
       if (status != 0) {
-        const char *error = zapp_zjs_engine_error(engine);
-        fprintf(
-          stderr,
-          "application worker %s failed%s%s\n",
-          worker->module_name,
-          error ? ": " : "",
-          error ? error : ""
+        copy_worker_failure(
+          engine,
+          "worker event loop failed",
+          failure,
+          failure_capacity
         );
-        fflush(stderr);
-        worker->result = status;
-        atomic_store_explicit(&worker->finished, 1, memory_order_release);
         zapp_zjs_engine_destroy(engine);
-        return NULL;
+        return status;
       }
       deliver_engine_response(worker, engine);
     }
@@ -1005,9 +1052,62 @@ static void *run_worker(void *context) {
     );
   }
 
-  worker->result = zapp_zjs_engine_result(engine);
-  atomic_store_explicit(&worker->finished, 1, memory_order_release);
+  status = zapp_zjs_engine_result(engine);
   zapp_zjs_engine_destroy(engine);
+  return status;
+}
+
+static void *run_worker(void *context) {
+  ZappZjsWorker *worker = context;
+  int32_t status = 0;
+  while (!atomic_load_explicit(
+    &worker->cancellation_requested,
+    memory_order_acquire
+  )) {
+    worker->incarnation += 1;
+    char failure[512] = {0};
+    status = run_worker_incarnation(worker, failure, sizeof(failure));
+    if (atomic_load_explicit(
+      &worker->cancellation_requested,
+      memory_order_acquire
+    )) break;
+
+    fprintf(
+      stderr,
+      "application worker %s incarnation %llu failed: %s\n",
+      worker->module_name,
+      (unsigned long long)worker->incarnation,
+      failure[0] != '\0' ? failure : "unknown worker failure"
+    );
+    int decision = record_worker_failure(worker);
+    if (decision == 1) {
+      fprintf(
+        stderr,
+        "application worker %s restarting as incarnation %llu "
+        "(retry %llu/%llu in %llums)\n",
+        worker->module_name,
+        (unsigned long long)(worker->incarnation + 1),
+        (unsigned long long)worker->restart_failures,
+        (unsigned long long)worker->restart_max_retries,
+        (unsigned long long)worker->restart_within_milliseconds
+      );
+      fflush(stderr);
+      continue;
+    }
+    if (decision == 2) {
+      fprintf(
+        stderr,
+        "application worker %s gave up after %llu retries\n",
+        worker->module_name,
+        (unsigned long long)worker->restart_max_retries
+      );
+    }
+    fflush(stderr);
+    break;
+  }
+
+  worker->result = status;
+  atomic_store_explicit(&worker->finished, 1, memory_order_release);
   return NULL;
 }
 
@@ -1015,6 +1115,9 @@ uintptr_t zapp_zjs_worker_start(
   NSData *source,
   const char *worker_id,
   const char *module_name,
+  int32_t restart_enabled,
+  uint64_t restart_max_retries,
+  uint64_t restart_within_milliseconds,
   ZappZjsWorkerMessageCallback message,
   void *context,
   ZappZjsWorkerMessageRelease release,
@@ -1056,6 +1159,12 @@ uintptr_t zapp_zjs_worker_start(
   worker->service_cancel = service_cancel;
   worker->service_cancel_context = service_cancel_context;
   worker->service_cancel_release = service_cancel_release;
+  worker->restart_max_retries = restart_enabled != 0
+    ? restart_max_retries
+    : 0;
+  worker->restart_within_milliseconds = restart_enabled != 0
+    ? restart_within_milliseconds
+    : 0;
   worker->source = (__bridge_retained void *)source;
   worker->worker_id = strdup(worker_id);
   worker->module_name = strdup(module_name);

@@ -213,6 +213,7 @@ export function renderZApplicationWorkerStartup(
       `      name: ${JSON.stringify(worker.moduleUrl)},`,
       "    }),",
       `    catalog.entries[${index}].serviceMethods,`,
+      `    catalog.entries[${index}].restart,`,
       "    services,",
       "    asyncService,",
       "    cancelService,",

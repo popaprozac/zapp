@@ -1083,6 +1083,36 @@ export function validateWorkers(
         seenProfiles.add(profile);
       }
     }
+    if (entry.restart !== undefined && entry.restart !== false) {
+      if (
+        entry.restart === null
+        || typeof entry.restart !== "object"
+        || Array.isArray(entry.restart)
+      ) {
+        throw new Error(
+          `[zapp] workers.application.${id}.restart must be false or an object`,
+        );
+      }
+      const restartKeys = new Set(["maxRetries", "withinMs"]);
+      for (const key of Object.keys(entry.restart)) {
+        if (!restartKeys.has(key)) {
+          throw new Error(`[zapp] workers.application.${id}.restart.${key} is unknown`);
+        }
+      }
+      for (const [key, value] of [
+        ["maxRetries", entry.restart.maxRetries],
+        ["withinMs", entry.restart.withinMs],
+      ] as const) {
+        if (
+          value !== undefined
+          && (!Number.isSafeInteger(value) || value <= 0)
+        ) {
+          throw new Error(
+            `[zapp] workers.application.${id}.restart.${key} must be a positive safe integer`,
+          );
+        }
+      }
+    }
   }
 }
 
