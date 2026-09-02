@@ -442,9 +442,13 @@ uncaught failure destroys the failed engine context, cancels its pending native
 service continuations, and creates a fresh context from the immutable embedded
 module until `maxRetries` inside `withinMs` is exhausted. A dedicated Z Notes
 smoke proves two replacements followed by terminal give-up without preventing
-normal application teardown. This completes the Phase 3 reference vertical
-slice; public lifecycle events, a native `app.workers` manager, additional
-engines, and bytecode remain product-expansion work rather than exit blockers.
+normal application teardown. Native Z now exposes configured handles through
+`app.workers`, with typed state and send failures, focused lifecycle event
+sources, and one exhaustive aggregate event. Lifecycle delivery hops from the
+engine callback onto `thread.main`; subscription lifetime is explicit and
+deterministic. This completes the Phase 3 reference vertical slice; dynamic
+worker creation, WebView-owned worker lifetimes, additional engines, and
+bytecode remain product-expansion work rather than exit blockers.
 
 The current lifetime control uses a private engine-neutral native vtable behind
 an opaque identity. Z still owns every control object, immutable restart

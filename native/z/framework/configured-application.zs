@@ -17,6 +17,7 @@ import {
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
+import { ApplicationWorkerLifecycleHandler } from "./worker/lifecycle.zs";
 import { Services } from "./services.zs";
 
 // The CLI replaces this module only inside its isolated build workspace.
@@ -58,7 +59,8 @@ export function startConfiguredApplicationWorkers(
   services: Services,
   asyncService: ApplicationWorkerAsyncServiceHandler,
   cancelService: ApplicationWorkerServiceCancelHandler,
-  message: ApplicationWorkerMessageHandler
+  message: ApplicationWorkerMessageHandler,
+  lifecycle: ApplicationWorkerLifecycleHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
 }

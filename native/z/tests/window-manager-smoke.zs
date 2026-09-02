@@ -10,7 +10,7 @@ import {
   WindowEvent,
   WindowFocusedEvent,
   WindowResizedEvent,
-} from "../framework/window-events.zs";
+} from "../framework/events.zs";
 import { thread } from "std/thread";
 
 class ObservedWindowLifecycle on thread.main {

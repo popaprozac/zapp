@@ -47,7 +47,10 @@ declare module "zapp_worker_zjs.h" {
     service_release: _,
     move service_cancel: _,
     service_cancel_context: _,
-    service_cancel_release: _
+    service_cancel_release: _,
+    move lifecycle: _,
+    lifecycle_context: _,
+    lifecycle_release: _
   ): _ {
     callback message {
       context context;
@@ -64,6 +67,12 @@ declare module "zapp_worker_zjs.h" {
     callback service_cancel {
       context service_cancel_context;
       deinit service_cancel_release;
+      thread any;
+      invoked repeatedly;
+    }
+    callback lifecycle {
+      context lifecycle_context;
+      deinit lifecycle_release;
       thread any;
       invoked repeatedly;
     }

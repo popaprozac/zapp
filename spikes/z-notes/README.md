@@ -172,8 +172,48 @@ the typed denial, and replies on `pong`. Cancellation forwards to the native Z
 task rather than merely dropping the JavaScript result. The focused
 `@zappdev/runtime/worker` facade also exposes authorized frontend-to-worker
 `send` and worker-to-frontend `subscribe` without exposing the legacy runtime.
-A native Z `app.workers` manager and public restart/give-up lifecycle events
-remain future composition slices. The current compatibility ZJS artifact also
+
+Native Z code uses the application-owned `app.workers` manager. Configured
+handles exist before `app.run()`, so subscriptions can observe startup; engine
+dispatch becomes available during the run and fails with a typed error outside
+that lifetime:
+
+```zs
+import { ApplicationWorkerEvent } from "zapp/worker";
+
+const selected = app.workers.get("lifecycle");
+const worker = match (selected) {
+  some(value) => value;
+  none => return 1;
+};
+const { restarting: restarts } = worker.events;
+const restartSubscription = try restarts.subscribe(
+  move (in event): void => console.log(
+    `retry ${event.retry}/${event.maxRetries}`
+  )
+);
+const lifecycleSubscription = try worker.events.all.subscribe(
+  move (in event: ApplicationWorkerEvent): void => match (in event) {
+    started(value) => console.log(`started ${value.workerId}`);
+    restarting(value) => console.log(`restarting ${value.workerId}`);
+    failed(value) => console.log(`failed ${value.workerId}`);
+    stopped(value) => console.log(`stopped ${value.workerId}`);
+  }
+);
+
+return try await app.run();
+```
+
+`worker.events` is an ordinary readonly Z value, so applications can use
+destructuring and local aliases such as
+`const { restarting: restarts } = worker.events;`. Lifecycle handlers run on
+`thread.main`; focused events avoid unnecessary matching, while `events.all`
+supports one exhaustive observer. Subscriptions own their registration and
+automatically unsubscribe at lexical cleanup, or may call `unsubscribe()`
+early. `worker.send(channel, payload)` is available while `app.run()` owns the
+active engine controls; Z Notes exercises it from the `started` lifecycle arm.
+
+The current compatibility ZJS artifact also
 receives an unminified worker module because it misexecutes one Rolldown
 compact-control-flow rewrite. Other engines retain minification, and the ZJS
 rewrite must close this compatibility test before reclaiming it.

@@ -29,14 +29,41 @@ import {
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import {
-  ApplicationWorkerServiceRequests,
+  deliverMacOSApplicationWorkerLifecycle,
+} from "./worker-lifecycle.zs";
+import {
   ApplicationWorkers,
   ApplicationWorkerDispatch,
   applicationWorkerServiceResponse,
+  attachApplicationWorkerServiceRequest,
+  beginApplicationWorkerServiceRequest,
+  cancelAllApplicationWorkerServiceRequests,
+  cancelApplicationWorkerServiceRequest,
   completeApplicationWorkerService,
   createApplicationWorkerServiceRequests,
   emptyApplicationWorkers,
+  finishApplicationWorkerServiceRequest,
 } from "../../worker/application-workers.zs";
+
+type BeginWorkerServiceRequest = (
+  requestId: u64
+) => u64 on thread.any;
+
+type AttachWorkerServiceRequest = (
+  requestId: u64,
+  control: TaskControl
+) => void on thread.any;
+
+type FinishWorkerServiceRequest = (
+  requestId: u64,
+  generation: u64
+) => void on thread.any;
+
+type CancelWorkerServiceRequest = (
+  requestId: u64
+) => boolean on thread.any;
+
+type CancelAllWorkerServiceRequests = () => void on thread.any;
 
 internal class MacOSApplicationRuntime {
   readonly name: String;
@@ -48,7 +75,11 @@ internal class MacOSApplicationRuntime {
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
   applicationWorkers: ApplicationWorkers on thread.main;
-  readonly workerServiceRequests: ApplicationWorkerServiceRequests;
+  readonly beginWorkerServiceRequest: BeginWorkerServiceRequest;
+  readonly attachWorkerServiceRequest: AttachWorkerServiceRequest;
+  readonly finishWorkerServiceRequest: FinishWorkerServiceRequest;
+  readonly cancelWorkerServiceRequest: CancelWorkerServiceRequest;
+  readonly cancelAllWorkerServiceRequests: CancelAllWorkerServiceRequests;
   nativeWindows: Map<i32, MacOSWindowRuntime> on thread.main;
   retiredNativeWindows: Array<MacOSWindowRuntime> on thread.main;
   nextNativeWindowId: i32 on thread.main;
@@ -374,6 +405,32 @@ internal function publishMacOSApplicationWorkerMessage(
   if (!scheduled.accepted) return;
 }
 
+internal function publishMacOSApplicationWorkerLifecycle(
+  workerId: String,
+  phase: i32,
+  incarnation: u64,
+  retry: u64,
+  maxRetries: u64,
+  withinMilliseconds: u64,
+  message: String
+): void on thread.any {
+  const current = application.get();
+  const updates = current.updates;
+  const scheduled = updates.schedule(
+    thread.main,
+    async move (): void => deliverMacOSApplicationWorkerLifecycle(
+      move workerId,
+      phase,
+      incarnation,
+      retry,
+      maxRetries,
+      withinMilliseconds,
+      move message
+    )
+  );
+  if (!scheduled.accepted) return;
+}
+
 async function finishMacOSApplicationWorkerService(
   workerIdentity: usize,
   requestId: u64,
@@ -387,12 +444,20 @@ async function finishMacOSApplicationWorkerService(
     move arguments
   );
   const response = applicationWorkerServiceResponse(move invoked);
-  current.workerServiceRequests.finish(requestId, generation);
+  markMacOSApplicationWorkerServiceFinished(requestId, generation);
   completeApplicationWorkerService(
     workerIdentity,
     requestId,
     in response
   );
+}
+
+function markMacOSApplicationWorkerServiceFinished(
+  requestId: u64,
+  generation: u64
+): void on thread.main {
+  const current = application.get();
+  current.finishWorkerServiceRequest(requestId, generation);
 }
 
 internal function publishMacOSApplicationWorkerService(
@@ -404,7 +469,7 @@ internal function publishMacOSApplicationWorkerService(
 ): void on thread.any {
   const current = application.get();
   const updates = current.updates;
-  const generation = current.workerServiceRequests.begin(requestId);
+  const generation = current.beginWorkerServiceRequest(requestId);
   const control = updates.schedule(
     thread.main,
     async move (): void => await finishMacOSApplicationWorkerService(
@@ -415,9 +480,9 @@ internal function publishMacOSApplicationWorkerService(
       move arguments
     )
   );
-  current.workerServiceRequests.attach(requestId, control);
+  current.attachWorkerServiceRequest(requestId, control);
   if (!control.accepted) {
-    current.workerServiceRequests.cancel(requestId);
+    current.cancelWorkerServiceRequest(requestId);
     const closing = bridgeFailure(
       0,
       "APPLICATION_CLOSING",
@@ -436,12 +501,12 @@ internal function cancelMacOSApplicationWorkerService(
   requestId: u64
 ): void on thread.any {
   const current = application.get();
-  current.workerServiceRequests.cancel(requestId);
+  current.cancelWorkerServiceRequest(requestId);
 }
 
 internal function cancelAllMacOSApplicationWorkerServices(): void on thread.main {
   const current = application.get();
-  current.workerServiceRequests.cancelAll();
+  current.cancelAllWorkerServiceRequests();
 }
 
 internal function initializeMacOSApplicationRuntimeState(
@@ -454,6 +519,31 @@ internal function initializeMacOSApplicationRuntimeState(
   routeMessage: DesktopRouteMessageOperation,
   deliverResponse: DesktopDeliverResponseOperation
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
+  const requests = createApplicationWorkerServiceRequests();
+  const beginWorkerServiceRequest: BeginWorkerServiceRequest = move (
+    requestId: u64
+  ): u64 => beginApplicationWorkerServiceRequest(in requests, requestId);
+  const attachWorkerServiceRequest: AttachWorkerServiceRequest = move (
+    requestId: u64,
+    control: TaskControl
+  ): void => attachApplicationWorkerServiceRequest(
+    in requests,
+    requestId,
+    control
+  );
+  const finishWorkerServiceRequest: FinishWorkerServiceRequest = move (
+    requestId: u64,
+    generation: u64
+  ): void => finishApplicationWorkerServiceRequest(
+    in requests,
+    requestId,
+    generation
+  );
+  const cancelWorkerServiceRequest: CancelWorkerServiceRequest = move (
+    requestId: u64
+  ): boolean => cancelApplicationWorkerServiceRequest(in requests, requestId);
+  const cancelAllWorkerServiceRequests: CancelAllWorkerServiceRequests = move (
+  ): void => cancelAllApplicationWorkerServiceRequests(in requests);
   const value = new MacOSApplicationRuntime({
     name: move name,
     permissions,
@@ -464,7 +554,11 @@ internal function initializeMacOSApplicationRuntimeState(
     routeMessage,
     deliverMessageResponse: deliverResponse,
     applicationWorkers: emptyApplicationWorkers(),
-    workerServiceRequests: createApplicationWorkerServiceRequests(),
+    beginWorkerServiceRequest,
+    attachWorkerServiceRequest,
+    finishWorkerServiceRequest,
+    cancelWorkerServiceRequest,
+    cancelAllWorkerServiceRequests,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,

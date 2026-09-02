@@ -202,6 +202,7 @@ import {
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
+import { ApplicationWorkerLifecycleHandler } from "./worker/lifecycle.zs";
 import { Services } from "./services.zs";
 ${applicationWorkers.length > 0 ? `import embed from "std/embed";
 import { WorkerModule } from "./worker/types.zs";

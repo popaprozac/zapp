@@ -11,10 +11,13 @@ import {
 } from "../configured-application.zs";
 import {
   ApplicationWorkerAsyncServiceHandler,
+  ApplicationWorkerDispatch,
   ApplicationWorkerMessageHandler,
   ApplicationWorkerServiceCancelHandler,
   completeApplicationWorkerService,
 } from "../worker/application-workers.zs";
+import { ApplicationWorkerLifecycleHandler } from "../worker/lifecycle.zs";
+import { ApplicationWorkerSendOperation } from "../worker/worker-manager.zs";
 import { bridgeFailure } from "../bridge.zs";
 
 struct HeadlessApplicationRuntime {
@@ -51,6 +54,16 @@ function discardHeadlessApplicationWorkerServiceCancellation(
   requestId: u64
 ): void on thread.any {}
 
+function discardHeadlessApplicationWorkerLifecycle(
+  workerId: String,
+  phase: i32,
+  incarnation: u64,
+  retry: u64,
+  maxRetries: u64,
+  withinMilliseconds: u64,
+  message: String
+): void on thread.any {}
+
 export async function runApplicationPlatform(
   config: PreparedApplication,
   updates: TaskScope
@@ -78,16 +91,32 @@ export async function runApplicationPlatform(
     rejectHeadlessApplicationWorkerService;
   const cancelWorkerService: ApplicationWorkerServiceCancelHandler =
     discardHeadlessApplicationWorkerServiceCancellation;
+  const workerLifecycle: ApplicationWorkerLifecycleHandler =
+    discardHeadlessApplicationWorkerLifecycle;
+  let workerManager = config.workers;
   const workers = startConfiguredApplicationWorkers(
-    config.workers,
+    workerManager.catalog,
     config.services.synchronous,
     workerServices,
     cancelWorkerService,
-    workerMessages
+    workerMessages,
+    workerLifecycle
   );
+  const dispatchWorkers = workers;
+  const sendWorker: ApplicationWorkerSendOperation = move (
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): ApplicationWorkerDispatch => dispatchWorkers.dispatch(
+    in workerId,
+    in channel,
+    in payload
+  );
+  workerManager.install(sendWorker);
   const status = runtime.exitStatus;
   workers.requestCancellation();
   workers.join();
+  workerManager.finish();
   await updates.close();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {

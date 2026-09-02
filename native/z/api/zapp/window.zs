@@ -7,17 +7,19 @@ import {
   WindowError as FrameworkWindowError,
 } from "../../framework/application-error.zs";
 import {
+  WindowEvents as FrameworkWindowEvents,
+  WindowEventSubscription as FrameworkWindowEventSubscription,
+  WindowEventSubscriptionError as FrameworkWindowEventSubscriptionError,
+} from "../../framework/window-events.zs";
+import {
   WindowBlurredEvent as FrameworkWindowBlurredEvent,
   WindowCloseRequestedEvent as FrameworkWindowCloseRequestedEvent,
   WindowClosedEvent as FrameworkWindowClosedEvent,
   WindowEvent as FrameworkWindowEvent,
-  WindowEvents as FrameworkWindowEvents,
-  WindowEventSubscription as FrameworkWindowEventSubscription,
-  WindowEventSubscriptionError as FrameworkWindowEventSubscriptionError,
   WindowFocusedEvent as FrameworkWindowFocusedEvent,
   WindowResizedEvent as FrameworkWindowResizedEvent,
   WindowSize as FrameworkWindowSize,
-} from "../../framework/window-events.zs";
+} from "../../framework/events.zs";
 
 export type Window = FrameworkWindow;
 export type WindowManager = FrameworkWindowManager;

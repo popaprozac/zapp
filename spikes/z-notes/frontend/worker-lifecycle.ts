@@ -126,6 +126,10 @@ export function onMessage(channel: string, payload: string): void {
     runWorkerBenchmark(JSON.parse(payload) as WorkerBenchmarkConfig);
     return;
   }
+  if (channel === "manager-ping") {
+    __zappWorkerSend("manager-pong", payload);
+    return;
+  }
   if (channel !== "ping") return;
   const pending = health.status();
   pending.then((status: string) => {

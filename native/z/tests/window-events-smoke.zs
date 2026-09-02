@@ -2,9 +2,11 @@ import {
   WindowClosedEvent,
   WindowCloseRequestedEvent,
   WindowEvent,
-  WindowEventSubscriptionError,
   WindowFocusedEvent,
   WindowResizedEvent,
+} from "../framework/events.zs";
+import {
+  WindowEventSubscriptionError,
   createWindowEvents,
 } from "../framework/window-events.zs";
 import { thread } from "std/thread";

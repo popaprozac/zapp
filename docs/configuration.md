@@ -144,8 +144,14 @@ make the first uncaught worker failure terminal.
 
 That tier intentionally fails closed for other engines and ZJS bytecode. The
 focused frontend facade already provides authorized send/subscribe and the
-same generated service API inside workers. A native Z `app.workers` manager
-and public worker lifecycle events remain later slices.
+same generated service API inside workers. Native Z owns a typed `app.workers`
+manager for configured application-lifetime workers. `get(id)` returns
+`Option<ApplicationWorker>`, `all()` returns the configured handles, and each
+handle exposes `state()`, typed `send(channel, payload)`, focused lifecycle
+events (`started`, `restarting`, `failed`, and `stopped`), plus an exhaustive
+`events.all` stream. Lifecycle callbacks are delivered on `thread.main`.
+Dynamic worker creation and WebView-owned worker lifetimes remain later
+manager tiers rather than implicit behavior of this configured surface.
 
 Capability selection is additive and frozen at build time. Omitting a worker's
 `capabilities` grants no native permissions or service methods. Unknown and

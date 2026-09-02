@@ -4,7 +4,7 @@ import { ApplicationCapabilities } from "./application-capabilities.zs";
 import { AsyncServices } from "./async-services.zs";
 import { ServiceLifecycles } from "./service-lifecycle.zs";
 import { WindowManager } from "./window.zs";
-import { ApplicationWorkerCatalog } from "./worker/configuration.zs";
+import { WorkerManager } from "./worker/worker-manager.zs";
 import { thread } from "std/thread";
 
 // Frozen application state prepared exactly once by Application.run(move this).
@@ -16,5 +16,5 @@ export readonly class PreparedApplication on thread.main {
   readonly windows: WindowManager;
   readonly services: AsyncServices;
   readonly lifecycles: ServiceLifecycles;
-  readonly workers: ApplicationWorkerCatalog;
+  readonly workers: WorkerManager;
 }

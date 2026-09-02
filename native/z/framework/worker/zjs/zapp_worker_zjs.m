@@ -73,6 +73,9 @@ struct ZappZjsWorker {
   ZappZjsWorkerServiceCancelCallback service_cancel;
   void *service_cancel_context;
   ZappZjsWorkerServiceCancelRelease service_cancel_release;
+  ZappZjsWorkerLifecycleCallback lifecycle;
+  void *lifecycle_context;
+  ZappZjsWorkerLifecycleRelease lifecycle_release;
   pthread_mutex_t inbox_mutex;
   pthread_cond_t inbox_condition;
   ZappZjsWorkerMessage inbox[ZAPP_ZJS_WORKER_INBOX_CAPACITY];
@@ -945,6 +948,25 @@ static void copy_worker_failure(
   );
 }
 
+static void publish_worker_lifecycle(
+  ZappZjsWorker *worker,
+  int32_t phase,
+  uint64_t retry,
+  const char *message
+) {
+  if (!worker || !worker->lifecycle) return;
+  worker->lifecycle(
+    worker->worker_id,
+    phase,
+    worker->incarnation,
+    retry,
+    worker->restart_max_retries,
+    worker->restart_within_milliseconds,
+    message ? message : "",
+    worker->lifecycle_context
+  );
+}
+
 static int32_t run_worker_incarnation(
   ZappZjsWorker *worker,
   char *failure,
@@ -979,6 +1001,8 @@ static int32_t run_worker_incarnation(
     zapp_zjs_engine_destroy(engine);
     return status;
   }
+
+  publish_worker_lifecycle(worker, 1, worker->restart_failures, "");
 
   deliver_engine_response(worker, engine);
 
@@ -1081,6 +1105,12 @@ static void *run_worker(void *context) {
     );
     int decision = record_worker_failure(worker);
     if (decision == 1) {
+      publish_worker_lifecycle(
+        worker,
+        2,
+        worker->restart_failures,
+        failure
+      );
       fprintf(
         stderr,
         "application worker %s restarting as incarnation %llu "
@@ -1102,6 +1132,12 @@ static void *run_worker(void *context) {
         (unsigned long long)worker->restart_max_retries
       );
     }
+    publish_worker_lifecycle(
+      worker,
+      3,
+      worker->restart_max_retries,
+      failure
+    );
     fflush(stderr);
     break;
   }
@@ -1126,16 +1162,20 @@ uintptr_t zapp_zjs_worker_start(
   ZappZjsWorkerServiceRelease service_release,
   ZappZjsWorkerServiceCancelCallback service_cancel,
   void *service_cancel_context,
-  ZappZjsWorkerServiceCancelRelease service_cancel_release
+  ZappZjsWorkerServiceCancelRelease service_cancel_release,
+  ZappZjsWorkerLifecycleCallback lifecycle,
+  void *lifecycle_context,
+  ZappZjsWorkerLifecycleRelease lifecycle_release
 ) {
   if (!source || !worker_id || !module_name || !message || !release ||
       !service || !service_release || !service_cancel ||
-      !service_cancel_release) {
+      !service_cancel_release || !lifecycle || !lifecycle_release) {
     if (release) release(context);
     if (service_release) service_release(service_context);
     if (service_cancel_release) {
       service_cancel_release(service_cancel_context);
     }
+    if (lifecycle_release) lifecycle_release(lifecycle_context);
     return 0;
   }
   ZappZjsWorker *worker = calloc(1, sizeof(ZappZjsWorker));
@@ -1143,6 +1183,7 @@ uintptr_t zapp_zjs_worker_start(
     release(context);
     service_release(service_context);
     service_cancel_release(service_cancel_context);
+    lifecycle_release(lifecycle_context);
     return 0;
   }
   worker->runtime.cancel = cancel_worker_runtime;
@@ -1159,6 +1200,9 @@ uintptr_t zapp_zjs_worker_start(
   worker->service_cancel = service_cancel;
   worker->service_cancel_context = service_cancel_context;
   worker->service_cancel_release = service_cancel_release;
+  worker->lifecycle = lifecycle;
+  worker->lifecycle_context = lifecycle_context;
+  worker->lifecycle_release = lifecycle_release;
   worker->restart_max_retries = restart_enabled != 0
     ? restart_max_retries
     : 0;
@@ -1176,6 +1220,7 @@ uintptr_t zapp_zjs_worker_start(
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
     worker->service_cancel_release(worker->service_cancel_context);
+    worker->lifecycle_release(worker->lifecycle_context);
     free(worker);
     return 0;
   }
@@ -1187,6 +1232,7 @@ uintptr_t zapp_zjs_worker_start(
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
     worker->service_cancel_release(worker->service_cancel_context);
+    worker->lifecycle_release(worker->lifecycle_context);
     free(worker);
     return 0;
   }
@@ -1201,6 +1247,7 @@ uintptr_t zapp_zjs_worker_start(
     worker->message_release(worker->message_context);
     worker->service_release(worker->service_context);
     worker->service_cancel_release(worker->service_cancel_context);
+    worker->lifecycle_release(worker->lifecycle_context);
     free(worker);
     return 0;
   }
@@ -1257,6 +1304,7 @@ void zapp_zjs_worker_destroy(uintptr_t identity) {
   worker->message_release(worker->message_context);
   worker->service_release(worker->service_context);
   worker->service_cancel_release(worker->service_cancel_context);
+  worker->lifecycle_release(worker->lifecycle_context);
   free(worker);
 }
 

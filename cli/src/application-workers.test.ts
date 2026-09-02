@@ -99,6 +99,10 @@ describe("resolveApplicationWorkers", () => {
     expect(source).toContain("catalog.entries[0].restart");
     expect(source).toContain("catalog.entries[0].serviceMethods");
     expect(source).toContain("    services,");
+    expect(source).toContain("    lifecycle");
+    expect(source).toContain(
+      "  lifecycle: ApplicationWorkerLifecycleHandler",
+    );
     expect(source).toContain('name: "/_workers/_headless_indexer.mjs"');
     expect(source).toContain("controls: controls.freeze()");
 

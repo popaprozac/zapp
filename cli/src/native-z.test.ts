@@ -601,6 +601,24 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
+    const workerManager = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/worker-manager.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const workerEvents = readFileSync(
+      new URL(
+        "../../native/z/framework/worker/events.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const publicWorkerApi = readFileSync(
+      new URL("../../native/z/api/zapp/worker.zs", import.meta.url),
+      "utf8",
+    );
     const workerRuntimeHeader = readFileSync(
       new URL(
         "../../native/z/framework/worker/zapp_worker_runtime.h",
@@ -638,6 +656,9 @@ describe("Z native host inputs", () => {
     expect(application).toContain("export struct Application");
     expect(application).toContain(
       "readonly windows: WindowManager = createWindowManager()",
+    );
+    expect(application).toContain(
+      "readonly workers: WorkerManager = createWorkerManager(",
     );
     expect(application).toContain(
       "readonly capabilities: ApplicationCapabilities",
@@ -690,6 +711,21 @@ describe("Z native host inputs", () => {
     expect(applicationWorkers).toContain("native.zapp_worker_runtime_join(this.identity)");
     expect(applicationWorkers).toContain("deinit {");
     expect(applicationWorkers).toContain("native.zapp_worker_runtime_destroy(this.identity)");
+    expect(applicationWorkers).toContain(
+      "internal class ApplicationWorkerServiceRequest",
+    );
+    expect(workerManager).toContain("export readonly class WorkerManager on thread.main");
+    expect(workerManager).toContain("function get(in id: String): Option<ApplicationWorker>");
+    expect(workerManager).toContain("function all(): Array<ApplicationWorker>");
+    expect(workerManager).toContain("function send(");
+    expect(workerManager).toContain("function state(): ApplicationWorkerState");
+    expect(workerManager).toContain("ApplicationWorkerSendErrorKind.saturated");
+    expect(workerEvents).toContain("readonly all: Event<ApplicationWorkerEvent>");
+    expect(workerEvents).toContain("readonly restarting: Event<ApplicationWorkerRestartingEvent>");
+    expect(publicWorkerApi).toContain("export type WorkerManager = FrameworkWorkerManager");
+    expect(publicWorkerApi).toContain("export type ApplicationWorkerEvent = FrameworkApplicationWorkerEvent");
+    expect(app).toContain("worker.events.all.subscribe(");
+    expect(app).toContain("worker manager sent ping");
     expect(workerRuntimeHeader).toContain("int32_t (*dispatch)(");
     expect(workerRuntimeHeader).toContain("zapp_worker_runtime_dispatch(");
     expect(zjsWorkerRuntime).toContain("ZAPP_ZJS_WORKER_INBOX_CAPACITY 64");

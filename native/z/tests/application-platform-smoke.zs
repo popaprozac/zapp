@@ -10,6 +10,7 @@ import { createAsyncServices } from "../framework/async-services.zs";
 import { createServiceLifecycles } from "../framework/service-lifecycle.zs";
 import { createWindowManager } from "../framework/window.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
+import { createWorkerManager } from "../framework/worker/worker-manager.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 
@@ -28,7 +29,7 @@ async function main(): i32 on thread.main {
     windows: createWindowManager(),
     services: createAsyncServices().freeze(),
     lifecycles: createServiceLifecycles().freeze(),
-    workers: emptyApplicationWorkerCatalog(),
+    workers: createWorkerManager(emptyApplicationWorkerCatalog()),
   });
   const updates = new TaskScope();
   const result = attempt await runHeadlessApplicationPlatform(

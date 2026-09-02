@@ -10,6 +10,7 @@ import {
   allowsApplicationWorkerService,
   invokeApplicationWorkerService,
 } from "../application-workers.zs";
+import { ApplicationWorkerLifecycleHandler } from "../lifecycle.zs";
 import { WorkerModule } from "../types.zs";
 import { ApplicationWorkerRestartPolicy } from "../configuration.zs";
 import { Services } from "../../services.zs";
@@ -93,7 +94,8 @@ export function startZjsApplicationWorker(
   services: Services,
   asyncService: ApplicationWorkerAsyncServiceHandler,
   cancelService: ApplicationWorkerServiceCancelHandler,
-  message: ApplicationWorkerMessageHandler
+  message: ApplicationWorkerMessageHandler,
+  lifecycle: ApplicationWorkerLifecycleHandler
 ): ApplicationWorkerControl on thread.main {
   const source = Foundation.NSData.borrow(module.source);
   const serviceWorkerId = copy id;
@@ -123,10 +125,36 @@ export function startZjsApplicationWorker(
     move (requestId): void => cancelZjsWorkerService(
       cancelService,
       requestId
+    ),
+    move (
+      workerId,
+      phase,
+      incarnation,
+      retry,
+      maxRetries,
+      withinMilliseconds,
+      lifecycleMessage
+    ): void => lifecycle(
+      String.from(workerId),
+      phase,
+      incarnation,
+      retry,
+      maxRetries,
+      withinMilliseconds,
+      String.from(lifecycleMessage)
     )
   );
   if (identity == 0) {
     console.error("application worker could not start");
+    lifecycle(
+      copy id,
+      3,
+      0,
+      0,
+      u64(restart.maxRetries),
+      restart.withinMilliseconds,
+      "application worker could not start"
+    );
   }
 
   return new ApplicationWorkerControl({

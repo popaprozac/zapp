@@ -12,9 +12,13 @@ import {
   cancelAllMacOSApplicationWorkerServices,
   cancelMacOSApplicationWorkerService,
   installMacOSApplicationWorkers,
+  publishMacOSApplicationWorkerLifecycle,
   publishMacOSApplicationWorkerMessage,
   publishMacOSApplicationWorkerService,
 } from "./application-runtime.zs";
+import {
+  installMacOSApplicationWorkerManager,
+} from "./worker-lifecycle.zs";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
 import {
   initializeMacOSApplicationHost,
@@ -26,9 +30,12 @@ import {
 } from "../../configured-application.zs";
 import {
   ApplicationWorkerAsyncServiceHandler,
+  ApplicationWorkerDispatch,
   ApplicationWorkerMessageHandler,
   ApplicationWorkerServiceCancelHandler,
 } from "../../worker/application-workers.zs";
+import { ApplicationWorkerLifecycleHandler } from "../../worker/lifecycle.zs";
+import { ApplicationWorkerSendOperation } from "../../worker/worker-manager.zs";
 
 export async function runMacOSApplication(
   config: PreparedApplication,
@@ -50,6 +57,7 @@ export async function runMacOSApplication(
       version: copy config.metadata.version,
     }),
   });
+  let workerManager = config.workers;
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,
     config.permissions,
@@ -57,6 +65,9 @@ export async function runMacOSApplication(
     config.services,
     updates,
     windows
+  );
+  const workerManagerLifetime = installMacOSApplicationWorkerManager(
+    workerManager
   );
   const realized = attempt windows.start(macOSWindowBackend(), true);
   match (realized) {
@@ -82,18 +93,33 @@ export async function runMacOSApplication(
     publishMacOSApplicationWorkerService;
   const cancelWorkerService: ApplicationWorkerServiceCancelHandler =
     cancelMacOSApplicationWorkerService;
+  const workerLifecycle: ApplicationWorkerLifecycleHandler =
+    publishMacOSApplicationWorkerLifecycle;
   const workers = startConfiguredApplicationWorkers(
-    config.workers,
+    workerManager.catalog,
     config.services.synchronous,
     workerServices,
     cancelWorkerService,
-    workerMessages
+    workerMessages,
+    workerLifecycle
   );
+  const dispatchWorkers = workers;
+  const sendWorker: ApplicationWorkerSendOperation = move (
+    in workerId: String,
+    in channel: String,
+    in payload: String
+  ): ApplicationWorkerDispatch => dispatchWorkers.dispatch(
+    in workerId,
+    in channel,
+    in payload
+  );
+  workerManager.install(sendWorker);
   installMacOSApplicationWorkers(workers);
   const status = runMacOSApplicationLoop();
   workers.requestCancellation();
   cancelAllMacOSApplicationWorkerServices();
   workers.join();
+  workerManager.finish();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);

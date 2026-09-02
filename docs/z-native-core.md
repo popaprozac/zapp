@@ -43,11 +43,15 @@ the Z builder. The builder:
     its trusted profile set before navigation;
 11. expands `security.capabilities` service selectors against the checked
     service manifest, compiles exact grants into immutable Z collections, and
-    enforces the originating window's selected profiles before dispatch; and
+    enforces the originating window's selected profiles before dispatch;
 12. bundles configured application workers, passes each worker only its expanded
     immutable service-method allowlist, routes synchronous `thread.any` calls
     directly into the frozen Z router, and retains suspended service
-    continuations until their owning worker can settle them.
+    continuations until their owning worker can settle them; and
+13. creates the native Z `app.workers` manager before `run()`, installs its
+    engine-neutral dispatch operation during application startup, publishes
+    typed lifecycle events on `thread.main`, and closes dispatch before worker
+    controls are destroyed during shutdown.
 
 ## One service API, environment-selected transport
 

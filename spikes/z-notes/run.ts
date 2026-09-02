@@ -49,6 +49,16 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "configured application worker did not reply on channel pong",
     );
   }
+  if (!stdout.includes("worker manager sent ping")) {
+    throw new Error(
+      "native Z WorkerManager did not dispatch through its configured handle",
+    );
+  }
+  if (!stdout.includes("sent manager-pong")) {
+    throw new Error(
+      "configured application worker did not reply to WorkerManager.send",
+    );
+  }
   if (!stdout.includes("sent service")) {
     throw new Error(
       "configured application worker did not invoke the Z health service directly",
@@ -106,6 +116,15 @@ async function runWorkerRestartSmoke(command: string[]): Promise<void> {
     || !stderr.includes("restartProbe.mjs gave up after 2 retries")
   ) {
     throw new Error("configured application worker did not enforce its restart cap");
+  }
+  if (
+    !stdout.includes("worker restartProbe restarting after incarnation 1 (retry 1/2)")
+    || !stdout.includes("worker restartProbe restarting after incarnation 2 (retry 2/2)")
+    || !stdout.includes("worker restartProbe failed after 2 retries")
+  ) {
+    throw new Error(
+      "native Z WorkerManager did not publish restart lifecycle events",
+    );
   }
 }
 

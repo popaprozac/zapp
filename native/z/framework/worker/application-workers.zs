@@ -42,7 +42,7 @@ export type ApplicationWorkerServiceCancelHandler = (
   requestId: u64
 ) => void on thread.any;
 
-class ApplicationWorkerServiceRequest {
+internal class ApplicationWorkerServiceRequest {
   readonly generation: u64;
   control: Option<TaskControl>;
 
@@ -58,107 +58,118 @@ class ApplicationWorkerServiceRequest {
   }
 }
 
-struct ApplicationWorkerServiceRequestState {
+internal struct ApplicationWorkerServiceRequestState {
   requests: Map<u64, ApplicationWorkerServiceRequest>;
   nextGeneration: u64;
 }
 
 // Request admission happens on the engine thread, while execution and
-// completion happen on the application executor. This synchronized registry
-// ensures attach/cancel races cannot depend on executor queue order.
-internal readonly class ApplicationWorkerServiceRequests {
-  readonly state: Mutex<ApplicationWorkerServiceRequestState>;
-
-  function begin(requestId: u64): u64 {
-    return this.state.withLock(
-      (inout state): u64 => {
-        const generation = state.nextGeneration;
-        state.nextGeneration = state.nextGeneration + 1;
-        // Service request IDs are process-wide and never reused. Delete is a
-        // defensive replacement guard without introducing a second owner.
-        state.requests.delete(requestId);
-        state.requests.set(
-          requestId,
-          new ApplicationWorkerServiceRequest({
-            generation,
-            control: Option<TaskControl>.none,
-          })
-        );
-        return generation;
-      }
-    );
-  }
-
-  function attach(requestId: u64, control: TaskControl): void {
-    const attached = this.state.withLock(
-      (inout state): boolean => {
-        const found = state.requests.remove(requestId);
-        return match (found) {
-          some(value) => {
-            let request = value;
-            request.attach(control);
-            state.requests.set(requestId, request);
-            select true;
-          }
-          none => false;
-        };
-      }
-    );
-    if (!attached) control.requestCancel();
-  }
-
-  function finish(requestId: u64, generation: u64): void {
-    this.state.withLock(
-      (inout state): void => {
-        const found = state.requests.remove(requestId);
-        match (found) {
-          some(value) => {
-            let request = value;
-            if (request.generation != generation) {
-              state.requests.set(requestId, request);
-            }
-          }
-          none => {}
-        }
-      }
-    );
-  }
-
-  function cancel(requestId: u64): boolean {
-    return this.state.withLock(
-      (inout state): boolean => {
-        const found = state.requests.remove(requestId);
-        return match (found) {
-          some(value) => {
-            let request = value;
-            select request.requestCancel();
-          }
-          none => false;
-        };
-      }
-    );
-  }
-
-  function cancelAll(): void {
-    this.state.withLock(
-      (inout state): void => {
-        for (const entry of state.requests) {
-          entry.value.requestCancel();
-        }
-        state.requests.clear();
-      }
-    );
-  }
+// completion happen on the application executor. The intrinsic Mutex handle
+// is captured directly by each operation so native analysis can prove the
+// shared state is safe on arbitrary threads without a second ARC wrapper.
+internal function createApplicationWorkerServiceRequests(
+): Mutex<ApplicationWorkerServiceRequestState> {
+  return Mutex(ApplicationWorkerServiceRequestState({
+    requests: Map<u64, ApplicationWorkerServiceRequest>(),
+    nextGeneration: 1,
+  }));
 }
 
-internal function createApplicationWorkerServiceRequests(
-): ApplicationWorkerServiceRequests {
-  return new ApplicationWorkerServiceRequests({
-    state: Mutex(ApplicationWorkerServiceRequestState({
-      requests: Map<u64, ApplicationWorkerServiceRequest>(),
-      nextGeneration: 1,
-    })),
-  });
+internal function beginApplicationWorkerServiceRequest(
+  in requests: Mutex<ApplicationWorkerServiceRequestState>,
+  requestId: u64
+): u64 {
+  return requests.withLock(
+    (inout state): u64 => {
+      const generation = state.nextGeneration;
+      state.nextGeneration = state.nextGeneration + 1;
+      // Service request IDs are process-wide and never reused. Delete is a
+      // defensive replacement guard without introducing a second owner.
+      state.requests.delete(requestId);
+      state.requests.set(
+        requestId,
+        new ApplicationWorkerServiceRequest({
+          generation,
+          control: Option<TaskControl>.none,
+        })
+      );
+      return generation;
+    }
+  );
+}
+
+internal function attachApplicationWorkerServiceRequest(
+  in requests: Mutex<ApplicationWorkerServiceRequestState>,
+  requestId: u64,
+  control: TaskControl
+): void {
+  const attached = requests.withLock(
+    (inout state): boolean => {
+      const found = state.requests.remove(requestId);
+      return match (found) {
+        some(value) => {
+          let request = value;
+          request.attach(control);
+          state.requests.set(requestId, request);
+          select true;
+        }
+        none => false;
+      };
+    }
+  );
+  if (!attached) control.requestCancel();
+}
+
+internal function finishApplicationWorkerServiceRequest(
+  in requests: Mutex<ApplicationWorkerServiceRequestState>,
+  requestId: u64,
+  generation: u64
+): void {
+  requests.withLock(
+    (inout state): void => {
+      const found = state.requests.remove(requestId);
+      match (found) {
+        some(value) => {
+          let request = value;
+          if (request.generation != generation) {
+            state.requests.set(requestId, request);
+          }
+        }
+        none => {}
+      }
+    }
+  );
+}
+
+internal function cancelApplicationWorkerServiceRequest(
+  in requests: Mutex<ApplicationWorkerServiceRequestState>,
+  requestId: u64
+): boolean {
+  return requests.withLock(
+    (inout state): boolean => {
+      const found = state.requests.remove(requestId);
+      return match (found) {
+        some(value) => {
+          let request = value;
+          select request.requestCancel();
+        }
+        none => false;
+      };
+    }
+  );
+}
+
+internal function cancelAllApplicationWorkerServiceRequests(
+  in requests: Mutex<ApplicationWorkerServiceRequestState>
+): void {
+  requests.withLock(
+    (inout state): void => {
+      for (const entry of state.requests) {
+        entry.value.requestCancel();
+      }
+      state.requests.clear();
+    }
+  );
 }
 
 internal function allowsApplicationWorkerService(

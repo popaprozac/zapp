@@ -165,7 +165,8 @@ export function renderZApplicationWorkerStartup(
   services: Services,
   asyncService: ApplicationWorkerAsyncServiceHandler,
   cancelService: ApplicationWorkerServiceCancelHandler,
-  message: ApplicationWorkerMessageHandler
+  message: ApplicationWorkerMessageHandler,
+  lifecycle: ApplicationWorkerLifecycleHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
 }`;
@@ -200,7 +201,8 @@ export function renderZApplicationWorkerStartup(
     "  services: Services,",
     "  asyncService: ApplicationWorkerAsyncServiceHandler,",
     "  cancelService: ApplicationWorkerServiceCancelHandler,",
-    "  message: ApplicationWorkerMessageHandler",
+    "  message: ApplicationWorkerMessageHandler,",
+    "  lifecycle: ApplicationWorkerLifecycleHandler",
     "): ApplicationWorkers on thread.main {",
     "  let controls = Array<ApplicationWorkerControl>();",
   );
@@ -217,7 +219,8 @@ export function renderZApplicationWorkerStartup(
       "    services,",
       "    asyncService,",
       "    cancelService,",
-      "    message",
+      "    message,",
+      "    lifecycle",
       "  );",
     );
     if (startupProbe) {
