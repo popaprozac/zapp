@@ -15,6 +15,11 @@ struct ZappZjsEngine {
   int has_command_handler;
   char *response_channel;
   char *response_payload;
+  ZappZjsWorkerServiceCallback service;
+  ZappZjsWorker *worker;
+  char *service_payload;
+  int service_responded;
+  int service_ok;
   char error[512];
 };
 
@@ -39,6 +44,9 @@ struct ZappZjsWorker {
   ZappZjsWorkerMessageCallback message;
   void *message_context;
   ZappZjsWorkerMessageRelease message_release;
+  ZappZjsWorkerServiceCallback service;
+  void *service_context;
+  ZappZjsWorkerServiceRelease service_release;
   pthread_mutex_t inbox_mutex;
   pthread_cond_t inbox_condition;
   ZappZjsWorkerMessage inbox[ZAPP_ZJS_WORKER_INBOX_CAPACITY];
@@ -77,6 +85,121 @@ static void clear_engine_response(ZappZjsEngine *engine) {
   engine->response_payload = NULL;
 }
 
+static void clear_service_response(ZappZjsEngine *engine) {
+  free(engine->service_payload);
+  engine->service_payload = NULL;
+  engine->service_responded = 0;
+  engine->service_ok = 0;
+}
+
+static void throw_service_payload(
+  ZjsContext *context,
+  const char *payload
+) {
+  const char *source = payload ? payload : "application worker service invocation failed";
+  ZjsValue message = zjs_new_string(
+    context,
+    source,
+    (uint32_t)strlen(source)
+  );
+  zjs_throw(context, message);
+}
+
+static char *stringify_service_arguments(
+  ZjsContext *context,
+  ZjsValue value
+) {
+  if (zjs_is_undefined(value) || zjs_is_null(value)) return strdup("null");
+  ZjsValue json = zjs_get_global(context, "JSON");
+  ZjsValue stringify = zjs_get_property(context, json, "stringify");
+  zjs_pin(context, stringify);
+  ZjsValue serialized = zjs_call(
+    context,
+    stringify,
+    json,
+    &value,
+    1
+  );
+  zjs_unpin(context);
+  if (zjs_had_error(context) || !zjs_is_string(serialized)) return NULL;
+  uint32_t length = 0;
+  const char *bytes = zjs_string_bytes(serialized, &length);
+  return copy_string_bytes(bytes, length);
+}
+
+static ZjsValue parse_service_result(
+  ZjsContext *context,
+  const char *payload
+) {
+  ZjsValue json = zjs_get_global(context, "JSON");
+  ZjsValue parse = zjs_get_property(context, json, "parse");
+  zjs_pin(context, parse);
+  ZjsValue source = zjs_new_string(
+    context,
+    payload,
+    (uint32_t)strlen(payload)
+  );
+  zjs_pin(context, source);
+  ZjsValue parsed = zjs_call(context, parse, json, &source, 1);
+  zjs_unpin(context);
+  zjs_unpin(context);
+  return parsed;
+}
+
+static ZjsValue host_invoke_service(
+  ZjsContext *context,
+  ZjsValue *arguments,
+  uint32_t count
+) {
+  ZappZjsEngine *engine = entered_engine;
+  if (!engine || !engine->service || count < 1 ||
+      !zjs_is_string(arguments[0])) {
+    throw_service_payload(
+      context,
+      "application worker service bridge is unavailable"
+    );
+    return zjs_undefined();
+  }
+
+  uint32_t method_length = 0;
+  const char *method_bytes = zjs_string_bytes(arguments[0], &method_length);
+  char *method = copy_string_bytes(method_bytes, method_length);
+  if (!method) {
+    throw_service_payload(context, "application worker could not copy the service method");
+    return zjs_undefined();
+  }
+  char *serialized = stringify_service_arguments(
+    context,
+    count > 1 ? arguments[1] : zjs_undefined()
+  );
+  if (!serialized) {
+    free(method);
+    if (!zjs_had_error(context)) {
+      throw_service_payload(context, "application worker could not serialize service arguments");
+    }
+    return zjs_undefined();
+  }
+
+  clear_service_response(engine);
+  engine->service(
+    engine->worker->worker_id,
+    method,
+    serialized,
+    engine->worker->service_context
+  );
+  free(method);
+  free(serialized);
+  if (!engine->service_responded || !engine->service_payload) {
+    throw_service_payload(context, "application worker service produced no response");
+    return zjs_undefined();
+  }
+  if (!engine->service_ok) {
+    throw_service_payload(context, engine->service_payload);
+    return zjs_undefined();
+  }
+  return parse_service_result(context, engine->service_payload);
+}
+
 static ZjsValue host_send(
   ZjsContext *context,
   ZjsValue *arguments,
@@ -110,6 +233,25 @@ static ZjsValue host_send(
       (uint32_t)(sizeof("worker.send could not copy its message") - 1)
     );
     zjs_throw(context, message);
+    return zjs_undefined();
+  }
+
+  if (entered_engine->worker && entered_engine->worker->message) {
+    entered_engine->worker->message(
+      entered_engine->worker->worker_id,
+      channel_copy,
+      payload_copy,
+      entered_engine->worker->message_context
+    );
+    fprintf(
+      stdout,
+      "application worker %s sent %s\n",
+      entered_engine->worker->module_name,
+      channel_copy
+    );
+    fflush(stdout);
+    free(channel_copy);
+    free(payload_copy);
     return zjs_undefined();
   }
 
@@ -149,7 +291,37 @@ ZappZjsEngine *zapp_zjs_engine_create(void) {
     return NULL;
   }
   zjs_register_host_function(engine->context, "__zappWorkerSend", host_send);
+  ZjsValue bridge = zjs_new_object(engine->context);
+  ZjsValue invoke = zjs_register_host_function(
+    engine->context,
+    "__zappWorkerInvokeService",
+    host_invoke_service
+  );
+  zjs_set_property(engine->context, bridge, "invokeService", invoke);
+  zjs_set_global(engine->context, "__zappBridge", bridge);
+  ZjsValue global = zjs_get_global(engine->context, "globalThis");
+  zjs_set_property(engine->context, global, "__zappBridge", bridge);
+  zjs_set_property(
+    engine->context,
+    global,
+    "__zappWorkerInvokeService",
+    invoke
+  );
   return engine;
+}
+
+int32_t zapp_zjs_worker_service_respond(
+  int32_t ok,
+  const char *payload
+) {
+  if (!entered_engine || !payload) return 1;
+  char *copy = strdup(payload);
+  if (!copy) return 2;
+  clear_service_response(entered_engine);
+  entered_engine->service_payload = copy;
+  entered_engine->service_responded = 1;
+  entered_engine->service_ok = ok != 0;
+  return 0;
 }
 
 int32_t zapp_zjs_engine_evaluate_module(
@@ -264,6 +436,7 @@ void zapp_zjs_engine_destroy(ZappZjsEngine *engine) {
     zjs_free_context(engine->context);
   }
   clear_engine_response(engine);
+  clear_service_response(engine);
   free(engine);
 }
 
@@ -400,6 +573,8 @@ static void *run_worker(void *context) {
     atomic_store_explicit(&worker->finished, 1, memory_order_release);
     return NULL;
   }
+  engine->service = worker->service;
+  engine->worker = worker;
 
   NSData *source = (__bridge NSData *)worker->source;
   int32_t status = zapp_zjs_engine_evaluate_module(
@@ -494,15 +669,21 @@ uintptr_t zapp_zjs_worker_start(
   const char *module_name,
   ZappZjsWorkerMessageCallback message,
   void *context,
-  ZappZjsWorkerMessageRelease release
+  ZappZjsWorkerMessageRelease release,
+  ZappZjsWorkerServiceCallback service,
+  void *service_context,
+  ZappZjsWorkerServiceRelease service_release
 ) {
-  if (!source || !worker_id || !module_name || !message || !release) {
+  if (!source || !worker_id || !module_name || !message || !release ||
+      !service || !service_release) {
     if (release) release(context);
+    if (service_release) service_release(service_context);
     return 0;
   }
   ZappZjsWorker *worker = calloc(1, sizeof(ZappZjsWorker));
   if (!worker) {
     release(context);
+    service_release(service_context);
     return 0;
   }
   worker->runtime.cancel = cancel_worker_runtime;
@@ -512,6 +693,9 @@ uintptr_t zapp_zjs_worker_start(
   worker->message = message;
   worker->message_context = context;
   worker->message_release = release;
+  worker->service = service;
+  worker->service_context = service_context;
+  worker->service_release = service_release;
   worker->source = (__bridge_retained void *)source;
   worker->worker_id = strdup(worker_id);
   worker->module_name = strdup(module_name);
@@ -521,6 +705,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->worker_id);
     free(worker->module_name);
     worker->message_release(worker->message_context);
+    worker->service_release(worker->service_context);
     free(worker);
     return 0;
   }
@@ -530,6 +715,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->worker_id);
     free(worker->module_name);
     worker->message_release(worker->message_context);
+    worker->service_release(worker->service_context);
     free(worker);
     return 0;
   }
@@ -542,6 +728,7 @@ uintptr_t zapp_zjs_worker_start(
     free(worker->worker_id);
     free(worker->module_name);
     worker->message_release(worker->message_context);
+    worker->service_release(worker->service_context);
     free(worker);
     return 0;
   }
@@ -596,6 +783,7 @@ void zapp_zjs_worker_destroy(uintptr_t identity) {
   free(worker->worker_id);
   free(worker->module_name);
   worker->message_release(worker->message_context);
+  worker->service_release(worker->service_context);
   free(worker);
 }
 

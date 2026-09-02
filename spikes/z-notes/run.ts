@@ -45,7 +45,24 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
     throw new Error(`${command[0]} exited with status ${status}`);
   }
   if (!stdout.includes("sent pong")) {
-    throw new Error("configured application worker did not reply on channel pong");
+    throw new Error(
+      "configured application worker did not reply on channel pong",
+    );
+  }
+  if (!stdout.includes("sent service")) {
+    throw new Error(
+      "configured application worker did not invoke the Z health service directly",
+    );
+  }
+  if (!stdout.includes("sent denied")) {
+    throw new Error(
+      "configured application worker did not receive a typed capability denial",
+    );
+  }
+  if (stdout.includes("sent denial-missing") || stdout.includes("sent denial-wrong-error")) {
+    throw new Error(
+      "configured application worker did not preserve service capability safety",
+    );
   }
 }
 

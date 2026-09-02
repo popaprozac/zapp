@@ -96,6 +96,8 @@ describe("resolveApplicationWorkers", () => {
       'embed.bytes("./worker/generated/application-worker-0.mjs")',
     );
     expect(source).toContain("startZjsApplicationWorker(");
+    expect(source).toContain("catalog.entries[0].serviceMethods");
+    expect(source).toContain("    services,");
     expect(source).toContain('name: "/_workers/_headless_indexer.mjs"');
     expect(source).toContain("controls: controls.freeze()");
 

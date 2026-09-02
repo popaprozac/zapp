@@ -49,6 +49,7 @@ export async function runApplicationPlatform(
     discardApplicationWorkerMessage;
   const workers = startConfiguredApplicationWorkers(
     config.workers,
+    config.services.synchronous,
     workerMessages
   );
   const status = runtime.exitStatus;

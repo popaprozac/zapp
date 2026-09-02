@@ -200,6 +200,7 @@ import {
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
+import { Services } from "./services.zs";
 ${applicationWorkers.length > 0 ? `import embed from "std/embed";
 import { WorkerModule } from "./worker/types.zs";
 import { startZjsApplicationWorker } from "./worker/zjs/runtime.zs";` : ""}

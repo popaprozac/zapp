@@ -9,6 +9,55 @@
  */
 
 import { getBridge } from "./bridge";
+import { errorFromBridgePayload } from "./errors";
+
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function normalizeWorkerError(error: unknown): Error {
+  if (typeof error === "string") return errorFromBridgePayload(error);
+  if (error instanceof Error) {
+    return error.name === "Error"
+      ? errorFromBridgePayload(error.message)
+      : error;
+  }
+  return new Error(String(error));
+}
+
+function invokeDirectWorker<TReturn, TArgs>(
+  hostBridge: { invokeService(method: string, args?: TArgs): TReturn },
+  method: string,
+  args: TArgs | undefined,
+  opts: InvokeOptions | undefined,
+): CancellablePromise<TReturn> {
+  let completed = false;
+  const source = new Promise<TReturn>((resolve, reject) => {
+    if (opts?.signal?.aborted) {
+      completed = true;
+      reject(abortError());
+      return;
+    }
+    // Synchronous native services are hot: enter the host during the call,
+    // then expose the result through the same Promise API generated for a
+    // WebView. Once entered, this tier has no suspended work to cancel.
+    try {
+      const value = hostBridge.invokeService(method, args);
+      completed = true;
+      resolve(value);
+    } catch (error) {
+      completed = true;
+      reject(normalizeWorkerError(error));
+    }
+  }) as CancellablePromise<TReturn>;
+  source.cancel = () => {
+    if (completed) return;
+    completed = true;
+  };
+  return source;
+}
 
 export interface InvokeOptions {
   /** Timeout in milliseconds. Default: 15000. */
@@ -33,17 +82,32 @@ export const Services = {
     args?: TArgs,
     opts?: InvokeOptions
   ): CancellablePromise<TReturn> {
-    // Worker context: bridge.invoke routes through invokeAsync (which falls
-    // back to sync when invokeServiceAsync is absent on zc builds). This
-    // returns a real async Promise when the nim host wires invokeServiceAsync.
+    const directWorkerInvoke = (globalThis as any).__zappWorkerInvokeService;
+    if (typeof directWorkerInvoke === "function") {
+      return invokeDirectWorker(
+        { invokeService: directWorkerInvoke },
+        method,
+        args,
+        opts,
+      );
+    }
+
+    // Worker context: retain the same generated Promise API while selecting
+    // the fastest host transport available underneath it. A Z-owned worker
+    // host exposes invokeService directly; older hosts may additionally offer
+    // invoke for asynchronous service continuations.
     const hostBridge = (globalThis as any).__zappBridge;
     if (hostBridge?.invokeService) {
-      const p = (hostBridge.invoke
-        ? hostBridge.invoke(method, args) as Promise<TReturn>
-        : Promise.resolve(hostBridge.invokeService(method, args) as TReturn)
-      ) as CancellablePromise<TReturn>;
-      p.cancel = () => {};
-      return p;
+      if (!hostBridge.invoke) {
+        return invokeDirectWorker(hostBridge, method, args, opts);
+      }
+      const source = Promise.resolve().then(
+        () => hostBridge.invoke(method, args, opts),
+      ).catch((error) => {
+        throw normalizeWorkerError(error);
+      }) as CancellablePromise<TReturn>;
+      source.cancel = () => {};
+      return source;
     }
 
     // WebView context: async bridge call

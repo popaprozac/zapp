@@ -593,7 +593,11 @@ async function bundleWorker(
       build: {
         outDir,
         emptyOutDir: false,
-        minify: true,
+        // The current ZJS compatibility artifact does not yet execute every
+        // Rolldown compact-control-flow rewrite correctly (notably a service
+        // call folded into a logical-expression statement). Preserve ordinary
+        // source control flow for ZJS until the Z rewrite owns that coverage.
+        minify: entry.engine !== "zjs",
         // Rolldown emits ES2017 — the actual ES5 downlevel for
         // Hermes-safety happens in the `hermesCompatLower` plugin
         // above, which runs `esbuild.transform` on each chunk as a

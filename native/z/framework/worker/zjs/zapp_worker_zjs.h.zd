@@ -38,7 +38,10 @@ declare module "zapp_worker_zjs.h" {
     in module_name: _,
     move message: _,
     context: _,
-    release: _
+    release: _,
+    move service: _,
+    service_context: _,
+    service_release: _
   ): _ {
     callback message {
       context context;
@@ -46,7 +49,14 @@ declare module "zapp_worker_zjs.h" {
       thread any;
       invoked repeatedly;
     }
+    callback service {
+      context service_context;
+      deinit service_release;
+      thread any;
+      invoked repeatedly;
+    }
   }
+  export function zapp_zjs_worker_service_respond(ok: _, in payload: _): _;
   export function zapp_zjs_worker_cancel(identity: _): _;
   export function zapp_zjs_worker_dispatch(
     identity: _,

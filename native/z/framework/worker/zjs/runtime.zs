@@ -5,8 +5,10 @@ import { thread } from "std/thread";
 import {
   ApplicationWorkerControl,
   ApplicationWorkerMessageHandler,
+  invokeApplicationWorkerService,
 } from "../application-workers.zs";
 import { WorkerModule } from "../types.zs";
+import { Services } from "../../services.zs";
 
 function publishZjsWorkerMessage(
   message: ApplicationWorkerMessageHandler,
@@ -21,9 +23,29 @@ function publishZjsWorkerMessage(
   );
 }
 
+function publishZjsWorkerServiceResult(
+  in services: Services,
+  in serviceMethods: readonly Array<String>,
+  workerId: cstring,
+  method: cstring,
+  arguments: cstring
+): void on thread.any {
+  const response = invokeApplicationWorkerService(
+    in services,
+    in serviceMethods,
+    String.from(workerId),
+    String.from(method),
+    String.from(arguments)
+  );
+  const ok: i32 = response.ok ? 1 : 0;
+  native.zapp_zjs_worker_service_respond(ok, response.payload);
+}
+
 export function startZjsApplicationWorker(
   id: String,
   in module: WorkerModule,
+  serviceMethods: readonly Array<String>,
+  services: Services,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkerControl on thread.main {
   const source = Foundation.NSData.borrow(module.source);
@@ -36,6 +58,13 @@ export function startZjsApplicationWorker(
       workerId,
       channel,
       payload
+    ),
+    move (workerId, method, arguments): void => publishZjsWorkerServiceResult(
+      in services,
+      in serviceMethods,
+      workerId,
+      method,
+      arguments
     )
   );
   if (identity == 0) {

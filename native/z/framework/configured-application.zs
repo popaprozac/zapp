@@ -15,6 +15,7 @@ import {
   ApplicationWorkers,
   startEmptyApplicationWorkers,
 } from "./worker/application-workers.zs";
+import { Services } from "./services.zs";
 
 // The CLI replaces this module only inside its isolated build workspace.
 // Keeping a deterministic fallback in the source graph preserves editor,
@@ -52,6 +53,7 @@ export function configuredApplicationWorkers(): ApplicationWorkerCatalog {
 
 export function startConfiguredApplicationWorkers(
   in catalog: ApplicationWorkerCatalog,
+  services: Services,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();

@@ -1,8 +1,9 @@
 # Z native core
 
 Status: Phase 0 complete; Phase 1 typed ingress, dynamically created Z-owned
-AppKit/WebKit windows, generated typed service round trips, and structured
-suspending service delivery through real WebViews complete, August 2026.
+AppKit/WebKit windows, generated typed service round trips, structured
+suspending service delivery through real WebViews, and the first direct ZJS
+worker-to-Z service route complete, August 2026.
 
 Zapp's reusable native core lives under `native/z/framework/`; the first
 application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
@@ -42,7 +43,42 @@ the Z builder. The builder:
     its trusted profile set before navigation;
 11. expands `security.capabilities` service selectors against the checked
     service manifest, compiles exact grants into immutable Z collections, and
-    enforces the originating window's selected profiles before dispatch.
+    enforces the originating window's selected profiles before dispatch; and
+12. bundles configured application workers, passes each worker only its expanded
+    immutable service-method allowlist, and routes synchronous `thread.any`
+    service calls directly into the same frozen Z router used by WebViews.
+
+## One service API, environment-selected transport
+
+Generated frontend and worker code imports one facade:
+
+```ts
+import { health } from "zapp:services";
+
+const status = await health.status();
+```
+
+The generated method always returns the same cancellable Promise shape and
+uses the same argument/result codecs and runtime error classes. A WebView sends
+the call through the asynchronous bridge protocol. A configured ZJS
+application worker instead enters an internal synchronous engine host function,
+which calls Z's frozen `Services` router in process and resolves the public
+Promise with the returned value. No renderer or WebView IPC participates in
+that path.
+
+Transport selection is internal; it is not an application choice and does not
+create a second worker-specific service namespace. Native Z checks the
+worker's build-expanded service-method allowlist before dispatch, so bypassing
+the JavaScript facade cannot broaden authority. Structured denials and typed Z
+service failures return through the same runtime error normalization as WebView
+responses.
+
+The first direct tier supports synchronous services whose generated adapter is
+safe on `thread.any`. Services that suspend or require executor placement will
+use the same public call once the worker host can retain a continuation and
+settle it asynchronously. A pre-aborted signal prevents entry into the current
+synchronous route; after native entry there is no suspended operation left to
+cancel.
 
 The route is no longer a pass-through smoke. Z's source-backed `std/json`
 parser decodes the WebView envelope into `BridgeMessage`, preserves request

@@ -75,6 +75,7 @@ export async function runMacOSApplication(
     publishMacOSApplicationWorkerMessage;
   const workers = startConfiguredApplicationWorkers(
     config.workers,
+    config.services.synchronous,
     workerMessages
   );
   installMacOSApplicationWorkers(workers);

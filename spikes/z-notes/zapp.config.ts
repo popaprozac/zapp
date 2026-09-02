@@ -39,6 +39,7 @@ export default defineConfig({
         lifecycle: {
           script: "./frontend/worker-lifecycle.ts",
           engine: "zjs",
+          capabilities: ["diagnostics"],
         },
       },
     },

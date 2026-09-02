@@ -136,12 +136,33 @@ stop:
 bun run spike:z-notes:worker-smoke
 ```
 
-This configured tier proves module load, deterministic lifetime, and a bounded
-private host-to-worker command path. The smoke queues `ping` immediately—even
-before the module may have initialized—and fails unless the worker dispatches it
-and replies on `pong`. It does not yet expose frontend messaging, worker-to-Z
-delivery, an `app.workers` manager, or restart execution; those remain the next
-worker composition slices.
+This configured tier proves module load, deterministic lifetime, a bounded
+private host-to-worker command path, and the first direct worker-to-Z service
+route. Worker code imports the same generated facade used by the WebView:
+
+```ts
+import { health } from "zapp:services";
+
+const status = await health.status();
+```
+
+The public method, Promise result, generated codecs, and runtime error classes
+do not expose the transport choice. In this ZJS application worker,
+`health.status()` calls the frozen synchronous Z service router in process;
+the equivalent WebView call uses request/response IPC. The worker's immutable
+`diagnostics` capability profile is authoritative on the direct path too: the
+smoke calls ungranted `notes.create()` and requires the ordinary generated
+Promise to reject with `PermissionDeniedError` before Notes service code runs.
+
+The smoke queues `ping` immediately—even before the module may have
+initialized—and fails unless the worker dispatches it, calls the authorized
+service, observes the typed denial, and replies on `pong`. It does not yet
+expose frontend-to-worker messaging, an `app.workers` manager, restart
+execution, or direct suspended-service continuation routing; those remain the
+next worker composition slices. The current compatibility ZJS artifact also
+receives an unminified worker module because it misexecutes one Rolldown
+compact-control-flow rewrite. Other engines retain minification, and the ZJS
+rewrite must close this compatibility test before reclaiming it.
 
 `NotesCore` is a normal readonly ARC class with synchronized state and owns the
 single implementation of `create`, `count`, JSON decoding, and JSON encoding.

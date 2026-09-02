@@ -35,6 +35,7 @@ export readonly struct BridgeError {
   code: String;
   message: String;
   permission: String = "";
+  workerId: String = "";
   service: String = "";
   method: String = "";
   errorType: String = "";
@@ -165,6 +166,23 @@ export function bridgeCapabilityFailure(
     code: "PERMISSION_DENIED",
     message: move message,
     permission: move permission,
+  });
+  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+}
+
+export function bridgeWorkerCapabilityFailure(
+  id: u64,
+  workerId: String,
+  method: String
+): BridgeResponse {
+  const permission = `service:${method}`;
+  const message = `service "${method}" is not granted to application worker "${workerId}"`;
+  const error = BridgeError({
+    code: "PERMISSION_DENIED",
+    message: move message,
+    permission: move permission,
+    workerId: move workerId,
+    method: move method,
   });
   return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
 }

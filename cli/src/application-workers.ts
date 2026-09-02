@@ -162,6 +162,7 @@ export function renderZApplicationWorkerStartup(
   if (workers.length === 0) {
     return `export function startConfiguredApplicationWorkers(
   in catalog: ApplicationWorkerCatalog,
+  services: Services,
   message: ApplicationWorkerMessageHandler
 ): ApplicationWorkers {
   return startEmptyApplicationWorkers();
@@ -194,6 +195,7 @@ export function renderZApplicationWorkerStartup(
     "",
     "export function startConfiguredApplicationWorkers(",
     "  in catalog: ApplicationWorkerCatalog,",
+    "  services: Services,",
     "  message: ApplicationWorkerMessageHandler",
     "): ApplicationWorkers on thread.main {",
     "  let controls = Array<ApplicationWorkerControl>();",
@@ -206,6 +208,8 @@ export function renderZApplicationWorkerStartup(
       `      source: applicationWorkerSource${index},`,
       `      name: ${JSON.stringify(worker.moduleUrl)},`,
       "    }),",
+      `    catalog.entries[${index}].serviceMethods,`,
+      "    services,",
       "    message",
       "  );",
     );

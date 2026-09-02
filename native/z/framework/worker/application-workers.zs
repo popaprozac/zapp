@@ -1,6 +1,14 @@
 import native from "zapp_worker_runtime.h";
 import console from "std/console";
 import { thread } from "std/thread";
+import {
+  BridgeResponse,
+  bridgeFailure,
+  bridgeSuccess,
+  bridgeTypedServiceFailure,
+  bridgeWorkerCapabilityFailure,
+} from "../bridge.zs";
+import { Services } from "../services.zs";
 
 export enum ApplicationWorkerDispatch {
   accepted,
@@ -17,6 +25,40 @@ export type ApplicationWorkerMessageHandler = (
   channel: String,
   payload: String
 ) => void on thread.any;
+
+function allowsApplicationWorkerService(
+  in serviceMethods: readonly Array<String>,
+  in method: String
+): boolean {
+  let index: usize = 0;
+  while (index < serviceMethods.length) {
+    if (serviceMethods[index] == method) return true;
+    index = index + 1;
+  }
+  return false;
+}
+
+// Engine-neutral direct service route. Worker configuration supplies an
+// immutable allowlist, and Services contains only synchronous handlers already
+// proven callable on thread.any. Engine adapters are responsible only for
+// converting their JS values to and from the shared JSON service wire shape.
+export function invokeApplicationWorkerService(
+  in services: Services,
+  in serviceMethods: readonly Array<String>,
+  workerId: String,
+  method: String,
+  arguments: String
+): BridgeResponse on thread.any {
+  if (!allowsApplicationWorkerService(in serviceMethods, in method)) {
+    return bridgeWorkerCapabilityFailure(0, move workerId, move method);
+  }
+  const invoked = services.invoke(copy method, move arguments);
+  return match (invoked) {
+    success(payload) => bridgeSuccess(0, move payload);
+    failure(error) => bridgeFailure(0, "SERVICE_ERROR", move error);
+    typedFailure(error) => bridgeTypedServiceFailure(0, move error);
+  };
+}
 
 export readonly class ApplicationWorkerControl {
   readonly id: String;
