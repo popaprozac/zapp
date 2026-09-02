@@ -9,14 +9,17 @@ import {
   NoteDescription,
   notes,
 } from "zapp:services";
+import { applicationWorkers } from "@zappdev/runtime/worker";
 
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
+const indexButton = document.querySelector("#index-notes");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
 const status = document.querySelector("#status");
 const windowEvents = document.querySelector("#window-events");
+const workerIndex = document.querySelector("#worker-index");
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
 // client in development. The native smoke verifies the matching mode, proving
@@ -54,6 +57,43 @@ windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
   renderWindowEvents();
 });
 renderWindowEvents();
+
+const noteIndexer = applicationWorkers.get("lifecycle");
+let nextIndexRequest = 1;
+
+noteIndexer.subscribe("index-started", (message) => {
+  workerIndex.textContent = `Worker started index ${message.requestId}`;
+});
+noteIndexer.subscribe("index-progress", (message) => {
+  workerIndex.textContent = [
+    `Index ${message.requestId}`,
+    `${message.completed}/${message.total}: ${message.title}`,
+  ].join("\n");
+});
+noteIndexer.subscribe("index-complete", (message) => {
+  workerIndex.textContent = [
+    `Indexed ${message.total} note${message.total === 1 ? "" : "s"}`,
+    `Active: ${message.active}; archived: ${message.archived}`,
+    `Title characters: ${message.titleCharacters}`,
+  ].join("\n");
+  document.body.dataset.workerIndex = "ok";
+});
+noteIndexer.subscribe("index-error", (message) => {
+  workerIndex.textContent = `Worker index failed\n${message.message}`;
+  document.body.dataset.workerIndex = "error";
+});
+
+indexButton.addEventListener("click", async () => {
+  const requestId = `webview-${nextIndexRequest}`;
+  nextIndexRequest += 1;
+  workerIndex.textContent = `Queueing index ${requestId}…`;
+  try {
+    await noteIndexer.send("index-notes", { requestId });
+  } catch (error) {
+    workerIndex.textContent = `Worker unavailable\n${String(error)}`;
+    document.body.dataset.workerIndex = "error";
+  }
+});
 
 if (currentWindowId === "win-1") {
   createWindow({

@@ -656,7 +656,8 @@ describe("Z native host inputs", () => {
     expect(application).toContain(
       "readonly metadata: ApplicationMetadata = configuredApplicationMetadata()",
     );
-    expect(app).toContain('app.services.register("notes", createNotesService());');
+    expect(app).toContain("const notesService = createNotesService();");
+    expect(app).toContain('app.services.register("notes", move notesService);');
     expect(app).toContain('app.services.register("health", createHealthService());');
     expect(app).toContain('inject: Array<String>("base")');
     expect(app).toContain("const result = attempt await app.run();");

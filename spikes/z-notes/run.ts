@@ -68,6 +68,21 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "native Z ApplicationWorker.messages did not publish the worker response",
     );
   }
+  if (
+    !stdout.includes("worker manager requested note index")
+    || !stdout.includes("sent index-started")
+    || !stdout.includes("sent index-complete")
+    || !stdout.includes(
+      'worker message index-progress: {"requestId":"native-smoke","completed":1,"total":1',
+    )
+    || !stdout.includes(
+      'worker message index-complete: {"requestId":"native-smoke","total":1,"active":1',
+    )
+  ) {
+    throw new Error(
+      "configured application worker did not index Z-owned notes end to end",
+    );
+  }
   if (!stdout.includes("sent service")) {
     throw new Error(
       "configured application worker did not invoke the Z health service directly",

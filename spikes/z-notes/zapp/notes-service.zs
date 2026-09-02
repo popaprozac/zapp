@@ -20,8 +20,21 @@ export struct NoteCreationError {
   title: String;
 }
 
+class NotesCatalog on thread.main {
+  notes: Array<Note>;
+
+  function add(inout this, note: Note): void {
+    this.notes.push(move note);
+  }
+
+  function list(): Array<Note> {
+    return copy this.notes;
+  }
+}
+
 export readonly class NotesService implements ServiceLifecycle {
   readonly core: NotesCore;
+  readonly catalog: NotesCatalog;
 
   async function create(
     input: CreateNoteInput
@@ -33,11 +46,18 @@ export readonly class NotesService implements ServiceLifecycle {
         title: "",
       });
     }
-    return this.core.create(move input);
+    const note = this.core.create(move input);
+    const catalog = this.catalog;
+    catalog.add(copy note);
+    return note;
   }
 
   function count(): u64 on thread.main {
     return this.core.count();
+  }
+
+  function list(): Array<Note> on thread.main {
+    return this.catalog.list();
   }
 
   function isArchived(state: NoteState): boolean {
@@ -76,6 +96,9 @@ export readonly class NotesService implements ServiceLifecycle {
   }
 }
 
-export function createNotesService(): NotesService {
-  return new NotesService({ core: createNotesCore() });
+export function createNotesService(): NotesService on thread.main {
+  return new NotesService({
+    core: createNotesCore(),
+    catalog: new NotesCatalog({ notes: Array<Note>() }),
+  });
 }

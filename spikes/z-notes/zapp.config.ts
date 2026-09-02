@@ -15,9 +15,10 @@ export default defineConfig({
       default: {
         permissions: ["window:create"],
         services: ["notes", "health"],
+        workers: ["lifecycle"],
       },
       diagnostics: {
-        services: ["notes.count", "notes.isEmpty", "health.status"],
+        services: ["notes.count", "notes.isEmpty", "notes.list", "health.status"],
       },
     },
   },
@@ -33,25 +34,20 @@ export default defineConfig({
       },
     },
   },
-  ...(process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE === "1" ? {
-    workers: {
-      application: {
+  workers: {
+    application: {
+      lifecycle: {
+        script: "./frontend/worker-lifecycle.ts",
+        engine: "zjs",
+        capabilities: ["diagnostics"],
+      },
+      ...(process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE === "1" ? {
         restartProbe: {
           script: "./frontend/worker-restart.ts",
           engine: "zjs",
           restart: { maxRetries: 2, withinMs: 60_000 },
         },
-      },
+      } : {}),
     },
-  } : process.env.ZAPP_APPLICATION_WORKER_SMOKE === "1" ? {
-    workers: {
-      application: {
-        lifecycle: {
-          script: "./frontend/worker-lifecycle.ts",
-          engine: "zjs",
-          capabilities: ["diagnostics"],
-        },
-      },
-    },
-  } : {}),
+  },
 });

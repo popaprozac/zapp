@@ -126,11 +126,19 @@ This spike now builds and runs through Z's fixed-point native driver. Manual
 `TaskScope` construction, owned capture transfer, main-executor placement, and
 scope close/join all execute without a Stage 0 override.
 
-An opt-in worker smoke also declares a ZJS application worker through the same
-`zapp.config.ts` surface an application will use. The CLI bundles and embeds
-its source module, native Z starts it after the Notes services, and application
-shutdown requests cancellation and joins the worker before those services
-stop:
+Z Notes declares a ZJS application worker through the same `zapp.config.ts`
+surface an application will use. The CLI bundles and embeds its source module,
+native Z starts it after the Notes services, and application shutdown requests
+cancellation and joins the worker before those services stop. The UI's
+**Index notes in a Zapp worker** action asks that application-lifetime worker to
+load an owned `Array<Note>` through the generated service API, analyze the
+actual titles off the WebView thread, and publish progress plus a summary. The
+same output is independently observable through native Z's `worker.messages`
+and the authorized WebView subscription. A welcome note seeded by native Z
+makes the automated path exercise a real `Note` value rather than an empty
+collection; notes created from either WebView appear in later manual indexes.
+
+The opt-in worker smoke proves that workflow without manual UI interaction:
 
 ```sh
 bun run spike:z-notes:worker-smoke

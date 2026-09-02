@@ -1,6 +1,6 @@
 // @ts-expect-error The monorepo root is not an initialized Zapp application;
 // the Zapp Vite plugin resolves this generated public module for the spike.
-import { health, NoteState, notes } from "zapp:services";
+import { health, type Note, NoteState, notes } from "zapp:services";
 import { PermissionDeniedError } from "@zappdev/runtime";
 
 declare function __zappWorkerSend(channel: string, payload: string): void;
@@ -9,6 +9,58 @@ interface WorkerBenchmarkConfig {
   directIterations: number;
   publicIterations: number;
   samples: number;
+}
+
+interface NoteIndexRequest {
+  requestId?: string;
+}
+
+function noteIndexRequestId(payload: string): string {
+  try {
+    const request = JSON.parse(payload) as NoteIndexRequest;
+    if (typeof request?.requestId === "string" && request.requestId.length > 0) {
+      return request.requestId;
+    }
+  } catch {}
+  return payload.length > 0 ? payload : "anonymous";
+}
+
+function indexNotes(payload: string): void {
+  const requestId = noteIndexRequestId(payload);
+  __zappWorkerSend("index-started", JSON.stringify({ requestId }));
+  notes.list().then(
+    (values: Note[]) => {
+      let active = 0;
+      let archived = 0;
+      let titleCharacters = 0;
+      for (let index = 0; index < values.length; index += 1) {
+        const note = values[index];
+        if (note.state === NoteState.active) active += 1;
+        else archived += 1;
+        titleCharacters += note.title.length;
+        __zappWorkerSend("index-progress", JSON.stringify({
+          requestId,
+          completed: index + 1,
+          total: values.length,
+          noteId: note.id.toString(),
+          title: note.title,
+        }));
+      }
+      __zappWorkerSend("index-complete", JSON.stringify({
+        requestId,
+        total: values.length,
+        active,
+        archived,
+        titleCharacters,
+      }));
+    },
+    (error: unknown) => {
+      __zappWorkerSend("index-error", JSON.stringify({
+        requestId,
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    },
+  );
 }
 
 function nowMilliseconds(): number {
@@ -122,6 +174,10 @@ function verifyDeniedService(payload: string): void {
 }
 
 export function onMessage(channel: string, payload: string): void {
+  if (channel === "index-notes") {
+    indexNotes(payload);
+    return;
+  }
   if (channel === "benchmark") {
     runWorkerBenchmark(JSON.parse(payload) as WorkerBenchmarkConfig);
     return;

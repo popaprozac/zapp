@@ -1,4 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
+import { CreateNoteInput, NoteState } from "./notes-core.zs";
 import { createHealthService } from "./health-service.zs";
 import { Application } from "zapp";
 import {
@@ -44,7 +45,19 @@ function pingApplicationWorker(
         "worker-manager-smoke"
       );
       match (sent) {
-        success => console.log("worker manager sent ping");
+        success => {
+          console.log("worker manager sent ping");
+          const indexed = attempt activeWorker.send(
+            "index-notes",
+            "native-smoke"
+          );
+          match (indexed) {
+            success => console.log("worker manager requested note index");
+            failure(error) => console.log(
+              `worker manager index failed: ${error.message}`
+            );
+          }
+        }
         failure(error) => console.log(
           `worker manager send failed: ${error.message}`
         );
@@ -115,7 +128,20 @@ function observeApplicationWorkerMessages(
 
 async function main(): i32 on thread.main {
   let app = Application();
-  app.services.register("notes", createNotesService());
+  const notesService = createNotesService();
+  const seeded = attempt await notesService.create(CreateNoteInput({
+    title: "Welcome to Z Notes",
+    subtitle: "Indexed in a Zapp application worker",
+    state: NoteState.active,
+  }));
+  match (seeded) {
+    success(_) => {}
+    failure(error) => {
+      console.log(`could not seed notes: ${error.message}`);
+      return 74;
+    }
+  }
+  app.services.register("notes", move notesService);
   app.services.register("health", createHealthService());
   const workers = app.workers;
   const lifecycleWorkerSubscription = observeApplicationWorker(
