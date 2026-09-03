@@ -1,5 +1,6 @@
 import {
   ApplicationContext,
+  ApplicationPaths,
   ServiceLifecycle,
   ServiceLifecycleError,
   ServiceLifecyclePhase,
@@ -320,11 +321,20 @@ function registeredServiceLifecycle(
 
 function main(): i32 {
   const lifetime = lifecycleTrace.initialize(createTrace());
+  let arguments = Array<String>();
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
       name: "Lifecycle smoke",
       identifier: "com.zapp.lifecycle-smoke",
       version: "0.1.0",
+    }),
+    arguments: arguments.freeze(),
+    paths: ApplicationPaths({
+      executable: "/tmp/zapp-service-lifecycle",
+      resources: "/tmp",
+      data: "/tmp/zapp-service-lifecycle/data",
+      config: "/tmp/zapp-service-lifecycle/config",
+      cache: "/tmp/zapp-service-lifecycle/cache",
     }),
   });
   if (!normalLifecycle(in context)) return 1;

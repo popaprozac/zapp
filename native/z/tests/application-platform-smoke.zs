@@ -12,16 +12,38 @@ import { createWindowManager } from "../framework/window.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { createWorkerManager } from "../framework/worker/worker-manager.zs";
 import { createApplicationEvents } from "../framework/application-events.zs";
+import {
+  ApplicationContext,
+  ApplicationPaths,
+} from "../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
   let profiles = Map<String, CapabilityProfile>();
+  let arguments = Array<String>();
+  let services = createAsyncServices();
+  let lifecycles = createServiceLifecycles();
   const config = new PreparedApplication({
     metadata: ApplicationMetadata({
       name: "Headless",
       identifier: "com.zapp.headless",
       version: "0.1.0",
+    }),
+    context: ApplicationContext({
+      metadata: ApplicationMetadata({
+        name: "Headless",
+        identifier: "com.zapp.headless",
+        version: "0.1.0",
+      }),
+      arguments: arguments.freeze(),
+      paths: ApplicationPaths({
+        executable: "/tmp/zapp-headless",
+        resources: "/tmp",
+        data: "/tmp/zapp-headless/data",
+        config: "/tmp/zapp-headless/config",
+        cache: "/tmp/zapp-headless/cache",
+      }),
     }),
     permissions: ApplicationPermissions(),
     capabilities: new ApplicationCapabilities({
@@ -29,8 +51,8 @@ async function main(): i32 on thread.main {
     }),
     events: createApplicationEvents(),
     windows: createWindowManager(),
-    services: createAsyncServices().freeze(),
-    lifecycles: createServiceLifecycles().freeze(),
+    services: services.freeze(),
+    lifecycles: lifecycles.freeze(),
     workers: createWorkerManager(emptyApplicationWorkerCatalog()),
   });
   const updates = new TaskScope();

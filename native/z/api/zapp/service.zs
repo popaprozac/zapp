@@ -1,8 +1,18 @@
 import { ApplicationMetadata } from "../../framework/application-metadata.zs";
 import { thread } from "std/thread";
 
+export readonly struct ApplicationPaths {
+  executable: String;
+  resources: String;
+  data: String;
+  config: String;
+  cache: String;
+}
+
 export readonly struct ApplicationContext {
   metadata: ApplicationMetadata;
+  arguments: readonly Array<String>;
+  paths: ApplicationPaths;
 }
 
 export enum ServiceLifecyclePhase {

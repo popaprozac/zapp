@@ -322,6 +322,17 @@ describe("Z native host inputs", () => {
       "desktop",
       "/app/main.zs",
       "/native",
+      undefined,
+      {},
+      false,
+      "13.5",
+    ))).toMatchObject({
+      target: { minimumVersion: "13.5" },
+    });
+    expect(JSON.parse(renderZNativeManifest(
+      "desktop",
+      "/app/main.zs",
+      "/native",
       "/workspace/native/z",
     ))).toMatchObject({
       dependencies: {
@@ -562,6 +573,13 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/application-contract.zs", import.meta.url),
       "utf8",
     );
+    const publication = readFileSync(
+      new URL(
+        "../../native/z/framework/application-publication.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const applicationEvents = readFileSync(
       new URL("../../native/z/framework/application-events.zs", import.meta.url),
       "utf8",
@@ -662,9 +680,10 @@ describe("Z native host inputs", () => {
     expect(app).toContain("const app = new Application();");
     expect(app).not.toContain("function createApplication(): Application on thread.main");
     expect(application).toContain("readonly metadata: ApplicationMetadata;");
-    expect(application).toContain(
-      "this.metadata = configuredApplicationMetadata();",
-    );
+    expect(application).toContain("readonly context: ApplicationContext;");
+    expect(application).toContain("const metadata = configuredApplicationMetadata();");
+    expect(application).toContain("this.context = createApplicationContext(in metadata);");
+    expect(application).toContain("this.metadata = move metadata;");
     expect(app).toContain("const notesService = createNotesService();");
     expect(app).toContain("const notesRegistered = attempt app.services.register(");
     expect(app).toContain("const healthRegistered = attempt app.services.register(");
@@ -674,6 +693,14 @@ describe("Z native host inputs", () => {
     expect(application).toContain("constructor()");
     expect(application).toContain("static function current(): Application");
     expect(application).toContain("const currentApplication = Once<Application>();");
+    expect(application).toContain("const publicationState = currentApplication.state();");
+    expect(application).toContain(
+      "try requireApplicationPublicationState(publicationState);",
+    );
+    expect(publication).toContain("state: ApplicationState.running");
+    expect(publication).toContain("Another Application.run() is already active");
+    expect(publication).toContain("state: ApplicationState.stopped");
+    expect(publication).toContain("cannot publish a new application after process shutdown");
     expect(application).toContain("function state(): ApplicationState on thread.main");
     expect(application).toContain("readonly events: ApplicationEvents;");
     expect(application).toContain("function quit(): void on thread.main");
@@ -705,6 +732,7 @@ describe("Z native host inputs", () => {
     expect(application).toContain("synchronous: routes");
     expect(application).toContain("lifecycles,");
     expect(contract).toContain("export readonly class PreparedApplication on thread.main");
+    expect(contract).toContain("readonly context: ApplicationContext");
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(contract).toContain("readonly events: ApplicationEvents");
     expect(platform).toContain("export async function runApplicationPlatform(");

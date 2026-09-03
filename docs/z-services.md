@@ -127,6 +127,23 @@ lifecycle failures remain typed as its `lifecycle` variant, while window and
 platform setup failures use `window` and `platform`. This keeps one application
 boundary without flattening the underlying failure contracts into integers.
 
+Every `Application` also exposes one immutable runtime snapshot:
+
+```z
+const app = new Application();
+const dataDirectory = app.context.paths.data;
+const arguments = app.context.arguments;
+```
+
+`ApplicationContext` contains the generated `ApplicationMetadata`, a readonly
+owned snapshot of process arguments, and `ApplicationPaths` for the executable,
+resources, persistent data, configuration, and caches. On macOS the data and
+config paths live below the application's identifier in Application Support,
+while cache uses the matching Caches directory. Paths describe stable locations;
+services create the directories they actually use. The same snapshot is passed
+to every lifecycle hook, so framework code does not need a second global lookup
+or environment-specific path logic.
+
 ## Lifecycle is explicit and exceptional
 
 Most services do not need framework lifecycle hooks. They acquire owned
@@ -189,7 +206,7 @@ Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
 embedded-engine calls; storing main-only lifecycle callables inside it would
 make the entire fast path main-isolated. `Application.run()` is async,
-freezes both stores, creates the immutable `ApplicationContext`, starts
+freezes both stores, snapshots the application's immutable `ApplicationContext`, starts
 lifecycle services before entering the platform run loop, then cancels and
 joins every accepted callback-created operation before stopping services after
 the loop returns.

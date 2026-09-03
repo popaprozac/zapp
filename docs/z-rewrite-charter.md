@@ -188,7 +188,8 @@ worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
 `Application.run()` prepares its generated metadata and services into
-an immutable `PreparedApplication`, creates the application `TaskScope`, then calls the single
+an immutable `PreparedApplication`, including the readonly process/path
+`ApplicationContext`, creates the application `TaskScope`, then calls the single
 selected `platform.zs` module. That module must export
 the following contract:
 

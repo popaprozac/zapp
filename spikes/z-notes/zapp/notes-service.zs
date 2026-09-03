@@ -16,6 +16,7 @@ import {
   createNotesCore,
 } from "./notes-core.zs";
 import console from "std/console";
+import fs from "std/fs";
 
 export struct NoteCreationError {
   message: String;
@@ -24,6 +25,7 @@ export struct NoteCreationError {
 
 class NotesCatalog on thread.main {
   notes: Array<Note>;
+  dataDirectory: String;
 
   function add(inout this, note: Note): void {
     this.notes.push(move note);
@@ -31,6 +33,10 @@ class NotesCatalog on thread.main {
 
   function list(): Array<Note> {
     return copy this.notes;
+  }
+
+  function configureDataDirectory(inout this, path: String): void {
+    this.dataDirectory = move path;
   }
 }
 
@@ -103,6 +109,17 @@ export readonly class NotesService implements ServiceLifecycle {
         message: "current application identity was not published before startup",
       });
     }
+    const directoryReady = attempt fs.createDirectories(context.paths.data);
+    match (directoryReady) {
+      success => {}
+      failure(error) => throw ServiceLifecycleError({
+        service: "notes",
+        phase: ServiceLifecyclePhase.start,
+        message: `could not prepare ${context.paths.data}: ${error}`,
+      });
+    }
+    const catalog = this.catalog;
+    catalog.configureDataDirectory(copy context.paths.data);
     console.log(`${context.metadata.name}: notes service started`);
   }
 
@@ -116,6 +133,9 @@ export readonly class NotesService implements ServiceLifecycle {
 export function createNotesService(): NotesService on thread.main {
   return new NotesService({
     core: createNotesCore(),
-    catalog: new NotesCatalog({ notes: Array<Note>() }),
+    catalog: new NotesCatalog({
+      notes: Array<Note>(),
+      dataDirectory: "",
+    }),
   });
 }

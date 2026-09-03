@@ -124,6 +124,15 @@ The platform spellings in authored maps are `macOS`, `iOS`, `windows`, and
 dropping target-specific configuration. Target packaging blocks are exposed as
 their implementations become real; macOS and iOS are currently typed.
 
+`targets.macOS.minimumSystemVersion` is also the deployment floor for every
+native object linked into the application, not only generated Z and Objective-C
+source. During local development Zapp rebuilds the default sibling ZJS static
+archive when its recorded deployment target differs from the application target.
+An explicit `ZAPP_ZJS_LIBRARY` override remains an embedder-owned artifact and
+must already be compatible with the configured floor. This prevents a seemingly
+valid app target from silently linking worker-engine objects built for a newer
+macOS release.
+
 ## Worker authority and lifetime
 
 `workers.application` contains workers that start after registered services and
@@ -325,6 +334,11 @@ separately into immutable application policy, so descriptive metadata never
 becomes an authorization surface. `new Application()` receives both generated
 values by default, and application source cannot replace policy with data from
 a WebView.
+
+At runtime the application combines that metadata with process arguments and
+platform-resolved executable, resource, data, config, and cache paths in
+`app.context`. These are runtime facts rather than authoring configuration and
+therefore do not belong in `zapp.config.ts`.
 
 Runtime behavior does not belong in configuration. Services, windows, menus,
 lifecycle hooks, and mutable state remain ordinary Z source.

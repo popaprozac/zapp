@@ -54,4 +54,9 @@ export default defineConfig({
       } : {}),
     },
   },
+  targets: {
+    macOS: {
+      minimumSystemVersion: "14.0",
+    },
+  },
 });

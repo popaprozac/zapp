@@ -1,9 +1,5 @@
 import { PreparedApplication } from "../application-contract.zs";
 import { ApplicationError } from "../application-error.zs";
-import { ApplicationMetadata } from "../application-metadata.zs";
-import {
-  ApplicationContext,
-} from "../../api/zapp/service.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
 import { Once, OnceLifetime } from "std/sync";
@@ -111,6 +107,7 @@ export async function runApplicationPlatform(
   config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
+  const context = config.contextSnapshot();
   const runtime = new HeadlessApplicationRuntime({
     updates,
     exitStatus: 0,
@@ -118,13 +115,6 @@ export async function runApplicationPlatform(
   });
   const runtimeLifetime = installHeadlessApplicationRuntime(runtime);
   if (runtime.configuredNameBytes == 0) return 64;
-  const context = ApplicationContext({
-    metadata: ApplicationMetadata({
-      name: copy config.metadata.name,
-      identifier: copy config.metadata.identifier,
-      version: copy config.metadata.version,
-    }),
-  });
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}

@@ -27,7 +27,14 @@ import {
   WorkerManager,
   createWorkerManager,
 } from "../framework/worker/worker-manager.zs";
-import { runApplicationPlatform } from "../framework/platform.zs";
+import {
+  createApplicationContext,
+  runApplicationPlatform,
+} from "../framework/platform.zs";
+import {
+  ApplicationContext as FrameworkApplicationContext,
+  ApplicationPaths as FrameworkApplicationPaths,
+} from "./zapp/service.zs";
 import {
   ApplicationServices as FrameworkApplicationServices,
   ServiceRegistrationError as FrameworkServiceRegistrationError,
@@ -35,7 +42,10 @@ import {
 } from "../framework/application-services.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
-import { Once, OnceState } from "std/sync";
+import { Once } from "std/sync";
+import {
+  requireApplicationPublicationState,
+} from "../framework/application-publication.zs";
 import {
   WindowManager,
   createWindowManager,
@@ -45,6 +55,8 @@ export type ApplicationError = FrameworkApplicationError;
 export type ApplicationState = FrameworkApplicationState;
 export type ApplicationStateError = FrameworkApplicationStateError;
 export type ApplicationMetadata = FrameworkApplicationMetadata;
+export type ApplicationContext = FrameworkApplicationContext;
+export type ApplicationPaths = FrameworkApplicationPaths;
 export type ApplicationServices = FrameworkApplicationServices;
 export type ServiceRegistrationError = FrameworkServiceRegistrationError;
 export type ApplicationEvents = FrameworkApplicationEvents;
@@ -100,29 +112,12 @@ struct ApplicationRunLifetime on thread.main {
   }
 }
 
-function requireApplicationPublication(): void throws ApplicationError on thread.main {
-  match (currentApplication.state()) {
-    empty => {}
-    initialized => throw FrameworkApplicationError.state(
-      FrameworkApplicationStateError({
-        state: FrameworkApplicationState.running,
-        message: "Another Application.run() is already active in this process",
-      })
-    );
-    closed => throw FrameworkApplicationError.state(
-      FrameworkApplicationStateError({
-        state: FrameworkApplicationState.stopped,
-        message: "Application.run() cannot publish a new application after process shutdown",
-      })
-    );
-  }
-}
-
 // One stable application identity owns stable manager identities. The scalar
 // main-affine marker routes final ARC release to the application's executor
 // without making harmless metadata methods main-only.
 export readonly class Application {
   readonly metadata: ApplicationMetadata;
+  readonly context: ApplicationContext;
   readonly permissions: ApplicationPermissions;
   readonly capabilities: ApplicationCapabilities;
   readonly events: ApplicationEvents;
@@ -133,7 +128,9 @@ export readonly class Application {
   internal readonly lifecycleMarker: i32 on thread.main;
 
   constructor() {
-    this.metadata = configuredApplicationMetadata();
+    const metadata = configuredApplicationMetadata();
+    this.context = createApplicationContext(in metadata);
+    this.metadata = move metadata;
     this.permissions = configuredApplicationPermissions();
     this.capabilities = configuredApplicationCapabilities();
     this.events = createApplicationEvents();
@@ -167,7 +164,8 @@ export readonly class Application {
       runState: applicationState,
       events: this.events,
     });
-    try requireApplicationPublication();
+    const publicationState = currentApplication.state();
+    try requireApplicationPublicationState(publicationState);
     const sourceApplication = this;
     const config = prepareApplication(in sourceApplication);
     const publishedApplication = this;
@@ -182,10 +180,37 @@ const currentApplication = Once<Application>();
 function prepareApplication(
   in app: Application
 ): PreparedApplication on thread.main {
+  let contextArguments = Array<String>();
+  let contextArgumentIndex: usize = 0;
+  while (contextArgumentIndex < app.context.arguments.length) {
+    const argumentLength: usize =
+      app.context.arguments[contextArgumentIndex].byteLength;
+    contextArguments.push(
+      app.context.arguments[contextArgumentIndex].copyBytes(0, argumentLength)
+    );
+    contextArgumentIndex = contextArgumentIndex + 1;
+  }
   const metadata = ApplicationMetadata({
     name: copy app.metadata.name,
     identifier: copy app.metadata.identifier,
     version: copy app.metadata.version,
+  });
+  const contextMetadata = ApplicationMetadata({
+    name: copy app.context.metadata.name,
+    identifier: copy app.context.metadata.identifier,
+    version: copy app.context.metadata.version,
+  });
+  const paths = FrameworkApplicationPaths({
+    executable: copy app.context.paths.executable,
+    resources: copy app.context.paths.resources,
+    data: copy app.context.paths.data,
+    config: copy app.context.paths.config,
+    cache: copy app.context.paths.cache,
+  });
+  const context = FrameworkApplicationContext({
+    metadata: move contextMetadata,
+    arguments: contextArguments.freeze(),
+    paths: move paths,
   });
   const permissions = app.permissions;
   const capabilities = app.capabilities;
@@ -196,6 +221,7 @@ function prepareApplication(
   const { routes, asynchronous, lifecycles } = services.prepare();
   return new PreparedApplication({
     metadata: move metadata,
+    context: move context,
     permissions,
     capabilities,
     events,

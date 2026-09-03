@@ -75,8 +75,11 @@ async function main(): i32 on thread.main {
 
 The notes lifecycle hook also retrieves `Application.current()` during startup
 and verifies that it is the same configured application now in the `running`
-state. After the platform loop exits, the smoke checks that the retained `app`
-identity has transitioned to `stopped`.
+state. It creates `context.paths.data` before accepting work and retains that
+platform-resolved location in the service catalog, demonstrating that ordinary
+application code no longer hardcodes macOS directories. After the platform loop
+exits, the smoke checks that the retained `app` identity has transitioned to
+`stopped`.
 
 The public application identity also owns cancellable shutdown observation:
 

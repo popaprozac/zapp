@@ -3,9 +3,7 @@ import {
   ApplicationError,
   WindowError,
 } from "../../application-error.zs";
-import { ApplicationMetadata } from "../../application-metadata.zs";
 import { ApplicationQuitOperation } from "../../application-events.zs";
-import { ApplicationContext } from "../../../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 import {
@@ -43,6 +41,7 @@ export async function runMacOSApplication(
   config: PreparedApplication,
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
+  const context = config.contextSnapshot();
   let windows = config.windows;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
@@ -52,13 +51,6 @@ export async function runMacOSApplication(
     }));
   }
   const hostLifetime = initializeMacOSApplicationHost(config.events);
-  const context = ApplicationContext({
-    metadata: ApplicationMetadata({
-      name: copy config.metadata.name,
-      identifier: copy config.metadata.identifier,
-      version: copy config.metadata.version,
-    }),
-  });
   let workerManager = config.workers;
   const lifetime = initializeMacOSApplicationRuntime(
     copy config.metadata.name,

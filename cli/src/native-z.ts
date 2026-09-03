@@ -376,6 +376,7 @@ export function renderZNativeManifest(
   packageDirectory?: string,
   application: ZNativeLinkRequirements = {},
   desktopSmokeSupport = false,
+  minimumVersion = "14.0",
 ): string {
   const unique = (values: string[]): string[] => [...new Set(values)];
   const target = host === "desktop"
@@ -383,7 +384,7 @@ export function renderZNativeManifest(
       name: "zapp_core",
       entry,
       platform: "macos",
-      minimumVersion: "14.0",
+      minimumVersion,
       includeDirectories: unique([
         nativeDirectory,
         ...(application.includeDirectories ?? []),
@@ -406,7 +407,7 @@ export function renderZNativeManifest(
       name: "zapp_core",
       entry,
       platform: "macos",
-      minimumVersion: "14.0",
+      minimumVersion,
       includeDirectories: [nativeDirectory],
       runtime: { initialize: "initializeApplication" },
     };
@@ -490,14 +491,37 @@ function mergeZNativeLinkRequirements(
   };
 }
 
-function resolveZjsDevelopmentArtifacts(repositoryRoot: string): {
+async function resolveZjsDevelopmentArtifacts(
+  repositoryRoot: string,
+  minimumVersion: string,
+): Promise<{
   includeDirectory: string;
   libraryDirectory: string;
-} {
-  const library = process.env.ZAPP_ZJS_LIBRARY
-    ?? path.resolve(repositoryRoot, "../zjs/build/libzjs.a");
+}> {
+  const overriddenLibrary = process.env.ZAPP_ZJS_LIBRARY;
+  const zjsRepository = path.resolve(repositoryRoot, "../zjs");
+  const library = overriddenLibrary
+    ?? path.join(zjsRepository, "build/libzjs.a");
   const includeDirectory = process.env.ZAPP_ZJS_INCLUDE
     ?? path.resolve(path.dirname(library), "../include");
+  if (!overriddenLibrary && existsSync(path.join(zjsRepository, "Makefile"))) {
+    const targetStamp = path.join(zjsRepository, "build/.macos-deployment-target");
+    const recordedTarget = existsSync(targetStamp)
+      ? (await readFile(targetStamp, "utf8")).trim()
+      : "";
+    if (!existsSync(library) || recordedTarget !== minimumVersion) {
+      console.log(
+        `[zapp] building ZJS development archive for macOS ${minimumVersion}`,
+      );
+      await run([
+        "make",
+        "stdlib-embed",
+        "lib-static",
+        "ZJS_TIER=minimal",
+        `MACOSX_DEPLOYMENT_TARGET=${minimumVersion}`,
+      ], zjsRepository);
+    }
+  }
   if (!existsSync(library) || !existsSync(path.join(includeDirectory, "zjs.h"))) {
     throw new Error(
       "[zapp] a configured native Z application worker requires the ZJS "
@@ -533,14 +557,18 @@ async function stageZApplicationWorkerRuntime(
     await cp(builtModule, destination);
   }
 
-  const zjs = resolveZjsDevelopmentArtifacts(path.resolve(options.nativeDir, ".."));
+  const minimumVersion = options.config.macos?.minimumSystemVersion ?? "14.0";
+  const zjs = await resolveZjsDevelopmentArtifacts(
+    path.resolve(options.nativeDir, ".."),
+    minimumVersion,
+  );
   const adapterDirectory = path.join(source, "framework", "worker", "zjs");
   const adapterObject = path.join(stage, "zapp_worker_zjs.o");
   const adapterArchive = path.join(stage, "libzapp_worker_zjs.a");
   await run([
     "clang",
     "-O2",
-    "-mmacosx-version-min=14.0",
+    `-mmacosx-version-min=${minimumVersion}`,
     "-I",
     zjs.includeDirectory,
     "-I",
@@ -960,6 +988,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       `[zapp] the Phase 0 Z native core currently supports target "macos", not ${JSON.stringify(options.target)}.`,
     );
   }
+  const minimumVersion = options.config.macos?.minimumSystemVersion ?? "14.0";
 
   const source = path.join(options.nativeDir, "z");
   const appSource = path.join(options.root, "zapp");
@@ -1064,6 +1093,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       path.join(workspace, "native", "z"),
       applicationLinkRequirements,
       desktopSmokeSupport,
+      minimumVersion,
     ),
     "utf8",
   );
@@ -1201,6 +1231,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
           workerLinkRequirements,
         ),
         desktopSmokeSupport,
+        minimumVersion,
       ),
       "utf8",
     );
@@ -1352,7 +1383,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       clang,
       "-fobjc-arc",
       "-fblocks",
-      "-mmacosx-version-min=14.0",
+      `-mmacosx-version-min=${minimumVersion}`,
       options.optimize ? "-Oz" : "-O0",
       "-Wall",
       "-Wextra",
@@ -1395,7 +1426,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   await run([
     clang,
     "-std=c11",
-    "-mmacosx-version-min=14.0",
+    `-mmacosx-version-min=${minimumVersion}`,
     options.optimize ? "-Oz" : "-O0",
     "-Wall",
     "-Wextra",
