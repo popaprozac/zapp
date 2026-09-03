@@ -29,6 +29,7 @@ export struct Note {
 
 struct NotesState {
   nextId: u64;
+  count: u64;
 }
 
 export struct CreateNoteInput {
@@ -48,19 +49,40 @@ export readonly class NotesCore {
     const { title, subtitle, state } = move input;
     const id = this.state.withLock((inout state): u64 => {
       state.nextId = state.nextId + 1;
+      state.count = state.count + 1;
       return state.nextId - 1;
     });
     return Note({ id, title: move title, subtitle: move subtitle, state });
   }
 
   function count(): u64 {
-    return this.state.withLock((in state): u64 => state.nextId - 1);
+    return this.state.withLock((in state): u64 => state.count);
+  }
+
+  function restore(in notes: Array<Note>): void {
+    let highestId: u64 = 0;
+    for (const note of notes) {
+      if (note.id > highestId) highestId = note.id;
+    }
+    this.state.withLock((inout state): void => {
+      state.nextId = highestId + 1;
+      state.count = u64(notes.length);
+    });
+  }
+
+  function revertLastCreate(id: u64): void {
+    this.state.withLock((inout state): void => {
+      if (state.nextId == id + 1 && state.count > 0) {
+        state.nextId = id;
+        state.count = state.count - 1;
+      }
+    });
   }
 }
 
 export function createNotesCore(): NotesCore {
   return new NotesCore({
-    state: Mutex(NotesState({ nextId: 1 })),
+    state: Mutex(NotesState({ nextId: 1, count: 0 })),
   });
 }
 

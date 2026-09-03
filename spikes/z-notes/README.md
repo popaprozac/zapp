@@ -18,6 +18,8 @@ zapp/
 ├── embedded.zs       # strict-C embedding entry used by the regression host
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
 ├── notes-service.zs  # suspending service and lifecycle adapter
+├── notes-persistence.zs # application-owned SQLite storage
+├── sqlite3.h.zd      # checked SQLite ownership/status/text contract
 ├── health-service.zs # sync-only value service
 └── sync-notes-service.zs # allocation-lean strict-C adapter
 frontend/
@@ -75,11 +77,16 @@ async function main(): i32 on thread.main {
 
 The notes lifecycle hook also retrieves `Application.current()` during startup
 and verifies that it is the same configured application now in the `running`
-state. It creates `context.paths.data` before accepting work and retains that
-platform-resolved location in the service catalog, demonstrating that ordinary
-application code no longer hardcodes macOS directories. After the platform loop
-exits, the smoke checks that the retained `app` identity has transitioned to
-`stopped`.
+state. It creates `context.paths.data`, opens one application-owned SQLite
+database at `notes.sqlite3`, restores prior notes and their next ID, and seeds a
+welcome note only when the database is empty. The service retains the native
+handle for its full lifecycle and releases it deterministically during stop.
+This demonstrates that ordinary application code neither hardcodes macOS
+directories nor repeatedly opens native storage for each request. The app's
+`z.json` declares `sqlite3` because it is a native dependency of Z source,
+while `zapp.config.ts` remains concerned with framework/product configuration.
+After the platform loop exits, the smoke checks that the retained `app`
+identity has transitioned to `stopped`.
 
 The public application identity also owns cancellable shutdown observation:
 
@@ -174,9 +181,11 @@ cancellation and joins the worker before those services stop. The UI's
 load an owned `Array<Note>` through the generated service API, analyze the
 actual titles off the WebView thread, and publish progress plus a summary. The
 same output is independently observable through native Z's `worker.messages`
-and the authorized WebView subscription. A welcome note seeded by native Z
-makes the automated path exercise a real `Note` value rather than an empty
-collection; notes created from either WebView appear in later manual indexes.
+and the authorized WebView subscription. A welcome note seeded by native Z on
+the first launch makes the automated path exercise a real `Note` value rather
+than an empty collection. Notes created from either WebView are stored before
+publication, appear in later manual indexes, and reload on the next packaged
+launch.
 
 The indexer also exercises Z-authored worker protocols rather than duplicating
 payload interfaces by hand. `zapp/note-indexer-protocol.zs` declares exported

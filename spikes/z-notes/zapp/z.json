@@ -6,6 +6,9 @@
     "name": "zapp-z-notes",
     "entry": "main.zs",
     "platform": "macos",
-    "minimumVersion": "14.0"
+    "minimumVersion": "14.0",
+    "link": {
+      "libraries": ["sqlite3"]
+    }
   }
 }

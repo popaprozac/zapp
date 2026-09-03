@@ -1,0 +1,59 @@
+declare module "sqlite3.h" {
+  export function sqlite3_open(
+    in filename: _,
+    out ppDb: _ | null {
+      deinit sqlite3_close;
+    }
+  ): void throws _ {
+    success 0;
+  }
+
+  export function sqlite3_close(move database: _): _;
+
+  export function sqlite3_prepare_v2(
+    in db: _,
+    in zSql: _,
+    nByte: _,
+    out ppStmt: _ | null {
+      deinit sqlite3_finalize;
+    },
+    pzTail: null
+  ): void throws _ {
+    success 0;
+  }
+
+  export function sqlite3_step(in pStmt: _): _ {
+    invalidates pStmt;
+  }
+
+  export function sqlite3_finalize(move pStmt: _): _;
+
+  export function sqlite3_bind_int64(
+    in pStmt: _,
+    i: _,
+    iValue: _
+  ): void throws _ {
+    success 0;
+  }
+
+  export function sqlite3_bind_text(
+    in pStmt: _,
+    i: _,
+    in zData: _,
+    nData: _,
+    xDel: _ {
+      fixed SQLITE_TRANSIENT;
+    }
+  ): void throws _ {
+    success 0;
+  }
+
+  export function sqlite3_bind_null(in pStmt: _, i: _): void throws _ {
+    success 0;
+  }
+
+  export function sqlite3_column_int64(in pStmt: _, iCol: _): _;
+  export function sqlite3_column_text(in pStmt: _, iCol: _): view cstring | null {
+    borrowed from pStmt;
+  }
+}

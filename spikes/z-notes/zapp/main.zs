@@ -1,5 +1,4 @@
 import { createNotesService } from "./notes-service.zs";
-import { CreateNoteInput, NoteState } from "./notes-core.zs";
 import { createHealthService } from "./health-service.zs";
 import {
   IndexNotes,
@@ -187,18 +186,6 @@ function observeTypedNoteIndexerMessages(
 async function main(): i32 on thread.main {
   const app = new Application();
   const notesService = createNotesService();
-  const seeded = attempt await notesService.create(CreateNoteInput({
-    title: "Welcome to Z Notes",
-    subtitle: "Indexed in a Zapp application worker",
-    state: NoteState.active,
-  }));
-  match (seeded) {
-    success(_) => {}
-    failure(error) => {
-      console.log(`could not seed notes: ${error.message}`);
-      return 74;
-    }
-  }
   const notesRegistered = attempt app.services.register(
     "notes",
     move notesService
