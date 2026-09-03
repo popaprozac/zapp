@@ -90,6 +90,12 @@ export interface ZWorkerProtocolManifest {
   enums: ZServiceEnumMetadata[];
 }
 
+export interface ZWorkerProtocolUse {
+  workerId: string;
+  module: string;
+  offset: number;
+}
+
 const scalarTypes = new Set([
   "String",
   "boolean",
@@ -526,6 +532,56 @@ export function deriveZWorkerProtocolManifest(
     types,
     enums,
   };
+}
+
+/** Resolve typed WorkerManager.get(marker) calls to configured protocols. */
+export function deriveZWorkerProtocolUses(
+  metadata: ZProgramMetadata,
+  protocols: readonly ZWorkerProtocolManifest[],
+): ZWorkerProtocolUse[] {
+  const byShape = new Map<string, ZWorkerProtocolManifest[]>();
+  for (const protocol of protocols) {
+    const key = `${protocol.commandType}\0${protocol.messageType}`;
+    const entries = byShape.get(key) ?? [];
+    entries.push(protocol);
+    byShape.set(key, entries);
+  }
+  return metadata.modules.flatMap((module) => module.calls
+    .filter((call) => (
+      call.target.symbol === "WorkerManager"
+      && call.target.kind === "method"
+      && call.target.name === "WorkerManager.get"
+    ))
+    .map((call) => {
+      if (call.arguments.length !== 1) {
+        throw new Error("[zapp] typed WorkerManager.get requires one WorkerProtocol marker");
+      }
+      const shape = workerProtocolArguments(call.arguments[0].type);
+      if (!shape) {
+        throw new Error(
+          "[zapp] typed WorkerManager.get requires a WorkerProtocol<Command, Message> marker",
+        );
+      }
+      const matches = byShape.get(`${shape[0]}\0${shape[1]}`) ?? [];
+      if (matches.length === 0) {
+        throw new Error(
+          `[zapp] no configured application worker uses protocol `
+          + `WorkerProtocol<${shape[0]}, ${shape[1]}>`,
+        );
+      }
+      if (matches.length > 1) {
+        throw new Error(
+          `[zapp] protocol WorkerProtocol<${shape[0]}, ${shape[1]}> is configured for `
+          + `${matches.map((match) => JSON.stringify(match.workerId)).join(", ")}; `
+          + "typed lookup currently requires one configured worker per protocol",
+        );
+      }
+      return {
+        workerId: matches[0].workerId,
+        module: module.path,
+        offset: call.offset,
+      };
+    }));
 }
 
 export function zServiceMethodId(qualifiedName: string): number {

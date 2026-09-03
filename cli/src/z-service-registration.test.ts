@@ -168,4 +168,60 @@ function main(): i32 {
       .toBe("WorkerServicesBuilder.registerGenerated");
     rmSync(directory, { recursive: true, force: true });
   });
+
+  it("merges typed worker modules and call adapters into the checked overlay", async () => {
+    const directory = mkdtempSync("/tmp/zapp-worker-registration-");
+    const application = path.join(directory, "app", "main.zs");
+    const generatedServices = path.join(directory, "generated", "services.zs");
+    const generatedWorkers = path.join(directory, "generated", "workers.zs");
+    const overlayPath = path.join(directory, "generated", "registration.zbuild.json");
+    mkdirSync(path.dirname(application), { recursive: true });
+    mkdirSync(path.dirname(generatedServices), { recursive: true });
+    const source = "const worker = app.workers.get(IndexProtocol());\n";
+    writeFileSync(application, source);
+    writeFileSync(generatedServices, "");
+    writeFileSync(generatedWorkers, "");
+    const emptyManifest = manifestFor(source, application);
+    emptyManifest.services = [];
+    await generateZServiceRegistrationOverlay(
+      emptyManifest,
+      generatedServices,
+      overlayPath,
+      undefined,
+      {
+        modules: [{
+          specifier: "zapp/generated/worker-protocols",
+          source: generatedWorkers,
+          packageName: "zapp",
+        }],
+        callAdapters: [{
+          source: application,
+          offset: source.indexOf("get") + "get".length,
+          target: "WorkerManager.get",
+          replacement: "WorkerManager.getGenerated",
+          argument: 0,
+          adapterModule: "zapp/generated/worker-protocols",
+          adapterExport: "__zappAdaptIndexWorkerProtocol",
+        }],
+      },
+    );
+    const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    expect(overlay.modules["zapp/generated/worker-protocols"]).toEqual({
+      source: "./workers.zs",
+      package: "zapp",
+    });
+    expect(overlay.callAdapters).toEqual([{
+      source: "../app/main.zs",
+      sourceHash: createHash("sha256").update(source).digest("hex"),
+      offset: source.indexOf("get") + "get".length,
+      target: "WorkerManager.get",
+      replacement: "WorkerManager.getGenerated",
+      argument: 0,
+      adapter: {
+        module: "zapp/generated/worker-protocols",
+        export: "__zappAdaptIndexWorkerProtocol",
+      },
+    }]);
+    rmSync(directory, { recursive: true, force: true });
+  });
 });

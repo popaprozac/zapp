@@ -8,7 +8,7 @@
     "exports": {
       "./window": "api/zapp/window.zs",
       "./service": "api/zapp/service.zs",
-      "./worker": "api/zapp/worker.zs"
+      "./worker": "framework/worker/worker-manager.zs"
     },
     "native": {
       "includeDirectories": [

@@ -223,15 +223,22 @@ task rather than merely dropping the JavaScript result. The focused
 Native Z code uses the application-owned `app.workers` manager. Configured
 handles exist before `app.run()`, so subscriptions can observe startup; engine
 dispatch becomes available during the run and fails with a typed error outside
-that lifetime:
+that lifetime. The protocol marker selects the configured worker and gives Z a
+typed command/message facade without repeating its id or wire channels:
 
 ```zs
 import {
   ApplicationWorkerEvent,
-  ApplicationWorkerMessage,
+  ApplicationWorkerProtocolError,
 } from "zapp/worker";
+import {
+  IndexNotes,
+  NoteIndexerCommand,
+  NoteIndexerMessage,
+  NoteIndexerProtocol,
+} from "./note-indexer-protocol.zs";
 
-const selected = app.workers.get("noteIndexer");
+const selected = app.workers.get(NoteIndexerProtocol());
 const worker = match (selected) {
   some(value) => value;
   none => return 1;
@@ -251,14 +258,37 @@ const lifecycleSubscription = try worker.events.all.subscribe(
   }
 );
 const messageSubscription = try worker.messages.subscribe(
-  move (in message: ApplicationWorkerMessage): void => {
-    match (message.channel) {
-      "progress" => console.log(message.payload);
-      "complete" => console.log(message.payload);
-      _ => {}
-    }
+  move (
+    in received: Result<NoteIndexerMessage, ApplicationWorkerProtocolError>
+  ): void => match (in received) {
+    success(message) => match (in message) {
+      started(value) => console.log(`started ${value.requestId}`);
+      progress(value) => console.log(
+        `${value.completed}/${value.total}`
+      );
+      complete(value) => console.log(`indexed ${value.total}`);
+      failed(value) => console.log(value.message);
+    };
+    failure(error) => console.log(
+      `protocol error on ${error.channel}: ${error.message}`
+    );
   }
 );
+
+const sent = attempt worker.send(
+  NoteIndexerCommand.indexNotes(IndexNotes({ requestId: "native-smoke" }))
+);
+match (sent) {
+  success => console.log("index requested");
+  failure(error) => console.log(error.message);
+}
+
+// Explicit escape hatch for an undeclared diagnostic channel.
+const raw = app.workers.getRaw("noteIndexer");
+match (raw) {
+  some(handle) => try handle.send("manager-ping", "smoke");
+  none => {}
+}
 
 return try await app.run();
 ```
@@ -269,12 +299,13 @@ destructuring and local aliases such as
 `thread.main`; focused events avoid unnecessary matching, while `events.all`
 supports one exhaustive observer. Subscriptions own their registration and
 automatically unsubscribe at lexical cleanup, or may call `unsubscribe()`
-early. `worker.send(channel, payload)` is available while `app.run()` owns the
+early. Typed `worker.send(command)` is available while `app.run()` owns the
 active engine controls; Z Notes exercises it from the `started` lifecycle arm.
-`worker.messages` carries application data rather than lifecycle state. Its
-immutable payload contains `workerId`, `channel`, and `payload`, and Z Notes
-proves that a native subscriber and authorized WebViews can independently
-observe the same worker output.
+Typed `worker.messages` carries decoded application data rather than lifecycle
+state and reports invalid payloads as values. The separate raw handle retains
+immutable `workerId`, `channel`, and `payload` transport for deliberate escape
+hatches. Z Notes proves that typed and raw native subscribers plus authorized
+WebViews can independently observe the same worker output.
 
 The current compatibility ZJS artifact also
 receives an unminified worker module because it misexecutes one Rolldown

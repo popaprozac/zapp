@@ -1,6 +1,12 @@
 import { createNotesService } from "./notes-service.zs";
 import { CreateNoteInput, NoteState } from "./notes-core.zs";
 import { createHealthService } from "./health-service.zs";
+import {
+  IndexNotes,
+  NoteIndexerCommand,
+  NoteIndexerMessage,
+  NoteIndexerProtocol,
+} from "./note-indexer-protocol.zs";
 import { Application } from "zapp";
 import {
   WindowClosedEvent,
@@ -11,6 +17,8 @@ import {
   ApplicationWorkerEventSubscription,
   ApplicationWorkerMessage,
   ApplicationWorkerMessageSubscription,
+  ApplicationWorkerProtocolError,
+  ApplicationWorkerSendError,
   WorkerManager,
 } from "zapp/worker";
 import console from "std/console";
@@ -37,7 +45,7 @@ function pingApplicationWorker(
   in workers: WorkerManager,
   in workerId: String
 ): void on thread.main {
-  const retained = workers.get(in workerId);
+  const retained = workers.getRaw(in workerId);
   match (retained) {
     some(activeWorker) => {
       const sent = attempt activeWorker.send(
@@ -47,15 +55,21 @@ function pingApplicationWorker(
       match (sent) {
         success => {
           console.log("worker manager sent ping");
-          const indexed = attempt activeWorker.send(
-            "indexNotes",
-            "{\"requestId\":\"native-smoke\"}"
-          );
-          match (indexed) {
-            success => console.log("worker manager requested note index");
-            failure(error) => console.log(
-              `worker manager index failed: ${error.message}`
-            );
+          const typed = workers.get(NoteIndexerProtocol());
+          match (typed) {
+            some(worker) => {
+              const indexed: Result<void, ApplicationWorkerSendError> =
+                attempt worker.send(
+                NoteIndexerCommand.indexNotes(IndexNotes({
+                  requestId: "native-smoke",
+                }))
+                );
+              match (indexed) {
+                success => console.log("worker manager requested note index");
+                failure(_) => console.log("worker manager typed index failed");
+              }
+            }
+            none => console.log("typed note indexer handle is unavailable");
           }
         }
         failure(error) => console.log(
@@ -72,7 +86,7 @@ function observeApplicationWorker(
   in workerId: String,
   sendOnStart: boolean
 ): Option<ApplicationWorkerEventSubscription> on thread.main {
-  const selected = workers.get(in workerId);
+  const selected = workers.getRaw(in workerId);
   const worker = match (selected) {
     some(value) => value;
     none => return Option<ApplicationWorkerEventSubscription>.none;
@@ -105,7 +119,7 @@ function observeApplicationWorkerMessages(
   in workers: WorkerManager,
   in workerId: String
 ): Option<ApplicationWorkerMessageSubscription> on thread.main {
-  const selected = workers.get(in workerId);
+  const selected = workers.getRaw(in workerId);
   const worker = match (selected) {
     some(value) => value;
     none => return Option<ApplicationWorkerMessageSubscription>.none;
@@ -121,6 +135,50 @@ function observeApplicationWorkerMessages(
       console.log(
         `could not observe worker ${workerId} messages: ${error.message}`
       );
+      select Option<ApplicationWorkerMessageSubscription>.none;
+    }
+  };
+}
+
+function observeTypedNoteIndexerMessages(
+  in workers: WorkerManager
+): Option<ApplicationWorkerMessageSubscription> on thread.main {
+  const selected = workers.get(NoteIndexerProtocol());
+  const worker = match (selected) {
+    some(value) => value;
+    none => return Option<ApplicationWorkerMessageSubscription>.none;
+  };
+  const subscribed = attempt worker.messages.subscribe(
+    move (
+      in received: Result<NoteIndexerMessage, ApplicationWorkerProtocolError>
+    ): void => {
+      match (in received) {
+        success(message) => {
+          match (in message) {
+            started(value) => console.log(
+              `typed worker started index ${value.requestId}`
+            );
+            progress(value) => console.log(
+              `typed worker progress ${value.requestId}: ${value.completed}/${value.total}`
+            );
+            complete(value) => console.log(
+              `typed worker completed ${value.requestId}: ${value.total} notes`
+            );
+            failed(value) => console.log(
+              `typed worker failed ${value.requestId}: ${value.message}`
+            );
+          }
+        }
+        failure(error) => console.log(
+          `typed worker protocol error ${error.channel}: ${error.message}`
+        );
+      }
+    }
+  );
+  return match (subscribed) {
+    success(subscription) => Option.some(subscription);
+    failure(error) => {
+      console.log(`could not observe typed worker messages: ${error.message}`);
       select Option<ApplicationWorkerMessageSubscription>.none;
     }
   };
@@ -152,6 +210,9 @@ async function main(): i32 on thread.main {
   const noteIndexerMessageSubscription = observeApplicationWorkerMessages(
     in workers,
     "noteIndexer"
+  );
+  const typedNoteIndexerMessageSubscription = observeTypedNoteIndexerMessages(
+    in workers
   );
   const restartWorkerSubscription = observeApplicationWorker(
     in workers,

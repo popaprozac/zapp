@@ -21,7 +21,7 @@ function assertIdentifier(value: string, description: string): void {
   }
 }
 
-function combinedWireManifest(
+export function combinedWorkerWireManifest(
   protocols: readonly ZWorkerProtocolManifest[],
 ): ZServiceManifest {
   const types = new Map<string, ZWorkerProtocolManifest["types"][number]>();
@@ -205,7 +205,7 @@ ${commandCases}
 export function renderZWorkerBindings(
   protocols: readonly ZWorkerProtocolManifest[],
 ): string {
-  const manifest = combinedWireManifest(protocols);
+  const manifest = combinedWorkerWireManifest(protocols);
   assertZServiceCodecNames(manifest);
   return `// AUTO-GENERATED from checked Z worker protocols. Do not edit.
 import {

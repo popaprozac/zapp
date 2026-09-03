@@ -622,10 +622,6 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
-    const publicWorkerApi = readFileSync(
-      new URL("../../native/z/api/zapp/worker.zs", import.meta.url),
-      "utf8",
-    );
     const workerRuntimeHeader = readFileSync(
       new URL(
         "../../native/z/framework/worker/zapp_worker_runtime.h",
@@ -723,8 +719,11 @@ describe("Z native host inputs", () => {
       "internal readonly class ApplicationWorkerServiceRequest",
     );
     expect(workerManager).toContain("export readonly class WorkerManager on thread.main");
-    expect(workerManager).toContain("function get(in id: String): Option<ApplicationWorker>");
-    expect(workerManager).toContain("function all(): Array<ApplicationWorker>");
+    expect(workerManager).toContain("function get<Command, Message>(");
+    expect(workerManager).toContain("function getRaw(in id: String): Option<RawApplicationWorker>");
+    expect(workerManager).toContain("function all(): Array<RawApplicationWorker>");
+    expect(workerManager).toContain("export readonly class ApplicationWorker<Command, Message>");
+    expect(workerManager).toContain("export readonly class RawApplicationWorker");
     expect(workerManager).toContain("function send(");
     expect(workerManager).toContain("function state(): ApplicationWorkerState");
     expect(workerManager).toContain(
@@ -734,12 +733,11 @@ describe("Z native host inputs", () => {
     expect(workerManager).toContain("ApplicationWorkerSendErrorKind.saturated");
     expect(workerEvents).toContain("readonly all: Event<ApplicationWorkerEvent>");
     expect(workerEvents).toContain("readonly restarting: Event<ApplicationWorkerRestartingEvent>");
-    expect(publicWorkerApi).toContain("export type WorkerManager = FrameworkWorkerManager");
-    expect(publicWorkerApi).toContain("export type ApplicationWorkerEvent = FrameworkApplicationWorkerEvent");
-    expect(publicWorkerApi).toContain(
+    expect(workerManager).toContain("export type ApplicationWorkerEvent = FrameworkApplicationWorkerEvent");
+    expect(workerManager).toContain(
       "export type ApplicationWorkerMessage = FrameworkApplicationWorkerMessage",
     );
-    expect(publicWorkerApi).toContain(
+    expect(workerManager).toContain(
       "export type ApplicationWorkerMessageSubscription =",
     );
     expect(workerManagerRuntime).toContain(

@@ -15,6 +15,7 @@ import type { ZServiceManifest } from "./z-service-bindings";
 import type {
   ZProgramMetadata,
   ZWorkerProtocolManifest,
+  ZWorkerProtocolUse,
 } from "./z-program-metadata";
 import { isPermissionAllowed, resolvePermissions } from "./permissions";
 import {
@@ -736,8 +737,7 @@ function cacheCoversZProgramInputs(
 ): boolean {
   const expected = zProgramInputPaths(metadata, explicitInputs);
   const cached = Object.keys(inputHashes).sort();
-  return expected.length === cached.length
-    && expected.every((input, index) => input === cached[index]);
+  return expected.every((input) => cached.includes(input));
 }
 
 function rebaseZModulePath(
@@ -787,6 +787,32 @@ export function rebaseZServiceManifest(
       },
     })),
   };
+}
+
+export function rebaseZWorkerProtocolManifest(
+  manifest: ZWorkerProtocolManifest,
+  mappings: ZModulePathMapping[],
+): ZWorkerProtocolManifest {
+  const rebaseType = <T extends { module: string }>(value: T): T => ({
+    ...value,
+    module: rebaseZModulePath(value.module, mappings),
+  });
+  return {
+    ...manifest,
+    module: rebaseZModulePath(manifest.module, mappings),
+    types: manifest.types.map(rebaseType),
+    enums: manifest.enums.map(rebaseType),
+  };
+}
+
+export function rebaseZWorkerProtocolUses(
+  uses: readonly ZWorkerProtocolUse[],
+  mappings: ZModulePathMapping[],
+): ZWorkerProtocolUse[] {
+  return uses.map((use) => ({
+    ...use,
+    module: rebaseZModulePath(use.module, mappings),
+  }));
 }
 
 /**
@@ -896,6 +922,7 @@ export async function prepareZFrontendServices(
       true,
     );
     const protocolMetadata = parseZProgramMetadata(protocolMetadataSource);
+    Object.assign(inputHashes, await hashZProgramInputs(protocolMetadata));
     workerProtocols.push(deriveZWorkerProtocolManifest(
       protocolMetadata,
       workerId,
@@ -903,6 +930,11 @@ export async function prepareZFrontendServices(
       entry.protocol.type,
     ));
   }
+  await writeFile(cachePath, `${JSON.stringify({
+    schemaVersion: 1,
+    compiler: compilerIdentity,
+    inputHashes,
+  }, null, 2)}\n`, "utf8");
   await writeFile(
     path.join(outputDirectory, "workers.zmeta.json"),
     `${JSON.stringify({ schemaVersion: 1, protocols: workerProtocols }, null, 2)}\n`,
@@ -1059,7 +1091,13 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     "./z-service-registration"
   );
   const {
+    generateZWorkerProtocolAdapters,
+    zWorkerProtocolBuildContribution,
+  } = await import("./z-worker-native");
+  const {
     deriveZServiceManifest,
+    deriveZWorkerProtocolManifest,
+    deriveZWorkerProtocolUses,
     parseZProgramMetadata,
   } = await import("./z-program-metadata");
   const { resolveCapabilityProfiles } = await import("./capabilities");
@@ -1068,16 +1106,26 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     path.join(resolveBootstrapDir(), "codegen.ts")
   );
   let programMetadataSource: string;
+  let programMetadata: ZProgramMetadata;
   let serviceManifest: ZServiceManifest;
-  if (
-    options.preparedServices
-    && await preparedZServicesAreCurrent(options.preparedServices)
-  ) {
+  let workerProtocols: ZWorkerProtocolManifest[];
+  const stagedMappings = [
+    { source: appSource, destination: stagedAppSource },
+    { source, destination: path.join(workspace, "native", "z") },
+  ];
+  const preparedCurrent = options.preparedServices
+    ? await preparedZServicesAreCurrent(options.preparedServices)
+    : false;
+  if (options.preparedServices && preparedCurrent) {
     programMetadataSource = options.preparedServices.programMetadataSource;
-    serviceManifest = rebaseZServiceManifest(options.preparedServices.manifest, [
-      { source: appSource, destination: stagedAppSource },
-      { source, destination: path.join(workspace, "native", "z") },
-    ]);
+    programMetadata = parseZProgramMetadata(programMetadataSource);
+    serviceManifest = rebaseZServiceManifest(
+      options.preparedServices.manifest,
+      stagedMappings,
+    );
+    workerProtocols = options.preparedServices.workerProtocols.map((protocol) => (
+      rebaseZWorkerProtocolManifest(protocol, stagedMappings)
+    ));
     console.log("[zapp] reused checked Z service metadata from the frontend preflight");
   } else {
     if (options.preparedServices) {
@@ -1088,10 +1136,38 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       options.root,
       true,
     );
-    serviceManifest = deriveZServiceManifest(
-      parseZProgramMetadata(programMetadataSource),
-    );
+    programMetadata = parseZProgramMetadata(programMetadataSource);
+    serviceManifest = deriveZServiceManifest(programMetadata);
+    workerProtocols = [];
+    for (const [workerId, authored] of Object.entries(
+      options.config.applicationWorkers ?? {},
+    )) {
+      const entry = typeof authored === "string" ? { script: authored } : authored;
+      if (!entry.protocol) continue;
+      const originalModule = path.resolve(options.root, entry.protocol.module);
+      const protocolModule = rebaseZModulePath(originalModule, stagedMappings);
+      const metadataSource = await run(
+        [...compiler, "metadata", protocolModule],
+        options.root,
+        true,
+      );
+      workerProtocols.push(deriveZWorkerProtocolManifest(
+        parseZProgramMetadata(metadataSource),
+        workerId,
+        protocolModule,
+        entry.protocol.type,
+      ));
+    }
   }
+  const originalWorkerUses = deriveZWorkerProtocolUses(
+    programMetadata,
+    options.preparedServices && preparedCurrent
+      ? options.preparedServices.workerProtocols
+      : workerProtocols,
+  );
+  const workerUses = options.preparedServices && preparedCurrent
+    ? rebaseZWorkerProtocolUses(originalWorkerUses, stagedMappings)
+    : originalWorkerUses;
   await writeFile(
     path.join(stage, "program.zmeta.json"),
     programMetadataSource,
@@ -1202,10 +1278,31 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   );
   await run([...compiler, "check", dispatcher], options.root, true);
   console.log(`[zapp] checked generated Z service dispatch ${dispatcher}`);
+  const workerProtocolModule = path.join(
+    stage,
+    "generated",
+    "worker-protocols.zs",
+  );
+  const workerContribution = workerProtocols.length === 0
+    ? { modules: [], callAdapters: [] }
+    : zWorkerProtocolBuildContribution(
+      workerProtocols,
+      workerUses,
+      await generateZWorkerProtocolAdapters(workerProtocols, {
+        outputPath: workerProtocolModule,
+        workerModule: path.join(
+          stagedFramework,
+          "worker",
+          "worker-manager.zs",
+        ),
+      }),
+    );
   const registrationOverlay = await generateZServiceRegistrationOverlay(
     serviceManifest,
     dispatcher,
     path.join(stage, "generated", "service-registration.zbuild.json"),
+    undefined,
+    workerContribution,
   );
   console.log(`[zapp] generated checked Z service registration ${registrationOverlay}`);
   const generatedBinding = await generateZServiceBindings(

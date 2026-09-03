@@ -5,13 +5,37 @@ import {
 } from "./application-workers.zs";
 import { ApplicationWorkerCatalog } from "./configuration.zs";
 import {
-  ApplicationWorkerMessage,
+  ApplicationWorkerEvent as FrameworkApplicationWorkerEvent,
+  ApplicationWorkerFailedEvent as FrameworkApplicationWorkerFailedEvent,
+  ApplicationWorkerMessage as FrameworkApplicationWorkerMessage,
+  ApplicationWorkerRestartingEvent as FrameworkApplicationWorkerRestartingEvent,
+  ApplicationWorkerStartedEvent as FrameworkApplicationWorkerStartedEvent,
+  ApplicationWorkerStoppedEvent as FrameworkApplicationWorkerStoppedEvent,
   Event,
+  EventSubscription as FrameworkApplicationWorkerEventSubscription,
+  EventSubscriptionError as FrameworkApplicationWorkerEventSubscriptionError,
 } from "../events.zs";
 import {
-  ApplicationWorkerEvents,
+  ApplicationWorkerEvents as FrameworkApplicationWorkerEvents,
   createApplicationWorkerEvents,
 } from "./events.zs";
+
+export type ApplicationWorkerEvents = FrameworkApplicationWorkerEvents;
+export type ApplicationWorkerEvent = FrameworkApplicationWorkerEvent;
+export type ApplicationWorkerEventSubscription =
+  FrameworkApplicationWorkerEventSubscription;
+export type ApplicationWorkerEventSubscriptionError =
+  FrameworkApplicationWorkerEventSubscriptionError;
+export type ApplicationWorkerStartedEvent = FrameworkApplicationWorkerStartedEvent;
+export type ApplicationWorkerRestartingEvent =
+  FrameworkApplicationWorkerRestartingEvent;
+export type ApplicationWorkerFailedEvent = FrameworkApplicationWorkerFailedEvent;
+export type ApplicationWorkerMessage = FrameworkApplicationWorkerMessage;
+export type ApplicationWorkerMessageSubscription =
+  FrameworkApplicationWorkerEventSubscription;
+export type ApplicationWorkerMessageSubscriptionError =
+  FrameworkApplicationWorkerEventSubscriptionError;
+export type ApplicationWorkerStoppedEvent = FrameworkApplicationWorkerStoppedEvent;
 
 export enum ApplicationWorkerState {
   configured,
@@ -34,6 +58,32 @@ export readonly struct ApplicationWorkerSendError {
   message: String;
 }
 
+// Compile-time marker for one typed application-worker protocol. The build
+// adapter replaces WorkerManager.get(marker) with a checked codec-bearing
+// protocol without changing the authored call or duplicating wire types.
+export readonly struct WorkerProtocol<Command, Message> {}
+
+export readonly struct ApplicationWorkerProtocolError {
+  workerId: String;
+  channel: String;
+  message: String;
+}
+
+internal struct EncodedApplicationWorkerCommand {
+  channel: String;
+  payload: String;
+}
+
+internal readonly struct ApplicationWorkerProtocolAdapter<Command, Message> {
+  workerId: String;
+  marker: WorkerProtocol<Command, Message>;
+  encode: (command: Command) => EncodedApplicationWorkerCommand;
+  accepts: (in message: ApplicationWorkerMessage) => boolean;
+  decode: (
+    in message: ApplicationWorkerMessage
+  ) => Result<Message, ApplicationWorkerProtocolError>;
+}
+
 internal type ApplicationWorkerSendOperation = (
   in workerId: String,
   in channel: String,
@@ -48,7 +98,7 @@ class ApplicationWorkerStateStorage on thread.main {
   }
 }
 
-export readonly class ApplicationWorker on thread.main {
+export readonly class RawApplicationWorker on thread.main {
   readonly id: String;
   readonly events: ApplicationWorkerEvents;
   readonly messages: Event<ApplicationWorkerMessage>;
@@ -177,13 +227,100 @@ export readonly class ApplicationWorker on thread.main {
   }
 }
 
+// Typed subscriptions keep malformed or unknown native messages explicit.
+// Generated workers are expected to produce valid payloads, but the raw API
+// remains available, so protocol violations are values rather than hidden
+// drops or process-wide traps.
+export readonly class ApplicationWorkerMessages<Message> on thread.main {
+  internal readonly source: Event<ApplicationWorkerMessage>;
+  internal readonly accepts: (
+    in message: ApplicationWorkerMessage
+  ) => boolean;
+  internal readonly decode: (
+    in message: ApplicationWorkerMessage
+  ) => Result<Message, ApplicationWorkerProtocolError>;
+
+  internal constructor(
+    source: Event<ApplicationWorkerMessage>,
+    accepts: (in message: ApplicationWorkerMessage) => boolean,
+    decode: (
+      in message: ApplicationWorkerMessage
+    ) => Result<Message, ApplicationWorkerProtocolError>
+  ) {
+    this.source = source;
+    this.accepts = accepts;
+    this.decode = decode;
+  }
+
+  function subscribe(
+    handler: (
+      in message: Result<Message, ApplicationWorkerProtocolError>
+    ) => void on thread.main
+  ): ApplicationWorkerMessageSubscription throws ApplicationWorkerMessageSubscriptionError {
+    const decode = this.decode;
+    const accepts = this.accepts;
+    let source = this.source;
+    return try source.subscribe(
+      move (in message: ApplicationWorkerMessage): void => {
+        if (!accepts(in message)) return;
+        const decoded = decode(in message);
+        handler(in decoded);
+      }
+    );
+  }
+}
+
+// The safe default handle. A generated adapter owns the channel names and JSON
+// codecs, while lifecycle and scheduling remain the same native worker.
+export readonly class ApplicationWorker<Command, Message> on thread.main {
+  readonly id: String;
+  readonly events: ApplicationWorkerEvents;
+  readonly messages: ApplicationWorkerMessages<Message>;
+  internal readonly raw: RawApplicationWorker;
+  internal readonly marker: WorkerProtocol<Command, Message>;
+  internal readonly encode: (
+    command: Command
+  ) => EncodedApplicationWorkerCommand;
+
+  internal constructor(
+    raw: RawApplicationWorker,
+    marker: WorkerProtocol<Command, Message>,
+    encode: (command: Command) => EncodedApplicationWorkerCommand,
+    accepts: (in message: ApplicationWorkerMessage) => boolean,
+    decode: (
+      in message: ApplicationWorkerMessage
+    ) => Result<Message, ApplicationWorkerProtocolError>
+  ) {
+    this.id = copy raw.id;
+    this.events = raw.events;
+    this.messages = new ApplicationWorkerMessages<Message>(
+      raw.messages,
+      accepts,
+      decode
+    );
+    this.raw = raw;
+    this.marker = marker;
+    this.encode = encode;
+  }
+
+  function state(): ApplicationWorkerState {
+    return this.raw.state();
+  }
+
+  function send(command: Command): void throws ApplicationWorkerSendError {
+    const encoded = this.encode(move command);
+    const { channel, payload } = move encoded;
+    try this.raw.send(move channel, move payload);
+  }
+}
+
 class WorkerManagerState on thread.main {
-  workers: Map<String, ApplicationWorker>;
+  workers: Map<String, RawApplicationWorker>;
   send: Option<ApplicationWorkerSendOperation>;
   active: boolean;
 
   internal constructor() {
-    this.workers = Map<String, ApplicationWorker>();
+    this.workers = Map<String, RawApplicationWorker>();
     this.send = Option<ApplicationWorkerSendOperation>.none;
     this.active = false;
   }
@@ -212,13 +349,22 @@ export readonly class WorkerManager on thread.main {
       );
       storage.workers.set(
         copy id,
-        new ApplicationWorker(move id, owner)
+        new RawApplicationWorker(move id, owner)
       );
       index = index + 1;
     }
   }
 
-  function get(in id: String): Option<ApplicationWorker> {
+  // Checked marker call. Zapp's generated build overlay replaces this with
+  // getGenerated and a protocol adapter derived from the same metadata used
+  // by the WebView and worker TypeScript surfaces.
+  function get<Command, Message>(
+    protocol: WorkerProtocol<Command, Message>
+  ): Option<ApplicationWorker<Command, Message>> {
+    return Option<ApplicationWorker<Command, Message>>.none;
+  }
+
+  function getRaw(in id: String): Option<RawApplicationWorker> {
     const found = this.storage.workers.get(id);
     return match (in found) {
       some(worker) => Option.some(worker);
@@ -226,8 +372,31 @@ export readonly class WorkerManager on thread.main {
     };
   }
 
-  function all(): Array<ApplicationWorker> {
-    let result = Array<ApplicationWorker>();
+  internal function getGenerated<Command, Message>(
+    adapter: ApplicationWorkerProtocolAdapter<Command, Message>
+  ): Option<ApplicationWorker<Command, Message>> {
+    const {
+      workerId,
+      marker,
+      encode,
+      accepts,
+      decode,
+    } = move adapter;
+    const found = this.getRaw(in workerId);
+    return match (found) {
+      some(worker) => Option.some(new ApplicationWorker<Command, Message>(
+        worker,
+        marker,
+        encode,
+        accepts,
+        decode
+      ));
+      none => Option<ApplicationWorker<Command, Message>>.none;
+    };
+  }
+
+  function all(): Array<RawApplicationWorker> {
+    let result = Array<RawApplicationWorker>();
     for (const entry of this.storage.workers) {
       let retained = entry.value;
       result.push(move retained);
@@ -266,7 +435,7 @@ export readonly class WorkerManager on thread.main {
     withinMilliseconds: u64,
     in message: String
   ): void {
-    const found = this.get(in workerId);
+    const found = this.getRaw(in workerId);
     match (found) {
       some(worker) => {
         if (phase == 1) {
@@ -296,7 +465,7 @@ export readonly class WorkerManager on thread.main {
     in channel: String,
     in payload: String
   ): void {
-    const found = this.get(in workerId);
+    const found = this.getRaw(in workerId);
     match (found) {
       some(worker) => worker.publishMessage(in channel, in payload);
       none => {}

@@ -109,6 +109,14 @@ The generated `zapp:workers` module serves both environments. WebViews receive
 are limited to declared variants. Raw `send` and `subscribe` remain available
 as an explicit escape hatch and can coexist with the generated dispatcher.
 
+Native Z uses that same checked evidence. `app.workers.get(ProtocolMarker())`
+returns an `ApplicationWorker<Command, Message>` whose `send` accepts the
+command enum and whose message subscription receives
+`Result<Message, ApplicationWorkerProtocolError>`. The generated build overlay
+binds the marker to the configured worker identity and inserts the codecs; the
+authored application does not repeat an id, channel, or JSON shape. Explicit
+`getRaw(id)` remains available for diagnostic and migration channels.
+
 Worker bundling removes the unused WebView client half of the generated module.
 Collection codecs use explicit checked loops rather than depending on optional
 or engine-specific `Array.map` behavior, while exact `u64`/`i64` values retain

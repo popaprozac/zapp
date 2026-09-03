@@ -148,19 +148,25 @@ make the first uncaught worker failure terminal.
 
 That tier intentionally fails closed for other engines and ZJS bytecode. The
 focused frontend facade already provides authorized send/subscribe and the
-same generated service API inside workers. Native Z owns a typed `app.workers`
-manager for configured application-lifetime workers. `get(id)` returns
-`Option<ApplicationWorker>`, `all()` returns the configured handles, and each
-handle exposes `state()`, typed `send(channel, payload)`, focused lifecycle
-events (`started`, `restarting`, `failed`, and `stopped`), plus an exhaustive
-`events.all` stream. `worker.messages` is the separate application-data event
-source for messages emitted by that worker. Native callback bytes are copied
-into an immutable `ApplicationWorkerMessage` before subscribers run on
-`thread.main`; subscribing in Z does not consume or suppress delivery to
+same generated service API inside workers. Native Z owns an `app.workers`
+manager for configured application-lifetime workers. The safe default is
+`get(ProtocolMarker())`, which returns a protocol-specific
+`Option<ApplicationWorker<Command, Message>>`. Its `send(command)` accepts the
+declared command enum, and its message stream yields
+`Result<Message, ApplicationWorkerProtocolError>` so malformed native input is
+never silently dropped. `getRaw(id)` and `all()` expose `RawApplicationWorker`
+handles for diagnostics, migration, and intentionally undeclared channels;
+their transport remains explicit `send(channel, payload)` and
+`ApplicationWorkerMessage` values.
+
+Both handle forms expose `state()`, focused lifecycle events (`started`,
+`restarting`, `failed`, and `stopped`), plus an exhaustive `events.all` stream.
+Native callback bytes are copied into immutable messages before subscribers run
+on `thread.main`; subscribing in Z does not consume or suppress delivery to
 authorized WebViews. Lifecycle and message subscriptions are multicast and
 retain their registration for the lexical lifetime of their subscription.
-Dynamic worker creation and WebView-owned worker lifetimes remain later
-manager tiers rather than implicit behavior of this configured surface.
+Dynamic worker creation and WebView-owned worker lifetimes remain later manager
+tiers rather than implicit behavior of this configured surface.
 
 `protocol` is optional. Without it, `send(channel, payload)` and
 `subscribe(channel, handler)` remain the explicit raw transport escape hatch.
@@ -232,8 +238,32 @@ export function onMessage(channel: string, payload: string): void {
 The marker has no runtime representation and adds no transport envelope. Enum
 variant names become the existing native channel names; generated codecs
 validate payloads and preserve exact 64-bit integers as decimal strings on the
-wire. Native Z's current `app.workers` manager intentionally remains on the raw
-channel/payload surface until a later native typed-facade slice.
+wire. The same protocol drives native Z without duplicating channels or JSON
+codecs:
+
+```zs
+const selected = app.workers.get(SyncWorkerProtocol());
+const worker = match (selected) {
+  some(value) => value;
+  none => return 1;
+};
+
+try worker.send(SyncWorkerCommand.refresh(RefreshIndex({
+  requestId: "startup",
+})));
+
+const subscription = try worker.messages.subscribe(
+  move (in received): void => match (in received) {
+    success(message) => match (in message) {
+      complete(value) => console.log(value.total);
+    };
+    failure(error) => console.log(error.message);
+  }
+);
+```
+
+Use `app.workers.getRaw("sync")` only when intentionally working with a raw
+channel/payload contract.
 
 Capability selection is additive and frozen at build time. Omitting a worker's
 `capabilities` grants no native permissions or service methods. Unknown and

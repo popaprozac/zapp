@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   deriveZWorkerProtocolManifest,
+  deriveZWorkerProtocolUses,
   type ZProgramMetadata,
 } from "./z-program-metadata";
 
@@ -101,5 +102,70 @@ describe("checked Z worker protocols", () => {
       "/app/protocol.zs",
       "IndexProtocol",
     )).toThrow(/must alias WorkerProtocol<Command, Message>/);
+  });
+
+  test("resolves typed manager lookups to one configured protocol", () => {
+    const metadata = protocolMetadata(
+      "WorkerProtocol<IndexCommand, IndexMessage>",
+    );
+    metadata.modules[0].calls.push({
+      offset: 420,
+      line: 12,
+      column: 18,
+      target: {
+        module: "/zapp/worker.zs",
+        symbol: "WorkerManager",
+        kind: "method",
+        name: "WorkerManager.get",
+      },
+      arguments: [{
+        kind: "other",
+        type: "WorkerProtocol<IndexCommand, IndexMessage>",
+      }],
+    });
+    const protocol = deriveZWorkerProtocolManifest(
+      metadata,
+      "indexer",
+      "/app/protocol.zs",
+      "IndexProtocol",
+    );
+    expect(deriveZWorkerProtocolUses(metadata, [protocol])).toEqual([{
+      workerId: "indexer",
+      module: "/app/protocol.zs",
+      offset: 420,
+    }]);
+  });
+
+  test("fails closed when a typed lookup has no unique configured worker", () => {
+    const metadata = protocolMetadata(
+      "WorkerProtocol<IndexCommand, IndexMessage>",
+    );
+    metadata.modules[0].calls.push({
+      offset: 420,
+      line: 12,
+      column: 18,
+      target: {
+        module: "/zapp/worker.zs",
+        symbol: "WorkerManager",
+        kind: "method",
+        name: "WorkerManager.get",
+      },
+      arguments: [{
+        kind: "other",
+        type: "WorkerProtocol<IndexCommand, IndexMessage>",
+      }],
+    });
+    const protocol = deriveZWorkerProtocolManifest(
+      metadata,
+      "indexer",
+      "/app/protocol.zs",
+      "IndexProtocol",
+    );
+    expect(() => deriveZWorkerProtocolUses(metadata, []))
+      .toThrow(/no configured application worker/);
+    expect(() => deriveZWorkerProtocolUses(metadata, [
+      protocol,
+      { ...protocol, workerId: "secondIndexer" },
+    ])).toThrow(/requires one configured worker per protocol/);
   });
 });

@@ -18,6 +18,27 @@ export interface ZServiceRegistrationTarget {
   generatedModulePackage: string | null;
 }
 
+export interface ZGeneratedBuildModule {
+  specifier: string;
+  source: string;
+  packageName: string | null;
+}
+
+export interface ZGeneratedBuildCallAdapter {
+  source: string;
+  offset: number;
+  target: string;
+  replacement: string;
+  argument: number;
+  adapterModule: string;
+  adapterExport: string;
+}
+
+export interface ZGeneratedBuildContribution {
+  modules: readonly ZGeneratedBuildModule[];
+  callAdapters: readonly ZGeneratedBuildCallAdapter[];
+}
+
 const applicationRegistrationTarget: ZServiceRegistrationTarget = {
   marker: "ApplicationServicesBuilder.register",
   synchronous: "ApplicationServicesBuilder.registerGenerated",
@@ -60,6 +81,7 @@ export async function generateZServiceRegistrationOverlay(
   generatedModule: string,
   outputPath: string,
   target: ZServiceRegistrationTarget = applicationRegistrationTarget,
+  additional: ZGeneratedBuildContribution = { modules: [], callAdapters: [] },
 ): Promise<string> {
   for (const service of manifest.services) registrationMethodName(service, target);
   const services = [...manifest.services].sort((left, right) => (
@@ -67,7 +89,10 @@ export async function generateZServiceRegistrationOverlay(
       || left.registration.offset - right.registration.offset
     ));
   const sourceHashes = new Map<string, string>();
-  for (const modulePath of new Set(services.map((service) => service.registration.module))) {
+  for (const modulePath of new Set([
+    ...services.map((service) => service.registration.module),
+    ...additional.callAdapters.map((adapter) => adapter.source),
+  ])) {
     const source = await readFile(modulePath, "utf8");
     sourceHashes.set(
       modulePath,
@@ -85,18 +110,34 @@ export async function generateZServiceRegistrationOverlay(
       module: generatedModuleSpecifier,
       export: zServiceAdapterFactoryName(service.name),
     },
-  }));
+  })).concat(additional.callAdapters.map((adapter) => ({
+    source: relativeBuildPath(outputPath, adapter.source),
+    sourceHash: sourceHashes.get(adapter.source)!,
+    offset: adapter.offset,
+    target: adapter.target,
+    replacement: adapter.replacement,
+    argument: adapter.argument,
+    adapter: {
+      module: adapter.adapterModule,
+      export: adapter.adapterExport,
+    },
+  })));
   const generatedModuleDeclaration = {
     source: relativeBuildPath(outputPath, generatedModule),
     ...(target.generatedModulePackage === null
       ? {}
       : { package: target.generatedModulePackage }),
   };
+  const modules = Object.fromEntries([
+    [generatedModuleSpecifier, generatedModuleDeclaration],
+    ...additional.modules.map((module) => [module.specifier, {
+      source: relativeBuildPath(outputPath, module.source),
+      ...(module.packageName === null ? {} : { package: module.packageName }),
+    }] as const),
+  ]);
   const overlay = {
     schemaVersion: 1,
-    modules: {
-      [generatedModuleSpecifier]: generatedModuleDeclaration,
-    },
+    modules,
     callAdapters,
   };
   await mkdir(path.dirname(outputPath), { recursive: true });
