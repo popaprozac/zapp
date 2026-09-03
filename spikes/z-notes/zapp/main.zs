@@ -184,8 +184,12 @@ function observeTypedNoteIndexerMessages(
   };
 }
 
+function createApplication(): Application on thread.main {
+  return new Application();
+}
+
 async function main(): i32 on thread.main {
-  const app = new Application();
+  const app = createApplication();
   const notesService = createNotesService();
   const seeded = attempt await notesService.create(CreateNoteInput({
     title: "Welcome to Z Notes",

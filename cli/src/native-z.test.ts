@@ -659,7 +659,9 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(app).toContain("const app = new Application();");
+    expect(app).toContain("function createApplication(): Application on thread.main");
+    expect(app).toContain("return new Application();");
+    expect(app).toContain("const app = createApplication();");
     expect(application).toContain("readonly metadata: ApplicationMetadata;");
     expect(application).toContain(
       "this.metadata = configuredApplicationMetadata();",
