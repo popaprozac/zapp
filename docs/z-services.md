@@ -27,12 +27,12 @@ over the same public module identities.
 
 ## Application surface
 
-The public lifecycle is designed around a consuming application configuration
-whose managers have stable shared identity:
+The public lifecycle uses one stable ARC application identity whose managers
+also have stable shared identity:
 
 ```z
 async function main(): i32 throws WindowError on thread.main {
-  let app = Application();
+  const app = new Application();
   const registered = attempt app.services.register(
     "notes",
     createNotesService()
@@ -55,11 +55,22 @@ async function main(): i32 throws WindowError on thread.main {
 ```
 
 The CLI compiles the resolved `zapp.config.ts` application name, identifier,
-and version into the readonly `app.metadata` value. `app.run()` consumes the
-configuration, asks its service manager to prepare immutable routing and
-lifecycle snapshots, publishes the runtime application identity, and
-asynchronously remains attached to the blocking platform run loop until
-shutdown. There is no user-facing `finish()` or `freeze()` call.
+and version into the readonly `app.metadata` value. `app.run()` transitions the
+application from `configuring` to `running`, asks its service manager to prepare
+immutable routing and lifecycle snapshots, publishes `Application.current()`,
+and asynchronously remains attached to the blocking platform run loop until
+shutdown. A scoped lifetime marks the application `stopped` and removes the
+published root on either success or error. A second run throws a typed
+`ApplicationStateError`. There is no user-facing `finish()` or `freeze()` call.
+
+`Application.current()` returns that same ARC identity during the complete
+`run()` interval, including service startup and shutdown. Calling it before
+`run()` publishes the application or after the run lifetime closes is an
+invariant violation and traps, matching `Once<T>.get()`; code with an optional
+application relationship should receive or store an `Option<Application>`
+instead. Metadata and unrestricted manager references remain available wherever
+their own contracts permit, while `state()` and lifecycle operations stay on
+`thread.main`.
 
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's
@@ -142,7 +153,7 @@ on service dispatch.
 Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
 embedded-engine calls; storing main-only lifecycle callables inside it would
-make the entire fast path main-isolated. `Application.run(move this)` is async,
+make the entire fast path main-isolated. `Application.run()` is async,
 freezes both stores, creates the immutable `ApplicationContext`, starts
 lifecycle services before entering the platform run loop, then cancels and
 joins every accepted callback-created operation before stopping services after
@@ -167,10 +178,11 @@ handler and hooks retain the same ARC identity through start, invocation, and
 stop.
 
 The Phase 1 Notes application uses that surface directly in
-`spikes/z-notes/zapp/main.zs`. `Application()` receives immutable generated
-metadata and creates a fresh shared service manager through value-field
-defaults; the main-thread `run(move this)` method consumes the whole
-configuration and asks the manager to publish its immutable snapshots. Z owns
+`spikes/z-notes/zapp/main.zs`. `new Application()` receives immutable generated
+metadata and creates fresh shared manager identities in its constructor. The
+main-thread `run()` method preserves the application identity while asking the
+service manager to publish immutable snapshots. Lifecycle hooks can retrieve
+that exact identity through `Application.current()`. Z owns
 the executable `main`; the Objective-C file is a linked platform adapter with
 no framework policy or entry point of its own.
 

@@ -185,7 +185,7 @@ function observeTypedNoteIndexerMessages(
 }
 
 async function main(): i32 on thread.main {
-  let app = Application();
+  const app = new Application();
   const notesService = createNotesService();
   const seeded = attempt await notesService.create(CreateNoteInput({
     title: "Welcome to Z Notes",
@@ -266,10 +266,14 @@ async function main(): i32 on thread.main {
     }
   };
   const result = attempt await app.run();
-  return match (result) {
+  const exitStatus = match (result) {
     success(status) => status;
     failure(error) => {
-      const exitStatus = match (error) {
+      const failureStatus = match (error) {
+        state(stateError) => {
+          console.log(`application state error: ${stateError.message}`);
+          select 75;
+        }
         lifecycle(lifecycleError) => {
           match (lifecycleError.phase) {
             start => console.log(
@@ -292,7 +296,12 @@ async function main(): i32 on thread.main {
           select 72;
         }
       };
-      select exitStatus;
+      select failureStatus;
     }
   };
+  const stopped = match (app.state()) {
+    stopped => true;
+    _ => false;
+  };
+  return stopped ? exitStatus : 76;
 }

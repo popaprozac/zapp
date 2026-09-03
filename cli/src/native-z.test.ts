@@ -549,7 +549,7 @@ describe("Z native host inputs", () => {
     expect(cli).not.toContain("Interactive dev starts with the Phase 1 WebView core");
   });
 
-  it("gives the public Z builder ownership of main and run", () => {
+  it("keeps one stable public Z application identity through main and run", () => {
     const app = readFileSync(
       new URL("../../spikes/z-notes/zapp/main.zs", import.meta.url),
       "utf8",
@@ -648,28 +648,36 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(app).toContain("let app = Application();");
+    expect(app).toContain("const app = new Application();");
+    expect(application).toContain("readonly metadata: ApplicationMetadata;");
     expect(application).toContain(
-      "readonly metadata: ApplicationMetadata = configuredApplicationMetadata()",
+      "this.metadata = configuredApplicationMetadata();",
     );
     expect(app).toContain("const notesService = createNotesService();");
     expect(app).toContain("const notesRegistered = attempt app.services.register(");
     expect(app).toContain("const healthRegistered = attempt app.services.register(");
     expect(app).toContain('inject: Array<String>("base")');
     expect(app).toContain("const result = attempt await app.run();");
-    expect(application).toContain("export struct Application");
+    expect(application).toContain("export readonly class Application");
+    expect(application).toContain("constructor()");
+    expect(application).toContain("static function current(): Application");
+    expect(application).toContain("const currentApplication = Once<Application>();");
+    expect(application).toContain("function state(): ApplicationState on thread.main");
     expect(application).toContain(
-      "readonly windows: WindowManager = createWindowManager()",
+      "this.windows = createWindowManager();",
     );
     expect(application).toContain(
-      "readonly workers: WorkerManager = createWorkerManager(",
+      "this.workers = createWorkerManager(configuredApplicationWorkers());",
     );
     expect(application).toContain(
       "readonly capabilities: ApplicationCapabilities",
     );
-    expect(application).toContain("readonly services: ApplicationServices = createApplicationServices();");
+    expect(application).toContain("this.services = createApplicationServices();");
     expect(application).toContain("throws ApplicationError on thread.main");
-    expect(application).toContain("const config = prepareApplication(move this);");
+    expect(application).toContain("const sourceApplication = this;");
+    expect(application).toContain("const config = prepareApplication(in sourceApplication);");
+    expect(application).toContain("const lifetime = currentApplication.initialize(move publishedApplication);");
+    expect(application).toContain("runState: applicationState,");
     expect(application).toContain("const updates = new TaskScope();");
     expect(application).toContain("const { routes, asynchronous, lifecycles }");
     expect(application).toContain("synchronous: routes");

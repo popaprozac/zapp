@@ -4,7 +4,9 @@ import {
   ApplicationContext,
   ServiceLifecycle,
   ServiceLifecycleError,
+  ServiceLifecyclePhase,
 } from "zapp/service";
+import { Application } from "zapp";
 import {
   CreateNoteInput,
   Note,
@@ -86,6 +88,21 @@ export readonly class NotesService implements ServiceLifecycle {
   function start(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
+    const application = Application.current();
+    const running = match (application.state()) {
+      running => true;
+      _ => false;
+    };
+    if (
+      !running
+      || application.metadata.identifier != context.metadata.identifier
+    ) {
+      throw ServiceLifecycleError({
+        service: "notes",
+        phase: ServiceLifecyclePhase.start,
+        message: "current application identity was not published before startup",
+      });
+    }
     console.log(`${context.metadata.name}: notes service started`);
   }
 

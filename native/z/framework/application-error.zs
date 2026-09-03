@@ -10,7 +10,19 @@ export struct PlatformError {
   message: String;
 }
 
+export enum ApplicationState {
+  configuring,
+  running,
+  stopped,
+}
+
+export readonly struct ApplicationStateError {
+  state: ApplicationState;
+  message: String;
+}
+
 export enum ApplicationError {
+  state ApplicationStateError,
   lifecycle ServiceLifecycleError,
   window WindowError,
   platform PlatformError,

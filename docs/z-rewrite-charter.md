@@ -144,7 +144,7 @@ The rewrite must retain the strongest ideas already proven by Zapp:
 
 | Concern | Z rewrite direction |
 |---|---|
-| Application root | Consuming `Application.run(move this)` publishes one platform-private `Once` runtime with explicit initialization and shutdown. |
+| Application root | A stable readonly ARC `Application` publishes `Application.current()` for one guarded `run()` interval; platform-private `Once` runtimes retain explicit initialization and shutdown. |
 | Native lifetime | Owned values, `deinit`, ARC classes, `Weak<T>`, and checked foreign contracts replace implicit slot and callback lifetimes. |
 | UI affinity | AppKit/UIKit work is isolated to `thread.main`; invalid access is rejected before generated native compilation. |
 | Shared mutation | Prefer executor isolation; use `Mutex<T>.withLock` for state that genuinely crosses executors. |
@@ -186,7 +186,7 @@ platform-specific. macOS is the first implementation target, zjs is the first
 worker engine, and one window plus one WebView is the first UI shape.
 
 The first executable platform seam is now concrete. Portable
-`Application.run(move this)` freezes its generated metadata and services into
+`Application.run()` prepares its generated metadata and services into
 an immutable `PreparedApplication`, creates the application `TaskScope`, then calls the single
 selected `platform.zs` module. That module must export
 the following contract:
@@ -281,10 +281,10 @@ visible executable uses that same router and service state in the real WebView
 lifecycle.
 
 The current visible transport checkpoint proves steps 2-10. Z owns the
-executable `main` and constructs the public consuming `Application` builder; its
-async `run(move this)` freezes service configuration, publishes the process
-root for the blocking run-loop lifetime, joins callback-created tasks, and
-releases it after shutdown. The
+executable `main` and constructs the public readonly ARC `Application`; its
+async `run()` prepares service configuration, publishes the same application
+identity through `Application.current()` for the blocking run-loop lifetime,
+joins callback-created tasks, and releases the process root after shutdown. The
 main-executor Z application creates and strongly owns the window, WebView,
 configuration, content controller, retained `WKScriptMessageHandler`
 registration owner, protocol adapter, and teardown guard. The Objective-C
@@ -317,7 +317,7 @@ Native Z window creation remains application-scoped:
 import { Application } from "zapp";
 import { WindowOptions } from "zapp/window";
 
-let app = Application();
+const app = new Application();
 const mainWindow = try app.windows.create(WindowOptions({
   title: "Notes",
   url: "/notes",
@@ -503,7 +503,7 @@ inside Zapp.
 | Area | Current evidence | Rewrite question |
 |---|---|---|
 | AppKit and main-thread work | The main-executor Z application creates and owns the window, WebView, configuration, content controller, and script handler; the visible round trip proves teardown. | Do navigation delegates, multiple windows, and broader callbacks compose cleanly? |
-| ARC application state | `Application.run(move this)` owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
+| ARC application state | `Application.run()` publishes the stable ARC application identity and owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
 | Message protocol | Z has strings, collections, enums, matching, errors, and exported C functions. | Is JSON parsing/encoding production-ready and allocation-conscious at the bridge boundary? |
 | Async and executors | A WebKit callback now submits owned messages through an application `TaskScope`; suspended Z services publish on main and shutdown cancels and joins accepted work. | Can per-request cancellation, richer errors, worker executors, and multiple windows preserve the same structured boundary? |
 | zjs embedding | `export c function` and the message-bridge spike prove bidirectional linking; a configured bundled module starts, calls synchronous and suspended Z services directly through the same generated API used by WebViews, receives typed denials, propagates cancellation, restarts within a bounded policy, joins, and releases through the ordinary Z Notes lifecycle. The post-continuation probe measures 399 ns for the direct host path and 2.253 us through the generated Promise API on an Apple M4 Pro. | Can broader wire values, multiple engines, public lifecycle observation, and callback lifetimes preserve the same environment-neutral API without reducing every internal representation to JSON? |

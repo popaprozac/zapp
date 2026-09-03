@@ -38,7 +38,7 @@ import { WindowOptions } from "zapp/window";
 import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
-  let app = Application();
+  const app = new Application();
   const notesRegistered = attempt app.services.register(
     "notes",
     createNotesService()
@@ -72,6 +72,11 @@ async function main(): i32 on thread.main {
   };
 }
 ```
+
+The notes lifecycle hook also retrieves `Application.current()` during startup
+and verifies that it is the same configured application now in the `running`
+state. After the platform loop exits, the smoke checks that the retained `app`
+identity has transitioned to `stopped`.
 
 `WindowOptions` is an ordinary value struct with defaults. `create` returns a
 shared `Window` identity or a typed `WindowError`, and the manager retains every
