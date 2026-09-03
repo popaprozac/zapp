@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { compileNative } from "../../cli/src/native";
 import { prepareZFrontendServices } from "../../cli/src/native-z";
@@ -68,16 +70,21 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "native Z ApplicationWorker.messages did not publish the worker response",
     );
   }
+  const progress = stdout.match(
+    /worker message progress: \{"requestId":"native-smoke","completed":1,"total":(\d+)/,
+  );
+  const completion = stdout.match(
+    /worker message complete: \{"requestId":"native-smoke","total":(\d+),"active":(\d+)/,
+  );
   if (
     !stdout.includes("worker manager requested note index")
     || !stdout.includes("sent started")
     || !stdout.includes("sent complete")
-    || !stdout.includes(
-      'worker message progress: {"requestId":"native-smoke","completed":1,"total":1',
-    )
-    || !stdout.includes(
-      'worker message complete: {"requestId":"native-smoke","total":1,"active":1',
-    )
+    || progress === null
+    || completion === null
+    || Number(progress[1]) < 1
+    || completion[1] !== progress[1]
+    || completion[2] !== progress[1]
   ) {
     throw new Error(
       "configured application worker did not index Z-owned notes end to end",
@@ -113,6 +120,50 @@ async function runWorkerSmoke(command: string[]): Promise<void> {
       "configured application worker did not preserve service capability safety",
     );
   }
+}
+
+async function captureRun(command: string[]): Promise<string> {
+  const child = Bun.spawn(command, {
+    cwd: repository,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, status] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  if (status !== 0) {
+    throw new Error(`${command[0]} exited with status ${status}`);
+  }
+  return stdout;
+}
+
+async function runPersistenceSmoke(command: string[]): Promise<void> {
+  const first = await captureRun(command);
+  const second = await captureRun(command);
+  if (
+    !first.includes(
+      'worker message complete: {"requestId":"native-smoke","total":1,"active":1',
+    )
+    || !first.includes('payload={"id":"2","title":"WebView note"')
+    || !first.includes('payload={"id":"3","title":"WebView note"')
+  ) {
+    throw new Error("first persistence launch did not seed and store notes");
+  }
+  if (
+    !second.includes(
+      'worker message complete: {"requestId":"native-smoke","total":3,"active":3',
+    )
+    || !second.includes('payload={"id":"4","title":"WebView note"')
+    || !second.includes('payload={"id":"5","title":"WebView note"')
+  ) {
+    throw new Error("second persistence launch did not reload and extend notes");
+  }
+  console.log("Z Notes persistence smoke reloaded IDs 1-3 and created IDs 4-5");
 }
 
 async function runWorkerRestartSmoke(command: string[]): Promise<void> {
@@ -204,6 +255,7 @@ async function runWorkerBenchmark(command: string[]): Promise<void> {
 }
 
 const smoke = process.argv.includes("--smoke");
+const persistenceSmoke = process.argv.includes("--persistence-smoke");
 const workerSmoke = process.argv.includes("--worker-smoke");
 const workerRestartSmoke = process.argv.includes("--worker-restart-smoke");
 const workerBenchmark = process.argv.includes("--worker-benchmark");
@@ -211,6 +263,15 @@ const originalWorkerSmoke = process.env.ZAPP_APPLICATION_WORKER_SMOKE;
 const originalWorkerRestartSmoke =
   process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE;
 const originalWorkerBenchmark = process.env.ZAPP_APPLICATION_WORKER_BENCHMARK;
+const originalApplicationIdentifier = process.env.ZAPP_Z_NOTES_IDENTIFIER;
+if (persistenceSmoke) {
+  const identifier = "com.zapp.z-notes.persistence-smoke";
+  process.env.ZAPP_Z_NOTES_IDENTIFIER = identifier;
+  rmSync(
+    resolve(homedir(), "Library", "Application Support", identifier),
+    { recursive: true, force: true },
+  );
+}
 if (workerSmoke || workerBenchmark) {
   process.env.ZAPP_APPLICATION_WORKER_SMOKE = "1";
 }
@@ -279,9 +340,15 @@ try {
     process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE =
       originalWorkerRestartSmoke;
   }
+  if (originalApplicationIdentifier === undefined) {
+    delete process.env.ZAPP_Z_NOTES_IDENTIFIER;
+  } else {
+    process.env.ZAPP_Z_NOTES_IDENTIFIER = originalApplicationIdentifier;
+  }
 }
 
-if (workerBenchmark) await runWorkerBenchmark([output]);
+if (persistenceSmoke) await runPersistenceSmoke([output]);
+else if (workerBenchmark) await runWorkerBenchmark([output]);
 else if (workerRestartSmoke) await runWorkerRestartSmoke([output]);
 else if (workerSmoke) await runWorkerSmoke([output]);
 else await run([output], process.env);

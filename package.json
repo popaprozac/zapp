@@ -14,6 +14,7 @@
     "spike:z-bridge": "bun run spikes/z-notes/bridge.ts",
     "spike:z-notes": "bun run spikes/z-notes/run.ts",
     "spike:z-notes:smoke": "bun run spikes/z-notes/run.ts --smoke",
+    "spike:z-notes:persistence-smoke": "bun run spikes/z-notes/run.ts --smoke --persistence-smoke",
     "spike:z-notes:worker-smoke": "bun run spikes/z-notes/run.ts --smoke --worker-smoke",
     "spike:z-notes:worker-restart-smoke": "bun run spikes/z-notes/run.ts --smoke --worker-restart-smoke",
     "bench:z-notes:worker": "bun run spikes/z-notes/run.ts --smoke --worker-benchmark",

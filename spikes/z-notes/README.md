@@ -232,6 +232,15 @@ The opt-in worker smoke proves that workflow without manual UI interaction:
 bun run spike:z-notes:worker-smoke
 ```
 
+The persistence smoke builds once under a dedicated test-only application
+identifier, removes only that isolated data directory, and launches the same
+binary twice. The first launch seeds ID 1 and stores WebView notes 2-3; the
+second must reload all three before creating IDs 4-5:
+
+```sh
+bun run spike:z-notes:persistence-smoke
+```
+
 A second smoke selects an intentionally failing build-only worker and proves
 the existing restart contract end to end. With `maxRetries: 2`, native ZJS
 creates exactly three engine incarnations, then gives up while the application
