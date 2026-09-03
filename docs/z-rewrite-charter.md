@@ -144,7 +144,7 @@ The rewrite must retain the strongest ideas already proven by Zapp:
 
 | Concern | Z rewrite direction |
 |---|---|
-| Application root | A stable readonly ARC `Application` publishes `Application.current()` for one guarded `run()` interval; platform-private `Once` runtimes retain explicit initialization and shutdown. |
+| Application root | A stable readonly ARC `Application` publishes `Application.current()` for one guarded `run()` interval; synchronized `Once` lifecycle observation turns duplicate or post-shutdown publication into typed state errors while platform-private `Once` runtimes retain explicit initialization and shutdown. |
 | Application quit | `app.quit()` and native OS termination converge on cancellable `app.events.quitRequested`; accepted requests unwind the ordinary run lifetime, while `run()` completion and `app.state()` remain the terminal signal. |
 | Native lifetime | Owned values, `deinit`, ARC classes, `Weak<T>`, and checked foreign contracts replace implicit slot and callback lifetimes. |
 | UI affinity | AppKit/UIKit work is isolated to `thread.main`; invalid access is rejected before generated native compilation. |

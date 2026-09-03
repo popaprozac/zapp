@@ -98,11 +98,14 @@ resolved status together with `app.state() == ApplicationState.stopped` is the
 authoritative terminal signal; Zapp does not duplicate it with a `stopped`
 event in this tier.
 
-The current pre-alpha runtime supports one application run per process. A
-different `Application` attempting to publish after that process-wide lifetime
-has closed is still rejected by the lower-level `Once` invariant rather than a
-typed Zapp error. The application lifecycle layer should project that case into
-the same typed state model before public alpha.
+The current pre-alpha runtime supports one application run per process. Before
+publication, Zapp observes the synchronized `Once<Application>` lifecycle on
+`thread.main`: an already-published root throws a typed `running` state error,
+and publication after the process-wide lifetime has closed throws a typed
+`stopped` state error. The scoped run guard still reaches `stopped` and finishes
+the application event lifetime on either failure. This snapshot is sound here
+because publication and cleanup are serialized on the main executor; Zapp does
+not treat `Once.state()` as a general concurrent check-then-act primitive.
 
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's

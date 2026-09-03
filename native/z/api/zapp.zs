@@ -35,7 +35,7 @@ import {
 } from "../framework/application-services.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
-import { Once } from "std/sync";
+import { Once, OnceState } from "std/sync";
 import {
   WindowManager,
   createWindowManager,
@@ -100,6 +100,24 @@ struct ApplicationRunLifetime on thread.main {
   }
 }
 
+function requireApplicationPublication(): void throws ApplicationError on thread.main {
+  match (currentApplication.state()) {
+    empty => {}
+    initialized => throw FrameworkApplicationError.state(
+      FrameworkApplicationStateError({
+        state: FrameworkApplicationState.running,
+        message: "Another Application.run() is already active in this process",
+      })
+    );
+    closed => throw FrameworkApplicationError.state(
+      FrameworkApplicationStateError({
+        state: FrameworkApplicationState.stopped,
+        message: "Application.run() cannot publish a new application after process shutdown",
+      })
+    );
+  }
+}
+
 // One stable application identity owns stable manager identities. The scalar
 // main-affine marker routes final ARC release to the application's executor
 // without making harmless metadata methods main-only.
@@ -145,14 +163,15 @@ export readonly class Application {
     if (!applicationState.begin()) {
       throw FrameworkApplicationError.state(applicationState.error());
     }
-    const sourceApplication = this;
-    const config = prepareApplication(in sourceApplication);
-    const publishedApplication = this;
-    const lifetime = currentApplication.initialize(move publishedApplication);
     const runLifetime = ApplicationRunLifetime({
       runState: applicationState,
       events: this.events,
     });
+    try requireApplicationPublication();
+    const sourceApplication = this;
+    const config = prepareApplication(in sourceApplication);
+    const publishedApplication = this;
+    const lifetime = currentApplication.initialize(move publishedApplication);
     const updates = new TaskScope();
     return try await runApplicationPlatform(config, updates);
   }
