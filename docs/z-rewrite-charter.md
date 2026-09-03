@@ -145,6 +145,7 @@ The rewrite must retain the strongest ideas already proven by Zapp:
 | Concern | Z rewrite direction |
 |---|---|
 | Application root | A stable readonly ARC `Application` publishes `Application.current()` for one guarded `run()` interval; platform-private `Once` runtimes retain explicit initialization and shutdown. |
+| Application quit | `app.quit()` and native OS termination converge on cancellable `app.events.quitRequested`; accepted requests unwind the ordinary run lifetime, while `run()` completion and `app.state()` remain the terminal signal. |
 | Native lifetime | Owned values, `deinit`, ARC classes, `Weak<T>`, and checked foreign contracts replace implicit slot and callback lifetimes. |
 | UI affinity | AppKit/UIKit work is isolated to `thread.main`; invalid access is rejected before generated native compilation. |
 | Shared mutation | Prefer executor isolation; use `Mutex<T>.withLock` for state that genuinely crosses executors. |
@@ -330,6 +331,13 @@ pre-run registrations, dynamic realization, main-executor contract, last-window
 policy, and deterministic shutdown. A global `Window.create(...)` would have
 to find the current application through hidden process state and make calls
 before initialization, after shutdown, and across isolated tests ambiguous.
+
+The same application identity owns lifecycle observation. `app.quit()` is a
+request rather than an immediate process exit, and
+`app.events.quitRequested.subscribe(...)` may call `event.cancel()` while that
+specific request is in flight. Native macOS quit requests use the same path;
+once accepted, shutdown remains deterministic and is observed by awaiting
+`app.run()`.
 
 This does not make `Application` a universal manager container:
 

@@ -4,6 +4,7 @@ import {
   WindowError,
 } from "../../application-error.zs";
 import { ApplicationMetadata } from "../../application-metadata.zs";
+import { ApplicationQuitOperation } from "../../application-events.zs";
 import { ApplicationContext } from "../../../api/zapp/service.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
@@ -15,6 +16,7 @@ import {
   publishMacOSApplicationWorkerLifecycle,
   publishMacOSApplicationWorkerMessage,
   publishMacOSApplicationWorkerService,
+  requestMacOSApplicationQuit,
 } from "./application-runtime.zs";
 import {
   installApplicationWorkerManager,
@@ -49,7 +51,7 @@ export async function runMacOSApplication(
       message: "a macOS desktop application requires a registered window in this tier",
     }));
   }
-  const hostLifetime = initializeMacOSApplicationHost();
+  const hostLifetime = initializeMacOSApplicationHost(config.events);
   const context = ApplicationContext({
     metadata: ApplicationMetadata({
       name: copy config.metadata.name,
@@ -115,7 +117,12 @@ export async function runMacOSApplication(
   );
   workerManager.install(sendWorker);
   installMacOSApplicationWorkers(workers);
+  let events = config.events;
+  const quitApplication: ApplicationQuitOperation = move (
+  ): void => requestMacOSApplicationQuit();
+  events.start(quitApplication);
   const status = runMacOSApplicationLoop();
+  events.finish();
   workers.requestCancellation();
   cancelAllMacOSApplicationWorkerServices();
   workers.join();

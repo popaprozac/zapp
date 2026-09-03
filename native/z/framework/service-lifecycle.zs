@@ -47,15 +47,20 @@ function invokeServiceLifecycle<T: ServiceLifecycle>(
   };
 }
 
-export struct ServiceLifecycleBuilder {
+class ServiceLifecycleEntries on thread.main {
   entries: Array<ServiceLifecycleAdapter>;
+}
+
+export class ServiceLifecycleBuilder on thread.main {
+  readonly storage: ServiceLifecycleEntries;
 
   function add(
     inout this,
     name: String,
     hook: ServiceLifecycleHook
   ): void on thread.main {
-    this.entries.push(new ServiceLifecycleAdapter({
+    let storage = this.storage;
+    storage.entries.push(new ServiceLifecycleAdapter({
       name: move name,
       hook,
     }));
@@ -74,20 +79,26 @@ export struct ServiceLifecycleBuilder {
     this.add(move name, hook);
   }
 
-  function freeze(move this): ServiceLifecycles on thread.main {
-    return new ServiceLifecycles({ entries: this.entries.freeze() });
+  function freeze(): ServiceLifecycles on thread.main {
+    return new ServiceLifecycles(this.storage);
   }
+
 }
 
 export readonly class ServiceLifecycles {
-  readonly entries: readonly Array<ServiceLifecycleAdapter>;
+  internal readonly storage: ServiceLifecycleEntries;
+
+  internal constructor(storage: ServiceLifecycleEntries) {
+    this.storage = storage;
+  }
 
   function start(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
+    const storage = this.storage;
     let started: usize = 0;
-    while (started < this.entries.length) {
-      const entry: ServiceLifecycleAdapter = this.entries[started];
+    while (started < storage.entries.length) {
+      const entry: ServiceLifecycleAdapter = storage.entries[started];
       const observed: Result<void, ServiceLifecycleError> =
         attempt entry.start(in context);
       match (observed) {
@@ -96,7 +107,7 @@ export readonly class ServiceLifecycles {
           let rollback = started;
           while (rollback > 0) {
             rollback = rollback - 1;
-            const previous: ServiceLifecycleAdapter = this.entries[rollback];
+            const previous: ServiceLifecycleAdapter = storage.entries[rollback];
             const stopped: Result<void, ServiceLifecycleError> =
               attempt previous.stop(in context);
             match (stopped) {
@@ -113,14 +124,15 @@ export readonly class ServiceLifecycles {
   function stop(
     in context: ApplicationContext
   ): void throws ServiceLifecycleError on thread.main {
+    const storage = this.storage;
     let failed: boolean = false;
     let firstService: String = "";
     let firstPhase = ServiceLifecyclePhase.stop;
     let firstMessage: String = "";
-    let remaining: usize = this.entries.length;
+    let remaining: usize = storage.entries.length;
     while (remaining > 0) {
       remaining = remaining - 1;
-      const entry: ServiceLifecycleAdapter = this.entries[remaining];
+      const entry: ServiceLifecycleAdapter = storage.entries[remaining];
       const observed: Result<void, ServiceLifecycleError> =
         attempt entry.stop(in context);
       match (observed) {
@@ -147,7 +159,9 @@ export readonly class ServiceLifecycles {
 
 export function createServiceLifecycles(
 ): ServiceLifecycleBuilder on thread.main {
-  return ServiceLifecycleBuilder({
-    entries: Array<ServiceLifecycleAdapter>(),
+  return new ServiceLifecycleBuilder({
+    storage: new ServiceLifecycleEntries({
+      entries: Array<ServiceLifecycleAdapter>(),
+    }),
   });
 }

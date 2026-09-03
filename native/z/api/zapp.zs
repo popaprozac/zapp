@@ -9,6 +9,13 @@ import {
 } from "../framework/application-metadata.zs";
 import { ApplicationPermissions } from "../framework/application-permissions.zs";
 import { ApplicationCapabilities } from "../framework/application-capabilities.zs";
+import {
+  ApplicationEvents as FrameworkApplicationEvents,
+  ApplicationEventSubscription as FrameworkApplicationEventSubscription,
+  ApplicationEventSubscriptionError as FrameworkApplicationEventSubscriptionError,
+  ApplicationQuitRequestedEvent as FrameworkApplicationQuitRequestedEvent,
+  createApplicationEvents,
+} from "../framework/application-events.zs";
 import { AsyncServices } from "../framework/async-services.zs";
 import {
   configuredApplicationMetadata,
@@ -40,12 +47,17 @@ export type ApplicationStateError = FrameworkApplicationStateError;
 export type ApplicationMetadata = FrameworkApplicationMetadata;
 export type ApplicationServices = FrameworkApplicationServices;
 export type ServiceRegistrationError = FrameworkServiceRegistrationError;
+export type ApplicationEvents = FrameworkApplicationEvents;
+export type ApplicationEventSubscription = FrameworkApplicationEventSubscription;
+export type ApplicationEventSubscriptionError = FrameworkApplicationEventSubscriptionError;
+export type ApplicationQuitRequestedEvent = FrameworkApplicationQuitRequestedEvent;
 
 class ApplicationRunState on thread.main {
   value: ApplicationState;
 
   function begin(inout this): boolean {
-    match (this.value) {
+    const current = this.value;
+    match (current) {
       configuring => {
         this.value = FrameworkApplicationState.running;
         return true;
@@ -78,10 +90,13 @@ class ApplicationRunState on thread.main {
 
 struct ApplicationRunLifetime on thread.main {
   runState: ApplicationRunState;
+  events: ApplicationEvents;
 
   deinit {
     let runState = this.runState;
     runState.finish();
+    let events = this.events;
+    events.finish();
   }
 }
 
@@ -92,6 +107,7 @@ export readonly class Application {
   readonly metadata: ApplicationMetadata;
   readonly permissions: ApplicationPermissions;
   readonly capabilities: ApplicationCapabilities;
+  readonly events: ApplicationEvents;
   readonly windows: WindowManager;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
@@ -102,6 +118,7 @@ export readonly class Application {
     this.metadata = configuredApplicationMetadata();
     this.permissions = configuredApplicationPermissions();
     this.capabilities = configuredApplicationCapabilities();
+    this.events = createApplicationEvents();
     this.windows = createWindowManager();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
@@ -119,6 +136,10 @@ export readonly class Application {
     return this.runState.value;
   }
 
+  function quit(): void on thread.main {
+    this.events.requestQuit();
+  }
+
   async function run(): i32 throws ApplicationError on thread.main {
     let applicationState = this.runState;
     if (!applicationState.begin()) {
@@ -130,6 +151,7 @@ export readonly class Application {
     const lifetime = currentApplication.initialize(move publishedApplication);
     const runLifetime = ApplicationRunLifetime({
       runState: applicationState,
+      events: this.events,
     });
     const updates = new TaskScope();
     return try await runApplicationPlatform(config, updates);
@@ -148,6 +170,7 @@ function prepareApplication(
   });
   const permissions = app.permissions;
   const capabilities = app.capabilities;
+  const events = app.events;
   const windows = app.windows;
   const workers = app.workers;
   const services = app.services;
@@ -156,6 +179,7 @@ function prepareApplication(
     metadata: move metadata,
     permissions,
     capabilities,
+    events,
     windows,
     services: new AsyncServices({
       synchronous: routes,

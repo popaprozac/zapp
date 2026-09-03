@@ -3,6 +3,7 @@ import {
   ServiceOutcome,
 } from "./service-contract.zs";
 import { Map } from "std/collections";
+import { replace } from "std/memory";
 import { thread } from "std/thread";
 
 export type AsyncServiceHandler =
@@ -27,6 +28,14 @@ export struct AsyncServiceRegistry {
     move this
   ): readonly Map<String, AsyncServiceHandler> {
     const { handlers } = move this;
+    return handlers.freeze();
+  }
+
+  internal function take(
+    inout this
+  ): readonly Map<String, AsyncServiceHandler> {
+    const replacement = Map<String, AsyncServiceHandler>();
+    const handlers = replace(inout this.handlers, move replacement);
     return handlers.freeze();
   }
 }

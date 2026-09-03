@@ -368,6 +368,12 @@ internal function abortMacOSApplicationRuntime(): void on thread.main {
   current.closeAllNativeWindows();
 }
 
+internal function requestMacOSApplicationQuit(): void on thread.main {
+  const current = application.get();
+  current.closeAllNativeWindows();
+  stopMacOSRunLoop();
+}
+
 internal function installMacOSApplicationWorkers(
   workers: ApplicationWorkers
 ): void on thread.main {

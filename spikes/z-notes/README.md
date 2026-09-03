@@ -78,6 +78,24 @@ and verifies that it is the same configured application now in the `running`
 state. After the platform loop exits, the smoke checks that the retained `app`
 identity has transitioned to `stopped`.
 
+The public application identity also owns cancellable shutdown observation:
+
+```z
+const subscription = try app.events.quitRequested.subscribe(
+  move (in event: ApplicationQuitRequestedEvent): void => {
+    if (hasUnsavedWork()) event.cancel();
+  }
+);
+
+app.quit();
+const status = try await app.run();
+```
+
+On macOS the same event is consulted for programmatic quit, Cmd-Q, Dock Quit,
+and system termination. Cancellation affects only that request; accepted
+shutdown resolves `run()` after windows, workers, and services have completed
+their normal teardown.
+
 `WindowOptions` is an ordinary value struct with defaults. `create` returns a
 shared `Window` identity or a typed `WindowError`, and the manager retains every
 open window. The primary WebView calls the focused frontend `createWindow()`

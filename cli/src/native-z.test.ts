@@ -562,6 +562,10 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/application-contract.zs", import.meta.url),
       "utf8",
     );
+    const applicationEvents = readFileSync(
+      new URL("../../native/z/framework/application-events.zs", import.meta.url),
+      "utf8",
+    );
     const platform = readFileSync(
       new URL("../../native/z/framework/platform.zs", import.meta.url),
       "utf8",
@@ -643,6 +647,13 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
+    const macOSApplicationHost = readFileSync(
+      new URL(
+        "../../native/z/framework/platform/macos/application-host.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const workerSpike = readFileSync(
       new URL("../../native/z/smokes/zjs-worker-host/main.zs", import.meta.url),
       "utf8",
@@ -663,6 +674,16 @@ describe("Z native host inputs", () => {
     expect(application).toContain("static function current(): Application");
     expect(application).toContain("const currentApplication = Once<Application>();");
     expect(application).toContain("function state(): ApplicationState on thread.main");
+    expect(application).toContain("readonly events: ApplicationEvents;");
+    expect(application).toContain("function quit(): void on thread.main");
+    expect(applicationEvents).toContain(
+      "export readonly class ApplicationQuitRequestedEvent on thread.main",
+    );
+    expect(applicationEvents).toContain(
+      "readonly quitRequested: Event<ApplicationQuitRequestedEvent>;",
+    );
+    expect(applicationEvents).toContain("function cancel(): void");
+    expect(applicationEvents).toContain("internal function approveQuit(): boolean");
     expect(application).toContain(
       "this.windows = createWindowManager();",
     );
@@ -684,9 +705,13 @@ describe("Z native host inputs", () => {
     expect(application).toContain("lifecycles,");
     expect(contract).toContain("export readonly class PreparedApplication on thread.main");
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
+    expect(contract).toContain("readonly events: ApplicationEvents");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
+    expect(macOSApplication).toContain("events.start(quitApplication);");
+    expect(macOSApplicationHost).toContain("implements AppKit.NSApplicationDelegate");
+    expect(macOSApplicationHost).toContain('as "applicationShouldTerminate:"');
     expect(headless).toContain("class HeadlessApplicationRuntime");
     expect(headless).toContain("export async function runApplicationPlatform(");
     expect(headlessSmoke).toContain("attempt await runHeadlessApplicationPlatform(");
@@ -711,7 +736,13 @@ describe("Z native host inputs", () => {
     expect(applicationServices).toContain("internal function prepare(inout this): ConfiguredServices");
     expect(applicationServices).toContain("export readonly struct ServiceRegistrationError");
     expect(applicationServices).toContain("if (this.prepared)");
-    expect(applicationServices).toContain("replace(");
+    expect(applicationServices).toContain("routes: this.routes.take()");
+    expect(applicationServices).toContain(
+      "asynchronous: this.asynchronous.take()",
+    );
+    expect(applicationServices).toContain(
+      "lifecycles: this.lifecycles.freeze()",
+    );
     expect(workerEngine).toContain("export trait WorkerEngine<Command>");
     expect(workerEngine).toContain("export readonly class WorkerMailbox<Command>");
     expect(workerEngine).toContain("export struct WorkerInbox<Command>");

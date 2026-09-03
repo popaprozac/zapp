@@ -28,7 +28,6 @@ import {
   createServices,
 } from "./services.zs";
 import { Map } from "std/collections";
-import { replace } from "std/memory";
 import { thread } from "std/thread";
 
 function serviceHandler<T: Service>(service: T): ServiceHandler {
@@ -137,27 +136,10 @@ internal struct ApplicationServicesBuilder {
   internal function prepareConfigured(
     inout this
   ): ConfiguredServices on thread.main {
-    const routesReplacement: ServicesBuilder = createServices();
-    const routes: ServicesBuilder = replace(
-      inout this.routes,
-      move routesReplacement
-    );
-    const asynchronousReplacement: AsyncServiceRegistry =
-      createAsyncServiceRegistry();
-    const asynchronous: AsyncServiceRegistry = replace(
-      inout this.asynchronous,
-      move asynchronousReplacement
-    );
-    const lifecyclesReplacement: ServiceLifecycleBuilder =
-      createServiceLifecycles();
-    const lifecycles: ServiceLifecycleBuilder = replace(
-      inout this.lifecycles,
-      move lifecyclesReplacement
-    );
     return ConfiguredServices({
-      routes: routes.freeze(),
-      asynchronous: asynchronous.freeze(),
-      lifecycles: lifecycles.freeze(),
+      routes: this.routes.take(),
+      asynchronous: this.asynchronous.take(),
+      lifecycles: this.lifecycles.freeze(),
     });
   }
 }

@@ -1,6 +1,8 @@
 import AppKit from "AppKit/AppKit.h";
+import objc from "std/objc";
 import { Mutex, Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";
+import { ApplicationEvents } from "../../application-events.zs";
 import {
   configuredMacOSApplicationSmokeMode,
 } from "./configured-smoke.zs";
@@ -13,6 +15,7 @@ internal class MacOSApplicationHost {
   readonly smokeMode: boolean;
   readonly state: Mutex<MacOSApplicationHostState>;
   readonly application: AppKit.NSApplication on thread.main;
+  readonly delegate: objc.Adapter<AppKit.NSApplicationDelegate> on thread.main;
 
   function result(): i32 {
     return this.state.withLock((in state): i32 => state.result);
@@ -25,19 +28,39 @@ internal class MacOSApplicationHost {
   }
 }
 
+class MacOSApplicationDelegate on thread.main
+  implements AppKit.NSApplicationDelegate {
+  readonly events: ApplicationEvents;
+
+  function shouldTerminate(
+    in application: AppKit.NSApplication
+  ): AppKit.NSApplicationTerminateReply as "applicationShouldTerminate:" {
+    let events = this.events;
+    return events.approveQuit()
+      ? AppKit.NSTerminateNow
+      : AppKit.NSTerminateCancel;
+  }
+}
+
 const applicationHost = Once<MacOSApplicationHost>();
 
-internal function initializeMacOSApplicationHost():
+internal function initializeMacOSApplicationHost(
+  events: ApplicationEvents
+):
   OnceLifetime<MacOSApplicationHost> on thread.main {
   const smokeMode = configuredMacOSApplicationSmokeMode();
   const application: AppKit.NSApplication =
     AppKit.NSApplication.sharedApplication;
+  const nativeDelegate = new MacOSApplicationDelegate({ events });
+  const delegate = objc.adapt<AppKit.NSApplicationDelegate>(nativeDelegate);
+  application.delegate = delegate;
   return applicationHost.initialize(new MacOSApplicationHost({
     smokeMode,
     state: Mutex(MacOSApplicationHostState({
       result: smokeMode ? 41 : 0,
     })),
     application,
+    delegate,
   }));
 }
 

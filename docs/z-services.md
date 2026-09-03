@@ -73,6 +73,31 @@ instead. Metadata and unrestricted manager references remain available wherever
 their own contracts permit, while `state()` and lifecycle operations stay on
 `thread.main`.
 
+Application shutdown is a request with one explicit cancellation point:
+
+```z
+const quitSubscription = try app.events.quitRequested.subscribe(
+  move (in event: ApplicationQuitRequestedEvent): void => {
+    if (hasUnsavedWork()) event.cancel();
+  }
+);
+
+app.quit();
+const status = try await app.run();
+```
+
+`app.quit()` requests orderly shutdown on `thread.main`; it does not bypass
+application policy or tear resources down immediately. Programmatic requests,
+Cmd-Q, Dock Quit, and macOS system termination all consult the same
+`quitRequested` event. Any subscriber may cancel the in-flight request. A
+cancelled request leaves the application running and a later request may be
+considered independently. Once a request is accepted, Zapp closes native
+windows without reopening each window's separate close decision, stops
+workers and services in their ordinary order, and lets `run()` resolve. The
+resolved status together with `app.state() == ApplicationState.stopped` is the
+authoritative terminal signal; Zapp does not duplicate it with a `stopped`
+event in this tier.
+
 The current pre-alpha runtime supports one application run per process. A
 different `Application` attempting to publish after that process-wide lifetime
 has closed is still rejected by the lower-level `Once` invariant rather than a

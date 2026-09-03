@@ -6,6 +6,7 @@ import {
   createServiceRegistry,
 } from "./service-contract.zs";
 import { Map } from "std/collections";
+import { replace } from "std/memory";
 
 export trait Service {
   function invoke(in invocation: ServiceInvocation): ServiceOutcome;
@@ -31,6 +32,15 @@ export struct ServicesBuilder {
   function freeze(move this): Services {
     const { registry } = move this;
     const { handlers } = move registry;
+    return new Services({ handlers: handlers.freeze() });
+  }
+
+  internal function take(inout this): Services {
+    const replacement = Map<String, ServiceHandler>();
+    const handlers = replace(
+      inout this.registry.handlers,
+      move replacement
+    );
     return new Services({ handlers: handlers.freeze() });
   }
 }
