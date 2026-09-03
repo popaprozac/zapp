@@ -20,7 +20,8 @@ import {
 } from "../framework/worker/worker-manager.zs";
 import { runApplicationPlatform } from "../framework/platform.zs";
 import {
-  ApplicationServicesBuilder,
+  ApplicationServices as FrameworkApplicationServices,
+  ServiceRegistrationError as FrameworkServiceRegistrationError,
   createApplicationServices,
 } from "../framework/application-services.zs";
 import { thread } from "std/thread";
@@ -32,6 +33,8 @@ import {
 
 export type ApplicationError = FrameworkApplicationError;
 export type ApplicationMetadata = FrameworkApplicationMetadata;
+export type ApplicationServices = FrameworkApplicationServices;
+export type ServiceRegistrationError = FrameworkServiceRegistrationError;
 
 // Application is configuration under construction. run() consumes it once,
 // while its managers and the prepared runtime retain shared ARC identities.
@@ -45,7 +48,7 @@ export struct Application on thread.main {
   readonly workers: WorkerManager = createWorkerManager(
     configuredApplicationWorkers()
   );
-  services: ApplicationServicesBuilder = createApplicationServices();
+  readonly services: ApplicationServices = createApplicationServices();
 
   async function run(
     move this
@@ -67,8 +70,7 @@ function prepareApplication(
     workers,
     services,
   } = move app;
-  const { routes, asynchronous, lifecycles } =
-    services.freezeConfigured();
+  const { routes, asynchronous, lifecycles } = services.prepare();
   return new PreparedApplication({
     metadata: move metadata,
     permissions,

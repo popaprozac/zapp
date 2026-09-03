@@ -40,7 +40,7 @@ describe("prepared Z service metadata", () => {
         offset: 42,
         line: 3,
         column: 2,
-        method: "ApplicationServicesBuilder.register",
+        method: "ApplicationServices.register",
       },
       methods: [],
     }],
@@ -653,8 +653,8 @@ describe("Z native host inputs", () => {
       "readonly metadata: ApplicationMetadata = configuredApplicationMetadata()",
     );
     expect(app).toContain("const notesService = createNotesService();");
-    expect(app).toContain('app.services.register("notes", move notesService);');
-    expect(app).toContain('app.services.register("health", createHealthService());');
+    expect(app).toContain("const notesRegistered = attempt app.services.register(");
+    expect(app).toContain("const healthRegistered = attempt app.services.register(");
     expect(app).toContain('inject: Array<String>("base")');
     expect(app).toContain("const result = attempt await app.run();");
     expect(application).toContain("export struct Application");
@@ -667,7 +667,7 @@ describe("Z native host inputs", () => {
     expect(application).toContain(
       "readonly capabilities: ApplicationCapabilities",
     );
-    expect(application).toContain("services: ApplicationServicesBuilder = createApplicationServices();");
+    expect(application).toContain("readonly services: ApplicationServices = createApplicationServices();");
     expect(application).toContain("throws ApplicationError on thread.main");
     expect(application).toContain("const config = prepareApplication(move this);");
     expect(application).toContain("const updates = new TaskScope();");
@@ -699,7 +699,11 @@ describe("Z native host inputs", () => {
     );
     expect(windows).not.toMatch(/\b__[A-Za-z]/);
     expect(applicationServices).toContain("internal struct ConfiguredServices");
-    expect(applicationServices).toContain("internal function freezeConfigured(");
+    expect(applicationServices).toContain("export readonly class ApplicationServices on thread.main");
+    expect(applicationServices).toContain("internal function prepare(inout this): ConfiguredServices");
+    expect(applicationServices).toContain("export readonly struct ServiceRegistrationError");
+    expect(applicationServices).toContain("if (this.prepared)");
+    expect(applicationServices).toContain("replace(");
     expect(workerEngine).toContain("export trait WorkerEngine<Command>");
     expect(workerEngine).toContain("export readonly class WorkerMailbox<Command>");
     expect(workerEngine).toContain("export struct WorkerInbox<Command>");

@@ -39,8 +39,22 @@ import { thread } from "std/thread";
 
 async function main(): i32 on thread.main {
   let app = Application();
-  app.services.register("notes", createNotesService());
-  app.services.register("health", createHealthService());
+  const notesRegistered = attempt app.services.register(
+    "notes",
+    createNotesService()
+  );
+  match (notesRegistered) {
+    success => {}
+    failure(_) => return 78;
+  }
+  const healthRegistered = attempt app.services.register(
+    "health",
+    createHealthService()
+  );
+  match (healthRegistered) {
+    success => {}
+    failure(_) => return 79;
+  }
   const createdWindow = attempt app.windows.create(WindowOptions({
     title: "Z Notes",
     url: "/notes",

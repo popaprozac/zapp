@@ -282,7 +282,7 @@ function addWireType(
 
 export function deriveZServiceManifest(
   metadata: ZProgramMetadata,
-  registrationMethod = "ApplicationServicesBuilder.register",
+  registrationMethod = "ApplicationServices.register",
 ): ZServiceManifest {
   const separator = registrationMethod.lastIndexOf(".");
   if (separator <= 0 || separator === registrationMethod.length - 1) {

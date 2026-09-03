@@ -127,9 +127,9 @@ const metadata: ZProgramMetadata = {
       column: 24,
       target: {
         module: "/services.zs",
-        symbol: "ApplicationServicesBuilder",
+        symbol: "ApplicationServices",
         kind: "method",
-        name: "ApplicationServicesBuilder.register",
+        name: "ApplicationServices.register",
       },
       arguments: [
         { kind: "string", type: "String", value: "notes" },
@@ -178,7 +178,7 @@ describe("compiler-produced Z program metadata", () => {
           offset: 100,
           line: 20,
           column: 24,
-          method: "ApplicationServicesBuilder.register",
+          method: "ApplicationServices.register",
         },
         methods: [
           {

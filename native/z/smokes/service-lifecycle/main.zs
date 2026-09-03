@@ -273,9 +273,29 @@ function registeredServiceLifecycle(
       stops: 0,
     })),
   });
-  let builder = createApplicationServices();
-  builder.registerGeneratedWithLifecycle("registered", service);
-  const { routes, lifecycles } = builder.freezeConfigured();
+  const services = createApplicationServices();
+  const registered = attempt services.registerGeneratedWithLifecycle(
+    "registered",
+    service
+  );
+  match (registered) {
+    success => {}
+    failure(_) => return false;
+  }
+  const { routes, lifecycles } = services.prepare();
+  const lateRegistration = attempt services.registerGenerated(
+    "late",
+    service
+  );
+  match (lateRegistration) {
+    success => return false;
+    failure(error) => {
+      if (
+        error.service != "late"
+        || error.message.byteLength == 0
+      ) return false;
+    }
+  }
 
   const started = attempt lifecycles.start(in context);
   match (started) {

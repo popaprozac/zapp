@@ -29,7 +29,7 @@ function manifestFor(source: string, module = "/workspace/app/main.zs"): ZServic
         offset: source.indexOf(method) + method.length,
         line: 4,
         column: 45,
-        method: `ApplicationServicesBuilder.${method}`,
+        method: `ApplicationServices.${method}`,
       },
       methods: [{
         id: 1,
@@ -81,8 +81,8 @@ function main(): i32 {
         source: "../app/main.zs",
         sourceHash: createHash("sha256").update(source).digest("hex"),
         offset: source.indexOf("register") + "register".length,
-        target: "ApplicationServicesBuilder.register",
-        replacement: "ApplicationServicesBuilder.registerGeneratedAsyncWithLifecycle",
+        target: "ApplicationServices.register",
+        replacement: "ApplicationServices.registerGeneratedAsyncWithLifecycle",
         argument: 1,
         adapter: {
           module: "zapp/generated/service-dispatchers",
@@ -126,7 +126,7 @@ function main(): i32 {
     );
     const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
     expect(overlay.callAdapters[0].replacement)
-      .toBe("ApplicationServicesBuilder.registerGenerated");
+      .toBe("ApplicationServices.registerGenerated");
     rmSync(directory, { recursive: true, force: true });
   });
 

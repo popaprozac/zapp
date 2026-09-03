@@ -27,12 +27,20 @@ over the same public module identities.
 
 ## Application surface
 
-The public lifecycle is designed around a consuming application builder:
+The public lifecycle is designed around a consuming application configuration
+whose managers have stable shared identity:
 
 ```z
 async function main(): i32 throws WindowError on thread.main {
   let app = Application();
-  app.services.register("notes", createNotesService());
+  const registered = attempt app.services.register(
+    "notes",
+    createNotesService()
+  );
+  match (registered) {
+    success => {}
+    failure(_) => return 69;
+  }
   const mainWindow = try app.windows.create(WindowOptions({
     title: "Notes",
     url: "/notes",
@@ -48,12 +56,10 @@ async function main(): i32 throws WindowError on thread.main {
 
 The CLI compiles the resolved `zapp.config.ts` application name, identifier,
 and version into the readonly `app.metadata` value. `app.run()` consumes the
-mutable builder, freezes its service routing table and metadata, publishes the
-runtime application identity, and asynchronously remains attached to the
-blocking platform run loop until shutdown.
-There is no user-facing `finish()` call. Internally, `freeze()` names the exact
-mutable-builder to readonly-router transition and matches Z collection
-vocabulary.
+configuration, asks its service manager to prepare immutable routing and
+lifecycle snapshots, publishes the runtime application identity, and
+asynchronously remains attached to the blocking platform run loop until
+shutdown. There is no user-facing `finish()` or `freeze()` call.
 
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's
@@ -100,13 +106,16 @@ order before the original start error is propagated. Normal stops run in
 reverse order, attempt every service even after an error, and then propagate
 the first reverse-order stop error.
 
-The application surface has one registration operation:
+The application surface has one registration operation. Registration is
+fallible because the same ARC manager identity may be retained after
+`Application.run()` begins; that late mutation is rejected instead of silently
+changing a frozen router:
 
 ```z
-app.services.register("health", createHealthService());
-app.services.register("database", createDatabaseService());
-app.services.register("search", createSearchService());
-app.services.register("notes", createNotesService());
+try app.services.register("health", createHealthService());
+try app.services.register("database", createDatabaseService());
+try app.services.register("search", createSearchService());
+try app.services.register("notes", createNotesService());
 ```
 
 The checked method metadata selects a synchronous adapter when every public
@@ -115,13 +124,20 @@ can suspend or requires `thread.main`. Implementing `ServiceLifecycle` adds the
 lifecycle forwarder. Application authors do not choose the transport adapter or
 register one object twice.
 
-`ApplicationServicesBuilder.register` is deliberately a build marker during
+`ApplicationServices.register` is deliberately a build marker during
 the first metadata pass. Zapp emits a versioned `.zbuild.json` overlay naming
 the original source hash, checked call offset and target, selected typed runtime
 method, and generated adapter export. The Z compiler applies that contract to
 its AST and performs a complete second semantic pass; neither authored nor
 staged application source is rewritten. A Zapp application is built with
 `zapp`, not by invoking its entry directly with bare `z run`.
+
+`ApplicationServices` is a stable main-executor ARC manager, matching
+`WindowManager` rather than exposing its mutable value builder. Its internal
+builder is cheap configuration storage. Preparation transfers those stores into
+immutable routing snapshots and leaves the manager in a prepared state; later
+registration throws `ServiceRegistrationError`. The manager is not consulted
+on service dispatch.
 
 Lifecycle storage remains deliberately separate from the frozen service router
 inside the framework. The router stays `on thread.any` for WebView and
@@ -141,7 +157,7 @@ its stored identity and lifecycle forwarding, and emits direct concrete method
 calls. Application authors write only:
 
 ```z
-app.services.register("notes", createNotesService());
+try app.services.register("notes", createNotesService());
 ```
 
 The permanent smoke under `native/z/smokes/service-lifecycle/` proves normal
@@ -152,8 +168,9 @@ stop.
 
 The Phase 1 Notes application uses that surface directly in
 `spikes/z-notes/zapp/main.zs`. `Application()` receives immutable generated
-metadata and creates a fresh service builder through value-field defaults; the
-main-thread `run(move this)` method consumes the whole configuration. Z owns
+metadata and creates a fresh shared service manager through value-field
+defaults; the main-thread `run(move this)` method consumes the whole
+configuration and asks the manager to publish its immutable snapshots. Z owns
 the executable `main`; the Objective-C file is a linked platform adapter with
 no framework policy or entry point of its own.
 
@@ -343,7 +360,7 @@ resolved public call sites, literal arguments, and non-literal argument types.
 Zapp recognizes synchronous and async application registrations, including:
 
 ```z
-app.services.register("notes", createNotesService());
+try app.services.register("notes", createNotesService());
 ```
 
 It resolves `NotesService`, its public methods, and the exported request and
@@ -516,7 +533,7 @@ readonly class SearchService {
   }
 }
 
-app.services.register("search", new SearchService({}));
+try app.services.register("search", new SearchService({}));
 ```
 
 Decoded request values are created before the service suspension and then

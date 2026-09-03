@@ -40,13 +40,13 @@ export interface ZGeneratedBuildContribution {
 }
 
 const applicationRegistrationTarget: ZServiceRegistrationTarget = {
-  marker: "ApplicationServicesBuilder.register",
-  synchronous: "ApplicationServicesBuilder.registerGenerated",
-  asynchronous: "ApplicationServicesBuilder.registerGeneratedAsync",
+  marker: "ApplicationServices.register",
+  synchronous: "ApplicationServices.registerGenerated",
+  asynchronous: "ApplicationServices.registerGeneratedAsync",
   synchronousWithLifecycle:
-    "ApplicationServicesBuilder.registerGeneratedWithLifecycle",
+    "ApplicationServices.registerGeneratedWithLifecycle",
   asynchronousWithLifecycle:
-    "ApplicationServicesBuilder.registerGeneratedAsyncWithLifecycle",
+    "ApplicationServices.registerGeneratedAsyncWithLifecycle",
   generatedModulePackage: "zapp",
 };
 

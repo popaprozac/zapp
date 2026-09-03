@@ -199,8 +199,28 @@ async function main(): i32 on thread.main {
       return 74;
     }
   }
-  app.services.register("notes", move notesService);
-  app.services.register("health", createHealthService());
+  const notesRegistered = attempt app.services.register(
+    "notes",
+    move notesService
+  );
+  match (notesRegistered) {
+    success => {}
+    failure(error) => {
+      console.log(`could not register ${error.service}: ${error.message}`);
+      return 78;
+    }
+  }
+  const healthRegistered = attempt app.services.register(
+    "health",
+    createHealthService()
+  );
+  match (healthRegistered) {
+    success => {}
+    failure(error) => {
+      console.log(`could not register ${error.service}: ${error.message}`);
+      return 79;
+    }
+  }
   const workers = app.workers;
   const noteIndexerSubscription = observeApplicationWorker(
     in workers,

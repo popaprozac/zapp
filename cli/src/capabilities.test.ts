@@ -18,7 +18,7 @@ const manifest: ZServiceManifest = {
       offset: 0,
       line: 1,
       column: 1,
-      method: "ApplicationServicesBuilder.register",
+      method: "ApplicationServices.register",
     },
     methods: [
       {
