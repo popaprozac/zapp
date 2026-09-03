@@ -60,8 +60,9 @@ application from `configuring` to `running`, asks its service manager to prepare
 immutable routing and lifecycle snapshots, publishes `Application.current()`,
 and asynchronously remains attached to the blocking platform run loop until
 shutdown. A scoped lifetime marks the application `stopped` and removes the
-published root on either success or error. A second run throws a typed
-`ApplicationStateError`. There is no user-facing `finish()` or `freeze()` call.
+published root on either success or error. Re-running that same identity throws
+a typed `ApplicationStateError`. There is no user-facing `finish()` or
+`freeze()` call.
 
 `Application.current()` returns that same ARC identity during the complete
 `run()` interval, including service startup and shutdown. Calling it before
@@ -71,6 +72,12 @@ application relationship should receive or store an `Option<Application>`
 instead. Metadata and unrestricted manager references remain available wherever
 their own contracts permit, while `state()` and lifecycle operations stay on
 `thread.main`.
+
+The current pre-alpha runtime supports one application run per process. A
+different `Application` attempting to publish after that process-wide lifetime
+has closed is still rejected by the lower-level `Once` invariant rather than a
+typed Zapp error. The application lifecycle layer should project that case into
+the same typed state model before public alpha.
 
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's
