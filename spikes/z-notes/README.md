@@ -137,7 +137,11 @@ service directly on `thread.main`. Once the primary WebView is ready, its
 focused `Application.current().menu` facade intentionally replaces that menu
 with standard App/File/Edit/Window groups and an async **File → New Note**
 command. The frontend command calls the generated `notes.create(...)` service,
-refreshes the same UI, and remains owned only by that WebView generation.
+refreshes the same UI, and remains owned only by that WebView generation. The
+same File menu includes a checked **Auto-name Empty Notes** command. Its action
+receives a `CommandInvocation`, transactionally flips `CommandState` through
+the native bridge, and AppKit updates every installed item sharing that command
+identity before the frontend commits its local state.
 Closing the owner or replacing its menu invalidates the opaque callback token.
 The child diagnostics WebView cannot race to become the application-menu
 owner. Native Z commands never cross IPC; frontend commands cross only for

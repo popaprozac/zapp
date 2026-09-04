@@ -4,7 +4,7 @@ import {
   WindowEvent,
 } from "@zappdev/runtime/window";
 import { Application } from "@zappdev/runtime/application";
-import { Command, MenuRole } from "@zappdev/runtime/menu";
+import { Command, CommandState, MenuRole } from "@zappdev/runtime/menu";
 import {
   health,
   NoteCreationError,
@@ -153,11 +153,25 @@ const windowHandle = currentWindow();
 const currentWindowId = windowHandle.id;
 
 if (currentWindowId === "win-1") {
+  const autoNameEmptyNotes = new Command({
+    label: "Auto-name Empty Notes",
+    state: CommandState.On,
+    action: async ({ command }) => {
+      await command.setState(
+        command.state === CommandState.On
+          ? CommandState.Off
+          : CommandState.On,
+      );
+    },
+  });
   const newNote = new Command({
     label: "New Note",
     shortcut: "Primary+N",
     action: async () => {
-      if (noteTitle.value.trim().length === 0) noteTitle.value = "Untitled";
+      if (
+        autoNameEmptyNotes.state === CommandState.On
+        && noteTitle.value.trim().length === 0
+      ) noteTitle.value = "Untitled";
       await createNoteFromInput();
     },
   });
@@ -167,6 +181,7 @@ if (currentWindowId === "win-1") {
       label: "File",
       items: [
         { command: newNote },
+        { command: autoNameEmptyNotes },
         { type: "separator" },
         { role: MenuRole.Close },
       ],

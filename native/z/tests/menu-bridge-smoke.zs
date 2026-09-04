@@ -7,6 +7,7 @@ import {
   BridgeMessageKind,
 } from "../framework/bridge.zs";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
+import { CommandState } from "../framework/menu.zs";
 import {
   FrontendMenuCommandDispatch,
   routeMenuBridgeMessage,
@@ -105,9 +106,33 @@ function main(): i32 on thread.main {
   }
   if (observation.count != 1) return 11;
 
-  const stale = BridgeMessage({
+  const check = BridgeMessage({
     kind: BridgeMessageKind.invoke,
     id: 3,
+    method: "__zapp:menu:set-state",
+    arguments: "{\"ownerToken\":\"owner-1\",\"commandId\":\"command-1\",\"state\":\"mixed\"}",
+  });
+  const checked = routeMenuBridgeMessage(
+    in check,
+    in allowed,
+    capabilities,
+    7,
+    "win-7",
+    dispatch,
+    menu
+  );
+  match (checked) {
+    response(value) => if (!value.ok) return 12;
+    unhandled => return 13;
+  }
+  match (in found) {
+    some(command) => if (command.state() != CommandState.mixed) return 14;
+    none => return 15;
+  }
+
+  const stale = BridgeMessage({
+    kind: BridgeMessageKind.invoke,
+    id: 4,
     method: "__zapp:menu:set-enabled",
     arguments: "{\"ownerToken\":\"old-owner\",\"commandId\":\"command-1\",\"enabled\":true}",
   });
@@ -121,13 +146,13 @@ function main(): i32 on thread.main {
     menu
   );
   match (staleResult) {
-    response(value) => if (value.ok) return 12;
-    unhandled => return 13;
+    response(value) => if (value.ok) return 16;
+    unhandled => return 17;
   }
 
   const wrongWindow = BridgeMessage({
     kind: BridgeMessageKind.invoke,
-    id: 4,
+    id: 5,
     method: "__zapp:menu:set-enabled",
     arguments: "{\"ownerToken\":\"owner-1\",\"commandId\":\"command-1\",\"enabled\":true}",
   });
@@ -141,12 +166,12 @@ function main(): i32 on thread.main {
     menu
   );
   match (wrongWindowResult) {
-    response(value) => if (value.ok) return 14;
-    unhandled => return 15;
+    response(value) => if (value.ok) return 18;
+    unhandled => return 19;
   }
 
   let invalidated = menu;
   invalidated.invalidateFrontendOwner("win-7");
-  if (menu.state.frontendCommands.length != 0) return 16;
+  if (menu.state.frontendCommands.length != 0) return 20;
   return 0;
 }

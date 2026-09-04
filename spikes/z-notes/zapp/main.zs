@@ -10,6 +10,7 @@ import { Application } from "zapp";
 import {
   Command,
   CommandAction,
+  CommandInvocation,
   CommandOptions,
   Menu,
   MenuGroup,
@@ -218,8 +219,12 @@ async function main(): i32 on thread.main {
       return 79;
     }
   }
-  const logNoteCount: CommandAction = move (): void => {
-    console.log(`Z Notes contains ${menuNotesService.count()} notes`);
+  const logNoteCount: CommandAction = move (
+    in invocation: CommandInvocation
+  ): void => {
+    console.log(
+      `${invocation.command.label}: Z Notes contains ${menuNotesService.count()} notes`
+    );
   };
   const logNoteCountCommand = new Command(
     CommandOptions({

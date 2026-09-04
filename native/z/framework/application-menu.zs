@@ -2,6 +2,7 @@ import { thread } from "std/thread";
 import { Map } from "std/collections";
 import {
   Command,
+  CommandState,
   Menu,
   MenuError,
   MenuItem,
@@ -117,6 +118,26 @@ class ApplicationMenuState on thread.main {
     }
   }
 
+  function setFrontendCommandState(
+    inout this,
+    in ownerToken: String,
+    in windowId: String,
+    in commandId: String,
+    state: CommandState
+  ): void throws MenuError {
+    if (
+      ownerToken != this.frontendOwnerToken
+      || windowId != this.frontendWindowId
+    ) {
+      throw MenuError({ message: "frontend menu registration is no longer active" });
+    }
+    const found = this.frontendCommands.get(commandId);
+    match (in found) {
+      some(command) => command.setState(state);
+      none => throw MenuError({ message: "unknown frontend menu command" });
+    }
+  }
+
   function invalidateFrontendOwner(
     inout this,
     in windowId: String
@@ -204,6 +225,21 @@ export readonly class ApplicationMenu on thread.main {
       in windowId,
       in commandId,
       enabled
+    );
+  }
+
+  internal function setFrontendCommandState(
+    inout this,
+    in ownerToken: String,
+    in windowId: String,
+    in commandId: String,
+    state: CommandState
+  ): void throws MenuError on thread.main {
+    try this.state.setFrontendCommandState(
+      in ownerToken,
+      in windowId,
+      in commandId,
+      state
     );
   }
 

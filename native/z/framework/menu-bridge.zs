@@ -16,7 +16,9 @@ import {
 import {
   Command,
   CommandAction,
+  CommandInvocation,
   CommandOptions,
+  CommandState,
   Menu,
   MenuError,
   MenuGroup,
@@ -36,6 +38,7 @@ readonly struct FrontendMenuItem {
   label: String = "";
   shortcut: String = "";
   enabled: boolean = true;
+  state: String = "off";
   role: String = "";
   items: Array<FrontendMenuItem> = Array<FrontendMenuItem>();
 }
@@ -49,6 +52,12 @@ readonly struct FrontendMenuCommandUpdate {
   ownerToken: String;
   commandId: String;
   enabled: boolean;
+}
+
+readonly struct FrontendMenuCommandStateUpdate {
+  ownerToken: String;
+  commandId: String;
+  state: String;
 }
 
 export enum MenuBridgeRoute {
@@ -90,6 +99,13 @@ function menuRole(in name: String): MenuRole throws MenuError {
   throw frontendMenuError(`unknown frontend menu role "${name}"`);
 }
 
+function commandState(in name: String): CommandState throws MenuError {
+  if (name == "off") return CommandState.off;
+  if (name == "on") return CommandState.on;
+  if (name == "mixed") return CommandState.mixed;
+  throw frontendMenuError(`unknown frontend command state "${name}"`);
+}
+
 function frontendCommand(
   in item: FrontendMenuItem,
   nativeWindowId: i32,
@@ -107,16 +123,22 @@ function frontendCommand(
   }
   const retainedOwner = copy ownerToken;
   const retainedCommand = copy item.commandId;
-  const action: CommandAction = move (): void => dispatch(
-    nativeWindowId,
-    in retainedOwner,
-    in retainedCommand
-  );
+  const action: CommandAction = move (
+    in invocation: CommandInvocation
+  ): void => {
+    if (!invocation.command.isEnabled()) return;
+    dispatch(
+      nativeWindowId,
+      in retainedOwner,
+      in retainedCommand
+    );
+  };
   const command = new Command(
     CommandOptions({
       label: copy item.label,
       shortcut: copy item.shortcut,
       enabled: item.enabled,
+      state: try commandState(in item.state),
     }),
     action
   );
@@ -238,6 +260,42 @@ function setFrontendCommandEnabled(
   };
 }
 
+function setFrontendCommandState(
+  in message: BridgeMessage,
+  in logicalWindowId: String,
+  menu: ApplicationMenu
+): BridgeResponse on thread.main {
+  const decoded = attempt json.decode<FrontendMenuCommandStateUpdate>(
+    in message.arguments
+  );
+  return match (decoded) {
+    failure(error) => bridgeFailure(
+      message.id,
+      "MENU_ERROR",
+      `invalid frontend menu command state update: ${error.message}`
+    );
+    success(update) => {
+      const parsed = attempt commandState(in update.state);
+      select match (parsed) {
+        failure(error) => frontendMenuFailure(message.id, in error);
+        success(state) => {
+          let current = menu;
+          const changed = attempt current.setFrontendCommandState(
+            in update.ownerToken,
+            in logicalWindowId,
+            in update.commandId,
+            state
+          );
+          select match (changed) {
+            success => bridgeSuccess(message.id, "null");
+            failure(error) => frontendMenuFailure(message.id, in error);
+          };
+        }
+      };
+    }
+  };
+}
+
 export function routeMenuBridgeMessage(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
@@ -253,6 +311,7 @@ export function routeMenuBridgeMessage(
   if (
     message.method != "__zapp:menu:set"
     && message.method != "__zapp:menu:set-enabled"
+    && message.method != "__zapp:menu:set-state"
   ) return MenuBridgeRoute.unhandled;
   if (!permissions.menu) {
     return MenuBridgeRoute.response(bridgePermissionFailure(
@@ -272,6 +331,13 @@ export function routeMenuBridgeMessage(
       nativeWindowId,
       in logicalWindowId,
       dispatch,
+      menu
+    ));
+  }
+  if (message.method == "__zapp:menu:set-state") {
+    return MenuBridgeRoute.response(setFrontendCommandState(
+      in message,
+      in logicalWindowId,
       menu
     ));
   }

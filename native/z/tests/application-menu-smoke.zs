@@ -7,6 +7,7 @@ import {
 import {
   Command,
   CommandAction,
+  CommandInvocation,
   CommandOptions,
   Menu,
   MenuError,
@@ -37,8 +38,12 @@ function runApplicationMenuSmoke(
     stop: stopMenu,
   });
   const actionObserved = observed;
-  const action: CommandAction = move (): void => {
-    actionObserved.actions = actionObserved.actions + 1;
+  const action: CommandAction = move (
+    in invocation: CommandInvocation
+  ): void => {
+    if (invocation.command.label == "Create Note") {
+      actionObserved.actions = actionObserved.actions + 1;
+    }
   };
   const command = new Command(
     CommandOptions({ label: "Create Note" }),

@@ -210,16 +210,27 @@ command identity can later power menus, shortcuts, and toolbars:
 import {
   Command,
   CommandAction,
+  CommandInvocation,
   CommandOptions,
+  CommandState,
   Menu,
   MenuGroup,
   MenuItem,
   MenuRole,
 } from "zapp/menu";
 
-const saveAction: CommandAction = move (): void => saveDocument();
+const saveAction: CommandAction = move (
+  in invocation: CommandInvocation
+): void => {
+  saveDocument();
+  invocation.command.setState(CommandState.on);
+};
 const save = new Command(
-  CommandOptions({ label: "Save", shortcut: "Primary+S" }),
+  CommandOptions({
+    label: "Save",
+    shortcut: "Primary+S",
+    state: CommandState.off,
+  }),
   saveAction
 );
 
@@ -239,9 +250,11 @@ try app.menu.set(Menu({
 `MenuRole` requests typed platform behavior rather than embedding selectors or
 string commands in application source. On macOS, Zapp expands conventional
 application/edit/window groups and delegates responder actions such as copy,
-paste, undo, and close to AppKit. `Command.setEnabled` updates every installed
+paste, undo, and close to AppKit. Command actions receive a
+`CommandInvocation`, including the durable command identity that fired.
+`Command.setEnabled` and tri-state `Command.setState` update every installed
 native item that shares the command. The backend owns its `NSMenu`,
-`objc.Connection` target/action tokens, and enabled-state subscriptions until
+`objc.Connection` target/action tokens, and state subscriptions until
 replacement or application shutdown, where teardown clears the native menu and
 releases the graph deterministically. No JSON or legacy Objective-C menu shim
 sits between application Z and AppKit.
@@ -251,7 +264,7 @@ package exports:
 
 ```ts
 import { Application } from "@zappdev/runtime/application";
-import { Command, MenuRole } from "@zappdev/runtime/menu";
+import { Command, CommandState, MenuRole } from "@zappdev/runtime/menu";
 import { notes } from "zapp:services";
 
 const newNote = new Command({
@@ -261,6 +274,17 @@ const newNote = new Command({
     await notes.create({ title: "Untitled" });
   },
 });
+const autoName = new Command({
+  label: "Auto-name Empty Notes",
+  state: CommandState.On,
+  action: async ({ command }) => {
+    await command.setState(
+      command.state === CommandState.On
+        ? CommandState.Off
+        : CommandState.On,
+    );
+  },
+});
 
 await Application.current().menu.set([
   { role: MenuRole.Application },
@@ -268,6 +292,7 @@ await Application.current().menu.set([
     label: "File",
     items: [
       { command: newNote },
+      { command: autoName },
       { type: "separator" },
       { role: MenuRole.Close },
     ],
@@ -275,8 +300,9 @@ await Application.current().menu.set([
 ]);
 ```
 
-The native menu remains an ordinary AppKit menu. Only invocation of a
-WebView-owned command crosses the bridge. Each installation receives an opaque
+The native menu remains an ordinary AppKit menu. Invocation and transactional
+state changes for a WebView-owned command cross the bridge. A rejected native
+update leaves the local TypeScript command unchanged. Each installation receives an opaque
 owner token and command identities; replacement or owner-window teardown
 invalidates that generation before releasing its callbacks. A stale WebView
 cannot mutate or receive callbacks from a newer application menu. The `menu`

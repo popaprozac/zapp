@@ -9,6 +9,7 @@ import {
 } from "../../application-menu.zs";
 import {
   Command,
+  CommandState,
   Menu,
   MenuError,
   MenuItem,
@@ -19,6 +20,16 @@ import { EventSubscription } from "../../events.zs";
 struct MacOSMenuShortcut {
   key: String;
   modifiers: AppKit.NSEventModifierFlags;
+}
+
+function macOSCommandState(
+  state: CommandState
+): i64 {
+  return match (state) {
+    off => i64(AppKit.NSControlStateValueOff);
+    on => i64(AppKit.NSControlStateValueOn);
+    mixed => i64(AppKit.NSControlStateValueMixed);
+  };
 }
 
 function normalizedShortcutKey(
@@ -208,13 +219,21 @@ function createMacOSCommandItem(
     inout connections
   );
   item.enabled = command.isEnabled();
+  item.state = macOSCommandState(command.state());
   const retainedItem = item;
-  const subscription = try command.subscribeEnabled(
+  const enabledSubscription = try command.subscribeEnabled(
     move (in enabled: boolean): void => {
       retainedItem.enabled = enabled;
     }
   );
-  subscriptions.push(subscription);
+  subscriptions.push(enabledSubscription);
+  const retainedStateItem = item;
+  const stateSubscription = try command.subscribeState(
+    move (in state: CommandState): void => {
+      retainedStateItem.state = macOSCommandState(state);
+    }
+  );
+  subscriptions.push(stateSubscription);
   return item;
 }
 

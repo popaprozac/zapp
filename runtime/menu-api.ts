@@ -29,12 +29,28 @@ export const MenuRole = {
 } as const;
 
 export type MenuRole = (typeof MenuRole)[keyof typeof MenuRole];
-export type CommandAction = () => void | Promise<void>;
+
+export const CommandState = {
+  Off: "off",
+  On: "on",
+  Mixed: "mixed",
+} as const;
+
+export type CommandState = (typeof CommandState)[keyof typeof CommandState];
+
+export interface CommandInvocation {
+  readonly command: Command;
+}
+
+export type CommandAction = (
+  invocation: CommandInvocation,
+) => void | Promise<void>;
 
 export interface CommandOptions {
   label: string;
   shortcut?: string;
   enabled?: boolean;
+  state?: CommandState;
   action: CommandAction;
 }
 
@@ -75,6 +91,7 @@ interface WireCommand {
   label: string;
   shortcut: string;
   enabled: boolean;
+  state: CommandState;
 }
 
 interface WireSubmenu {
@@ -96,7 +113,7 @@ type WireMenuItem = WireCommand | WireSubmenu | WireSeparator | WireRole;
 
 interface MenuOwner {
   readonly token: string;
-  readonly callbacks: Map<string, CommandAction>;
+  readonly commandsById: Map<string, Command>;
   readonly commands: Set<Command>;
 }
 
@@ -130,10 +147,10 @@ function wireEvents(): void {
       || record.ownerToken !== owner.token
       || typeof record.commandId !== "string"
     ) return;
-    const action = owner.callbacks.get(record.commandId);
-    if (!action) return;
+    const command = owner.commandsById.get(record.commandId);
+    if (!command) return;
     try {
-      const result = action();
+      const result = command.action({ command });
       if (result && typeof (result as Promise<void>).catch === "function") {
         void (result as Promise<void>).catch((error) => {
           console.error("[zapp] menu action failed:", error);
@@ -154,17 +171,20 @@ export class Command {
   readonly action: CommandAction;
   readonly _id: string;
   _enabled: boolean;
+  _state: CommandState;
   _ownerToken?: string;
 
   constructor(options: CommandOptions) {
     this.label = requiredLabel(options.label, "command");
     this.shortcut = options.shortcut ?? "";
     this._enabled = options.enabled ?? true;
+    this._state = options.state ?? CommandState.Off;
     this.action = options.action;
     this._id = `command:${globalThis.crypto.randomUUID()}`;
   }
 
   get enabled(): boolean { return this._enabled; }
+  get state(): CommandState { return this._state; }
 
   /** Update every installed native item that shares this command identity. */
   async setEnabled(enabled: boolean): Promise<void> {
@@ -177,6 +197,21 @@ export class Command {
     }
     this._enabled = enabled;
   }
+
+  /** Update the check/selection state of every installed native item. */
+  async setState(state: CommandState): Promise<void> {
+    if (!Object.values(CommandState).includes(state)) {
+      throw new MenuError({ message: `unknown command state ${JSON.stringify(state)}` });
+    }
+    if (this._ownerToken && this._ownerToken === currentOwner?.token) {
+      await getBridge().invoke("__zapp:menu:set-state", {
+        ownerToken: this._ownerToken,
+        commandId: this._id,
+        state,
+      });
+    }
+    this._state = state;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -187,7 +222,7 @@ function commandItem(
   command: Command,
   owner: MenuOwner,
 ): WireCommand {
-  owner.callbacks.set(command._id, command.action);
+  owner.commandsById.set(command._id, command);
   owner.commands.add(command);
   return {
     kind: "command",
@@ -195,6 +230,7 @@ function commandItem(
     label: command.label,
     shortcut: command.shortcut,
     enabled: command.enabled,
+    state: command.state,
   };
 }
 
@@ -240,7 +276,7 @@ export const applicationMenu: ApplicationMenu = {
     wireEvents();
     const owner: MenuOwner = {
       token: ownerToken(),
-      callbacks: new Map(),
+      commandsById: new Map(),
       commands: new Set(),
     };
     const wireItems = items.map((item) => serializeItem(item, owner));

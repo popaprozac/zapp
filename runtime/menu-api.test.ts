@@ -5,6 +5,7 @@ import {
   Command,
   MenuError,
   MenuRole,
+  CommandState,
 } from "./menu-api";
 
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
@@ -13,6 +14,7 @@ const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 test("focused menu package exposes typed commands, roles, and errors", () => {
   expect(Object.keys(menuAPI).sort()).toEqual([
     "Command",
+    "CommandState",
     "MenuError",
     "MenuRole",
     "applicationMenu",
@@ -33,7 +35,10 @@ test("failed native command updates leave local command state unchanged", async 
     on() { return () => {}; },
     invoke(method: string) {
       const result = (
-        rejectUpdates && method === "__zapp:menu:set-enabled"
+        rejectUpdates && (
+          method === "__zapp:menu:set-enabled"
+          || method === "__zapp:menu:set-state"
+        )
           ? Promise.reject(new Error("native update rejected"))
           : Promise.resolve(null)
       ) as Promise<unknown> & { cancel(): void };
@@ -51,6 +56,11 @@ test("failed native command updates leave local command state unchanged", async 
     expect(command.enabled).toBe(true);
     await expect(command.setEnabled(false)).rejects.toThrow("native update rejected");
     expect(command.enabled).toBe(true);
+    expect(command.state).toBe(CommandState.Off);
+    await expect(command.setState(CommandState.On)).rejects.toThrow(
+      "native update rejected",
+    );
+    expect(command.state).toBe(CommandState.Off);
   } finally {
     (globalThis as any)[BRIDGE_KEY] = previousBridge;
     (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
@@ -82,7 +92,11 @@ test("Application menu owns opaque callbacks and ignores stale generations", asy
     const shared = new Command({
       label: "New Note",
       shortcut: "Primary+N",
-      action: async () => { invoked += 1; },
+      state: CommandState.On,
+      action: async ({ command }) => {
+        expect(command).toBe(shared);
+        invoked += 1;
+      },
     });
     await Application.current().menu.set([
       { role: MenuRole.Application },
@@ -110,6 +124,7 @@ test("Application menu owns opaque callbacks and ignores stale generations", asy
       label: "New Note",
       shortcut: "Primary+N",
       enabled: true,
+      state: "on",
     });
 
     for (const handler of listeners["__zapp:menu-command"] ?? []) {
@@ -127,6 +142,17 @@ test("Application menu owns opaque callbacks and ignores stale generations", asy
         enabled: false,
       },
     });
+
+    await shared.setState(CommandState.Mixed);
+    expect(invokes.at(-1)).toEqual({
+      method: "__zapp:menu:set-state",
+      args: {
+        ownerToken,
+        commandId: commands[0].commandId,
+        state: "mixed",
+      },
+    });
+    expect(shared.state).toBe(CommandState.Mixed);
 
     await Application.current().menu.set([
       { label: "Replacement", action: () => { invoked += 100; } },
@@ -151,6 +177,7 @@ test("package exports focused application and menu facades", async () => {
   const publicMenu = await import("./menu-public");
   expect(Object.keys(publicMenu).sort()).toEqual([
     "Command",
+    "CommandState",
     "MenuError",
     "MenuRole",
   ]);
