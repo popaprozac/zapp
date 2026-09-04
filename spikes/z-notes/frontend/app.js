@@ -287,6 +287,7 @@ cancelButton.addEventListener("click", async () => {
       if (healthStatus !== "ready") {
         throw new Error(`Unexpected health status: ${healthStatus}`);
       }
+      await refreshNotes();
       status.textContent =
         `Cancelled safely\nCreated note ${note.id}\n${note.title}`;
       document.body.dataset.roundTrip = "ok";
