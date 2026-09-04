@@ -6,6 +6,7 @@ import {
 import {
   health,
   NoteCreationError,
+  NoteMutationError,
   NoteDescription,
   notes,
 } from "zapp:services";
@@ -34,7 +35,53 @@ function renderNotes(items) {
       note.state,
       note.subtitle,
     ].filter(Boolean).join(" · ");
-    item.append(title, details);
+    const titleInput = document.createElement("input");
+    const actions = document.createElement("div");
+    const save = document.createElement("button");
+    const archive = document.createElement("button");
+    const remove = document.createElement("button");
+    titleInput.value = note.title;
+    titleInput.setAttribute("aria-label", `Title for note ${note.id}`);
+    actions.className = "note-actions";
+    save.type = "button";
+    save.textContent = "Save";
+    archive.type = "button";
+    archive.textContent = note.state === "archived" ? "Archived" : "Archive";
+    archive.disabled = note.state === "archived";
+    remove.type = "button";
+    remove.textContent = "Delete";
+
+    const mutate = async (operation) => {
+      actions.querySelectorAll("button").forEach((button) => {
+        button.disabled = true;
+      });
+      try {
+        await operation();
+        await refreshNotes();
+      } catch (error) {
+        status.textContent = error instanceof NoteMutationError
+          ? `Could not change note ${error.details?.id}\n${error.details?.message}`
+          : `Could not change note\n${String(error)}`;
+        actions.querySelectorAll("button").forEach((button) => {
+          button.disabled = false;
+        });
+      }
+    };
+
+    save.addEventListener("click", () => mutate(() => notes.edit({
+      id: note.id,
+      title: titleInput.value.trim(),
+      subtitle: note.subtitle,
+    })));
+    archive.addEventListener("click", () => mutate(() => notes.archive({
+      id: note.id,
+    })));
+    remove.addEventListener("click", () => mutate(() => notes.delete({
+      id: note.id,
+    })));
+
+    actions.append(save, archive, remove);
+    item.append(title, details, titleInput, actions);
     return item;
   }));
   document.body.dataset.notesLoaded = "ok";

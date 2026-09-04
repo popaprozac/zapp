@@ -86,10 +86,15 @@ directories nor repeatedly opens native storage for each request. The app's
 `z.json` declares `sqlite3` because it is a native dependency of Z source,
 while `zapp.config.ts` remains concerned with framework/product configuration.
 The embedded frontend calls the generated `notes.list()` binding on launch,
-renders those persisted values, and refreshes the same list after a typed
-`notes.create(...)` call. A title field and Enter-key submission make this a
-small usable notes surface while the worker, cancellation, and native-window
-controls remain visible as composition diagnostics.
+renders those persisted values, and refreshes the same list after typed
+`notes.create(...)`, `notes.edit(...)`, `notes.archive(...)`, and
+`notes.delete(...)` calls. Each existing note exposes Save, Archive, and Delete
+controls. Mutations persist to SQLite before the application-owned catalog is
+changed, return the resulting `Note`, and surface a generated
+`NoteMutationError` with the affected note ID and message. A title field and
+Enter-key submission keep this a small usable notes surface while the worker,
+cancellation, and native-window controls remain visible as composition
+diagnostics.
 After the platform loop exits, the smoke checks that the retained `app`
 identity has transitioned to `stopped`.
 
@@ -476,7 +481,10 @@ The visible macOS app dynamically opens a second diagnostics window and stays
 open until both windows are closed. Click **Create a note in Z** to call the
 generated `notes.create` TypeScript binding. Each path first verifies the
 generated `NoteCreationError` and its structured details, then displays the
-returned native-service value in the DOM. **Cancel a suspended request**
+returned native-service value in the DOM. Edit a rendered title and click
+**Save**, **Archive**, or **Delete** to exercise the generated mutation
+bindings, typed `NoteMutationError`, application-owned catalog, and persistent
+SQLite connection without handwritten frontend routing. **Cancel a suspended request**
 starts `notes.count`, aborts it with a standard `AbortController` while the
 service is yielded, and then proves a later request still succeeds. Expected
 evidence after creating a note directly:

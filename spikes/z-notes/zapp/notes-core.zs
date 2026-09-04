@@ -38,6 +38,16 @@ export struct CreateNoteInput {
   state: NoteState;
 }
 
+export struct EditNoteInput {
+  id: u64;
+  title: String;
+  subtitle?: String;
+}
+
+export struct NoteReference {
+  id: u64;
+}
+
 struct NotesDecodeError {
   message: String;
 }
@@ -76,6 +86,12 @@ export readonly class NotesCore {
         state.nextId = id;
         state.count = state.count - 1;
       }
+    });
+  }
+
+  function recordDelete(): void {
+    this.state.withLock((inout state): void => {
+      if (state.count > 0) state.count = state.count - 1;
     });
   }
 }

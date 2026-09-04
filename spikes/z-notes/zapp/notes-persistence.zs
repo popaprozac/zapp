@@ -99,6 +99,51 @@ export class NoteDatabase on thread.main {
     const status = sqlite.sqlite3_step(statement);
     if (status != sqlite.SQLITE_DONE) throw status;
   }
+
+  function updateNote(in note: Note): void throws i32 {
+    let statement;
+    try sqlite.sqlite3_prepare_v2(
+      this.database,
+      "UPDATE notes SET title = ?, subtitle = ?, state = ? WHERE id = ?",
+      -1,
+      out statement,
+      null
+    );
+    if (statement == null) throw -1;
+    try sqlite.sqlite3_bind_text(statement, 1, note.title, -1);
+    match (in note.subtitle) {
+      some(subtitle) => try sqlite.sqlite3_bind_text(
+        statement,
+        2,
+        subtitle,
+        -1
+      );
+      none => try sqlite.sqlite3_bind_null(statement, 2);
+    }
+    const stateText = match (note.state) {
+      active => "active";
+      archived => "archived";
+    };
+    try sqlite.sqlite3_bind_text(statement, 3, stateText, -1);
+    try sqlite.sqlite3_bind_int64(statement, 4, i64(note.id));
+    const status = sqlite.sqlite3_step(statement);
+    if (status != sqlite.SQLITE_DONE) throw status;
+  }
+
+  function deleteNote(id: u64): void throws i32 {
+    let statement;
+    try sqlite.sqlite3_prepare_v2(
+      this.database,
+      "DELETE FROM notes WHERE id = ?",
+      -1,
+      out statement,
+      null
+    );
+    if (statement == null) throw -1;
+    try sqlite.sqlite3_bind_int64(statement, 1, i64(id));
+    const status = sqlite.sqlite3_step(statement);
+    if (status != sqlite.SQLITE_DONE) throw status;
+  }
 }
 
 export class NotesStorage on thread.main {
@@ -115,6 +160,20 @@ export class NotesStorage on thread.main {
   function insert(in note: Note): void throws i32 {
     match (in this.database) {
       some(database) => try database.insertNote(in note);
+      none => throw -1;
+    }
+  }
+
+  function update(in note: Note): void throws i32 {
+    match (in this.database) {
+      some(database) => try database.updateNote(in note);
+      none => throw -1;
+    }
+  }
+
+  function delete(id: u64): void throws i32 {
+    match (in this.database) {
+      some(database) => try database.deleteNote(id);
       none => throw -1;
     }
   }

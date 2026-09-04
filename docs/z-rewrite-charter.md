@@ -395,7 +395,11 @@ handles into the Z-owned manager. AppKit focus, blur, and resize callbacks now
 flow through typed Z events into the matching WebView. The focused
 `@zappdev/runtime/window` boundary deliberately exposes only this composed
 surface, talks directly to the narrow bridge, and neither imports nor exposes
-the legacy `Window` implementation.
+the legacy `Window` implementation. Its application-owned SQLite service now
+loads, creates, edits, archives, and deletes notes through generated TypeScript
+bindings. Native mutation errors retain their nominal Z identity and structured
+details across the WebView boundary, while persistence is committed before the
+main-thread catalog changes.
 
 This satisfies the Phase 2 exit criterion for the macOS reference vertical
 slice. Additional product breadth remains intentionally separate from the

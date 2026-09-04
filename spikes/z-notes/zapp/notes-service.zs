@@ -9,8 +9,10 @@ import {
 import { Application } from "zapp";
 import {
   CreateNoteInput,
+  EditNoteInput,
   Note,
   NoteDescription,
+  NoteReference,
   NoteState,
   NotesCore,
   createNotesCore,
@@ -28,6 +30,11 @@ export struct NoteCreationError {
   title: String;
 }
 
+export struct NoteMutationError {
+  id: u64;
+  message: String;
+}
+
 class NotesCatalog on thread.main {
   notes: Array<Note>;
   dataDirectory: String;
@@ -42,6 +49,36 @@ class NotesCatalog on thread.main {
 
   function replaceAll(inout this, notes: Array<Note>): void {
     this.notes = move notes;
+  }
+
+  function get(id: u64): Option<Note> {
+    for (const note of this.notes) {
+      if (note.id == id) return Option.some(copy note);
+    }
+    return Option.none;
+  }
+
+  function replace(inout this, note: Note): boolean {
+    let index: usize = 0;
+    while (index < this.notes.length) {
+      if (this.notes[index].id == note.id) {
+        this.notes[index] = move note;
+        return true;
+      }
+      index = index + 1;
+    }
+    return false;
+  }
+
+  function remove(inout this, id: u64): Option<Note> {
+    let remaining = Array<Note>();
+    let removed: Option<Note> = Option.none;
+    for (const note of this.notes) {
+      if (note.id == id) removed = Option.some(copy note);
+      else remaining.push(copy note);
+    }
+    this.notes = move remaining;
+    return removed;
   }
 
   function configureDataDirectory(inout this, path: String): void {
@@ -87,6 +124,95 @@ export readonly class NotesService implements ServiceLifecycle {
 
   function list(): Array<Note> on thread.main {
     return this.catalog.list();
+  }
+
+  function edit(
+    input: EditNoteInput
+  ): Note throws NoteMutationError on thread.main {
+    const { id, title, subtitle } = move input;
+    if (title.byteLength == 0) throw NoteMutationError({
+      id,
+      message: "a note title is required",
+    });
+    const found = this.catalog.get(id);
+    const existing = match (found) {
+      some(note) => note;
+      none => throw noteMutationError(id, "note not found");
+    };
+    const updated = Note({
+      id,
+      title: move title,
+      subtitle: move subtitle,
+      state: existing.state,
+    });
+    const stored = attempt this.storage.update(in updated);
+    match (stored) {
+      success => {}
+      failure(status) => throw noteMutationError(
+        id,
+        `could not update note: sqlite status ${status}`
+      );
+    }
+    const catalog = this.catalog;
+    if (!catalog.replace(copy updated)) {
+      throw noteMutationError(id, "note disappeared during update");
+    }
+    return updated;
+  }
+
+  function archive(
+    reference: NoteReference
+  ): Note throws NoteMutationError on thread.main {
+    const found = this.catalog.get(reference.id);
+    const existing = match (found) {
+      some(note) => note;
+      none => throw noteMutationError(reference.id, "note not found");
+    };
+    const archived = Note({
+      copy ...existing,
+      state: NoteState.archived,
+    });
+    const stored = attempt this.storage.update(in archived);
+    match (stored) {
+      success => {}
+      failure(status) => throw noteMutationError(
+        reference.id,
+        `could not archive note: sqlite status ${status}`
+      );
+    }
+    const catalog = this.catalog;
+    if (!catalog.replace(copy archived)) {
+      throw noteMutationError(reference.id, "note disappeared during archive");
+    }
+    return archived;
+  }
+
+  function delete(
+    reference: NoteReference
+  ): Note throws NoteMutationError on thread.main {
+    const found = this.catalog.get(reference.id);
+    const existing = match (found) {
+      some(note) => note;
+      none => throw noteMutationError(reference.id, "note not found");
+    };
+    const stored = attempt this.storage.delete(reference.id);
+    match (stored) {
+      success => {}
+      failure(status) => throw noteMutationError(
+        reference.id,
+        `could not delete note: sqlite status ${status}`
+      );
+    }
+    const catalog = this.catalog;
+    const removed = catalog.remove(reference.id);
+    match (removed) {
+      some(_) => this.core.recordDelete();
+      none => throw noteMutationError(
+        reference.id,
+        "note disappeared during deletion"
+      );
+    }
+    return existing;
   }
 
   function isArchived(state: NoteState): boolean {
@@ -204,4 +330,8 @@ export function createNotesService(): NotesService on thread.main {
     }),
     storage: createNotesStorage(),
   });
+}
+
+function noteMutationError(id: u64, message: String): NoteMutationError {
+  return NoteMutationError({ id, message: move message });
 }
