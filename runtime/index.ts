@@ -18,6 +18,7 @@
  */
 
 export { App, type PowerState } from "./app";
+export { Application, type ApplicationHandle } from "./application-api";
 export { Window, Material, createWindow, currentWindow, createWindowHandle, type WindowCreateOptions, type WindowHandle, type WindowEventSubscription, type WindowOptions, type WindowsOptions, type WindowsBackdrop, type WindowsCustomTheme, type MacOptions, type SidebarOptions, type SidebarHandle, type InspectorOptions, type InspectorHandle, type RouterHandle, type RouteOptions, type ToolbarHandle, type ToolbarItemPatch, type ToolbarOptions, type ToolbarItemDef, type ToolbarButtonDef, type ToolbarSegmentedDef, type ToolbarGroupDef, type ToolbarTrackingSepDef, type ToolbarSystemDef, type ToolbarLabelDef } from "./window";
 export type { ActionContext, MenuItemPatch } from "./action-context";
 export { Screen, type Display, type DisplayRect, type CursorPoint } from "./screen";

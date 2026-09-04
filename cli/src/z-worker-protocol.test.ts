@@ -136,6 +136,38 @@ describe("checked Z worker protocols", () => {
     }]);
   });
 
+  test("resolves compiler-canonical typed manager lookup shapes", () => {
+    const metadata = protocolMetadata(
+      "WorkerProtocol<IndexCommand, IndexMessage>",
+    );
+    metadata.modules[0].calls.push({
+      offset: 420,
+      line: 12,
+      column: 18,
+      target: {
+        module: "/zapp/worker.zs",
+        symbol: "WorkerManager",
+        kind: "method",
+        name: "WorkerManager.get",
+      },
+      arguments: [{
+        kind: "other",
+        type: "__z_module_4_WorkerProtocol<__z_module_0_IndexCommand, __z_module_0_IndexMessage>",
+      }],
+    });
+    const protocol = deriveZWorkerProtocolManifest(
+      metadata,
+      "indexer",
+      "/app/protocol.zs",
+      "IndexProtocol",
+    );
+    expect(deriveZWorkerProtocolUses(metadata, [protocol])).toEqual([{
+      workerId: "indexer",
+      module: "/app/protocol.zs",
+      offset: 420,
+    }]);
+  });
+
   test("fails closed when a typed lookup has no unique configured worker", () => {
     const metadata = protocolMetadata(
       "WorkerProtocol<IndexCommand, IndexMessage>",

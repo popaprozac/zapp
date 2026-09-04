@@ -3,6 +3,8 @@ import {
   currentWindow,
   WindowEvent,
 } from "@zappdev/runtime/window";
+import { Application } from "@zappdev/runtime/application";
+import { Command, MenuRole } from "@zappdev/runtime/menu";
 import {
   health,
   NoteCreationError,
@@ -149,6 +151,36 @@ document.body.dataset.hmr = import.meta.hot ? "ready" : "packaged";
 
 const windowHandle = currentWindow();
 const currentWindowId = windowHandle.id;
+
+if (currentWindowId === "win-1") {
+  const newNote = new Command({
+    label: "New Note",
+    shortcut: "Primary+N",
+    action: async () => {
+      if (noteTitle.value.trim().length === 0) noteTitle.value = "Untitled";
+      await createNoteFromInput();
+    },
+  });
+  void Application.current().menu.set([
+    { role: MenuRole.Application },
+    {
+      label: "File",
+      items: [
+        { command: newNote },
+        { type: "separator" },
+        { role: MenuRole.Close },
+      ],
+    },
+    { role: MenuRole.Edit },
+    { role: MenuRole.Window },
+  ]).then(() => {
+    document.body.dataset.menu = "ready";
+  }).catch((error) => {
+    document.body.dataset.menu = "error";
+    status.textContent = `Could not install application menu\n${String(error)}`;
+  });
+}
+
 let focusedEvents = 0;
 let blurredEvents = 0;
 let resizedEvents = 0;
@@ -306,7 +338,7 @@ async function verifyPayloadEnum() {
   document.body.dataset.payloadEnum = "ok";
 }
 
-button.addEventListener("click", async () => {
+async function createNoteFromInput() {
   status.textContent = "Routing…";
   try {
     await verifyTypedServiceError();
@@ -337,7 +369,9 @@ button.addEventListener("click", async () => {
     status.textContent = `Failure\n${String(error)}`;
     document.body.dataset.roundTrip = "error";
   }
-});
+}
+
+button.addEventListener("click", createNoteFromInput);
 
 noteTitle.addEventListener("keydown", (event) => {
   if (event.key === "Enter") button.click();

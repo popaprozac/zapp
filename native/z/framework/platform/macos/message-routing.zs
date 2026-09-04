@@ -24,6 +24,12 @@ import {
   routeApplicationWorkerBridgeMessage,
 } from "../../worker-bridge.zs";
 import { ApplicationWorkers } from "../../worker/application-workers.zs";
+import { ApplicationMenu } from "../../application-menu.zs";
+import {
+  FrontendMenuCommandDispatch,
+  MenuBridgeRoute,
+  routeMenuBridgeMessage,
+} from "../../menu-bridge.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
 
 enum WindowMessageRoute {
@@ -175,14 +181,26 @@ function selectWindowMessageRoute(
   const permissions = current.permissions;
   const selected = current.capabilitiesForWindow(windowId);
   const workers = current.applicationWorkers;
+  const menu = current.menu;
+  const logicalId = current.logicalWindowId(windowId);
   match (selected) {
-    some(capabilities) => return selectWindowMessageRouteWithCapabilities(
-      move message,
-      in permissions,
-      capabilities,
-      workers,
-      inout windows
-    );
+    some(capabilities) => match (logicalId) {
+      some(windowName) => return selectWindowMessageRouteWithCapabilities(
+        move message,
+        in permissions,
+        capabilities,
+        workers,
+        windowId,
+        in windowName,
+        menu,
+        inout windows
+      );
+      none => return WindowMessageRoute.framework(bridgeFailure(
+        message.id,
+        "INVALID_WINDOW",
+        "unknown originating window"
+      ));
+    }
     none => return WindowMessageRoute.framework(bridgeFailure(
       message.id,
       "INVALID_WINDOW",
@@ -196,8 +214,25 @@ function selectWindowMessageRouteWithCapabilities(
   in permissions: ApplicationPermissions,
   selectedCapabilities: CapabilitySelection,
   workers: ApplicationWorkers,
+  nativeWindowId: i32,
+  in logicalWindowId: String,
+  menu: ApplicationMenu,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
+  const dispatch: FrontendMenuCommandDispatch = deliverFrontendMenuCommand;
+  const menuRoute = routeMenuBridgeMessage(
+    in message,
+    in permissions,
+    selectedCapabilities,
+    nativeWindowId,
+    in logicalWindowId,
+    dispatch,
+    menu
+  );
+  match (menuRoute) {
+    response(value) => return WindowMessageRoute.framework(value);
+    unhandled => {}
+  }
   const routed = routeWindowBridgeMessage(
     in message,
     in permissions,
@@ -228,6 +263,19 @@ function selectWindowMessageRouteWithCapabilities(
       select WindowMessageRoute.service(move message);
     }
   };
+}
+
+function deliverFrontendMenuCommand(
+  nativeWindowId: i32,
+  in ownerToken: String,
+  in commandId: String
+): void on thread.main {
+  const current = currentMacOSApplication();
+  current.deliverMenuCommand(
+    nativeWindowId,
+    in ownerToken,
+    in commandId
+  );
 }
 
 async function routeMessageAndDeliver(

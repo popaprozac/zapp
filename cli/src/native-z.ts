@@ -229,6 +229,10 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
       "window:create",
       resolvePermissions(config.permissions),
     )},
+    menu: ${isPermissionAllowed(
+      "menu",
+      resolvePermissions(config.permissions),
+    )},
   });
 }
 

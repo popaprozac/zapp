@@ -27,6 +27,11 @@ readonly struct WebViewApplicationWorkerMessageEnvelope {
   payload: String;
 }
 
+readonly struct WebViewMenuCommandEnvelope {
+  ownerToken: String;
+  commandId: String;
+}
+
 readonly struct WebViewWindowSizePayload {
   width: u32;
   height: u32;
@@ -97,6 +102,31 @@ function applicationWorkerMessageScript(
   const encoded = json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchApplicationWorkerMessage!=='function')return;b.dispatchApplicationWorkerMessage(e.workerId,e.channel,e.payload)})()`;
+}
+
+function menuCommandScript(
+  in ownerToken: String,
+  in commandId: String
+): String {
+  const envelope = WebViewMenuCommandEnvelope({
+    ownerToken: copy ownerToken,
+    commandId: copy commandId,
+  });
+  const encoded = json.encode(in envelope);
+  const source = javascriptJSON(in encoded);
+  return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchMenuCommand!=='function')return;b.dispatchMenuCommand(e.ownerToken,e.commandId)})()`;
+}
+
+internal function deliverWebViewMenuCommand(
+  in webView: WebKit.WKWebView,
+  in ownerToken: String,
+  in commandId: String
+): void on thread.main {
+  const script = menuCommandScript(in ownerToken, in commandId);
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
 }
 
 internal function deliverWebViewWindowEvent(

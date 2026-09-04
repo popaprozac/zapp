@@ -205,6 +205,18 @@ describe("compiler-produced Z program metadata", () => {
     });
   });
 
+  it("resolves compiler-canonical service identities to their public source type", () => {
+    const canonical = structuredClone(metadata);
+    canonical.modules[0].calls[0].arguments[1].type = "__z_module_0_NotesService";
+
+    const derived = deriveZServiceManifest(canonical);
+    expect(derived.services[0]).toMatchObject({
+      name: "notes",
+      type: "NotesService",
+      module: "/app.zs",
+    });
+  });
+
   it("derives lifecycle and async execution from an ordinary service", () => {
     const service = metadata.modules[0].symbols.find(
       (symbol) => symbol.name === "NotesService",

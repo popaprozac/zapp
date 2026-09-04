@@ -34,11 +34,12 @@ export function configuredApplicationMetadata(): ApplicationMetadata {
 export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: true,
+    menu: true,
   });
 }
 
 export function configuredApplicationCapabilities(): ApplicationCapabilities {
-  let permissions = Array<String>("window:create");
+  let permissions = Array<String>("window:create", "menu");
   let services = Array<String>();
   let workers = Array<String>();
   let profiles = Map<String, CapabilityProfile>();

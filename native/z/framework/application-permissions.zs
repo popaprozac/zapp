@@ -3,4 +3,5 @@
 // WebView content.
 export readonly struct ApplicationPermissions {
   windowCreate: boolean = true;
+  menu: boolean = true;
 }

@@ -9,6 +9,12 @@ export default {
   plugins: [zapp()],
   resolve: {
     alias: {
+      "@zappdev/runtime/application": fileURLToPath(
+        new URL("../../runtime/application-api.ts", import.meta.url),
+      ),
+      "@zappdev/runtime/menu": fileURLToPath(
+        new URL("../../runtime/menu-public.ts", import.meta.url),
+      ),
       "@zappdev/runtime/window": fileURLToPath(
         new URL("../../runtime/window-api.ts", import.meta.url),
       ),

@@ -130,13 +130,18 @@ and system termination. Cancellation affects only that request; accepted
 shutdown resolves `run()` after windows, workers, and services have completed
 their normal teardown.
 
-Z Notes also installs its application menu before `run()`. The standard
-application, edit, and window roles become native AppKit groups, while a
-project-owned **Notes → Log Note Count** command calls the already registered
-Z notes service directly on `thread.main`. The command is retained through an
-owned `objc.Connection`; it does not cross the WebView bridge or depend on a
-string callback registry. This is both an interactive smoke and the first
-end-user proof of `app.menu.set(...)`.
+Z Notes installs an application menu from both sides of Zapp's command model.
+Before `run()`, native Z supplies the initial standard roles plus a
+project-owned **Notes → Log Note Count** command that calls the registered Z
+service directly on `thread.main`. Once the primary WebView is ready, its
+focused `Application.current().menu` facade intentionally replaces that menu
+with standard App/File/Edit/Window groups and an async **File → New Note**
+command. The frontend command calls the generated `notes.create(...)` service,
+refreshes the same UI, and remains owned only by that WebView generation.
+Closing the owner or replacing its menu invalidates the opaque callback token.
+The child diagnostics WebView cannot race to become the application-menu
+owner. Native Z commands never cross IPC; frontend commands cross only for
+their eventual callback delivery.
 
 `WindowOptions` is an ordinary value struct with defaults. `create` returns a
 shared `Window` identity or a typed `WindowError`, and the manager retains every

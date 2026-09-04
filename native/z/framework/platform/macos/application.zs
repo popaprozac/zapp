@@ -62,7 +62,8 @@ export async function runMacOSApplication(
     config.capabilities,
     config.services,
     updates,
-    windows
+    windows,
+    menu
   );
   const workerManagerLifetime = installApplicationWorkerManager(
     workerManager

@@ -229,6 +229,13 @@
       bridge._onEvent(evName, JSON.stringify(payload));
     },
 
+    dispatchMenuCommand(ownerToken: string, commandId: string): void {
+      bridge._onEvent("__zapp:menu-command", JSON.stringify({
+        ownerToken,
+        commandId,
+      }));
+    },
+
     dispatchPanelEvent(panelId: string, eventName: string, dataJson?: string): void {
       let data: any = undefined;
       if (dataJson) {

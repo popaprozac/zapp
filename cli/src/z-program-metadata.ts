@@ -111,6 +111,10 @@ const scalarTypes = new Set([
   "f64",
 ]);
 
+function publicTypeSpelling(typeName: string): string {
+  return typeName.replace(/__z_module_\d+_/g, "");
+}
+
 function object(value: unknown, description: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`[zapp] ${description} must be an object`);
@@ -189,6 +193,18 @@ function publicType(
   metadata: ZProgramMetadata,
   name: string,
 ): { module: ZProgramModuleMetadata; symbol: ZProgramSymbolMetadata } {
+  const hiddenIdentity = /^__z_module_(\d+)_(.+)$/.exec(name);
+  if (hiddenIdentity) {
+    const moduleIndex = Number(hiddenIdentity[1]);
+    const symbolName = hiddenIdentity[2];
+    const module = metadata.modules[moduleIndex];
+    const symbol = module?.symbols.find((candidate) => (
+      candidate.exported
+      && candidate.name === symbolName
+      && candidate.typeSignature !== null
+    ));
+    if (module && symbol) return { module, symbol };
+  }
   const matches = metadata.modules.flatMap((module) => (
     module.symbols
       .filter((symbol) => symbol.exported && symbol.name === name && symbol.typeSignature !== null)
@@ -319,8 +335,12 @@ export function deriveZServiceManifest(
       throw new Error(`[zapp] duplicate registered Z service ${JSON.stringify(name)}`);
     }
     seenServices.add(name);
-    const serviceType = serviceArgument.type;
-    const { module: serviceModule, symbol: service } = publicType(metadata, serviceType);
+    const registeredServiceType = serviceArgument.type;
+    const { module: serviceModule, symbol: service } = publicType(
+      metadata,
+      registeredServiceType,
+    );
+    const serviceType = service.name;
     const serviceKind = service.kind;
     if ((serviceKind !== "struct" && serviceKind !== "class") || !service.typeSignature) {
       throw new Error(
@@ -447,6 +467,7 @@ export function deriveZServiceManifest(
 }
 
 function workerProtocolArguments(typeName: string): [string, string] | null {
+  typeName = publicTypeSpelling(typeName);
   const prefix = "WorkerProtocol<";
   if (!typeName.startsWith(prefix) || !typeName.endsWith(">")) return null;
   const body = typeName.slice(prefix.length, -1);

@@ -5,6 +5,7 @@ import { OnceLifetime } from "std/sync";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
+import { ApplicationMenu } from "../../application-menu.zs";
 import {
   MacOSApplicationRuntime,
   initializeMacOSApplicationRuntimeState,
@@ -24,7 +25,8 @@ internal function initializeMacOSApplicationRuntime(
   capabilities: ApplicationCapabilities,
   services: AsyncServices,
   updates: TaskScope,
-  windowManager: WindowManager
+  windowManager: WindowManager,
+  menu: ApplicationMenu
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const route: DesktopRouteMessageOperation = routeMessageOnMain;
   const deliver: DesktopDeliverResponseOperation = deliverResponse;
@@ -35,6 +37,7 @@ internal function initializeMacOSApplicationRuntime(
     move services,
     updates,
     windowManager,
+    menu,
     route,
     deliver
   );

@@ -283,7 +283,10 @@ test("validateCapabilityProfiles requires explicit default and bounded grants", 
   expect(() => validateCapabilityProfiles({
     default: { permissions: ["clipboard:read"] },
   }, ["clipboard:read"]))
-    .toThrow(/currently supports "window:create" and services/);
+    .toThrow(/currently supports "window:create", "menu", and services/);
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["menu"] },
+  }, ["menu"])).not.toThrow();
 });
 
 test("loadConfig resolves canonical application identity defaults", async () => {

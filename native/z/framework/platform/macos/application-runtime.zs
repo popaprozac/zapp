@@ -6,6 +6,7 @@ import {
   CapabilitySelection,
 } from "../../application-capabilities.zs";
 import { AsyncServices } from "../../async-services.zs";
+import { ApplicationMenu } from "../../application-menu.zs";
 import { BridgeResponse, bridgeFailure } from "../../bridge.zs";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
@@ -24,6 +25,7 @@ import { createMacOSWindowRuntime } from "./window-construction.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import {
   deliverWebViewApplicationWorkerMessage,
+  deliverWebViewMenuCommand,
   deliverWebViewResponse,
 } from "./response-delivery.zs";
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
@@ -73,6 +75,7 @@ internal class MacOSApplicationRuntime {
   readonly services: AsyncServices;
   readonly updates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
+  readonly menu: ApplicationMenu on thread.main;
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
   applicationWorkers: ApplicationWorkers on thread.main;
@@ -153,6 +156,8 @@ internal class MacOSApplicationRuntime {
       some(value) => {
         let window = value;
         window.pendingRequests.cancelAll();
+        let menu = this.menu;
+        menu.invalidateFrontendOwner(in window.id);
         this.retiredNativeWindows.push(move window);
         if (this.nativeWindows.length == 0) {
           stopMacOSRunLoop();
@@ -293,6 +298,32 @@ internal class MacOSApplicationRuntime {
       some(window) => Option.some(window.capabilitySelection);
       none => Option.none;
     };
+  }
+
+  function logicalWindowId(
+    nativeWindowId: i32
+  ): Option<String> on thread.main {
+    const found = this.nativeWindows.get(nativeWindowId);
+    return match (in found) {
+      some(window) => Option.some(copy window.id);
+      none => Option.none;
+    };
+  }
+
+  function deliverMenuCommand(
+    nativeWindowId: i32,
+    in ownerToken: String,
+    in commandId: String
+  ): void on thread.main {
+    const found = this.nativeWindows.get(nativeWindowId);
+    match (in found) {
+      some(window) => deliverWebViewMenuCommand(
+        window.webView,
+        in ownerToken,
+        in commandId
+      );
+      none => {}
+    }
   }
 
   function installApplicationWorkers(
@@ -528,6 +559,7 @@ internal function initializeMacOSApplicationRuntimeState(
   services: AsyncServices,
   updates: TaskScope,
   windowManager: WindowManager,
+  menu: ApplicationMenu,
   routeMessage: DesktopRouteMessageOperation,
   deliverResponse: DesktopDeliverResponseOperation
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
@@ -563,6 +595,7 @@ internal function initializeMacOSApplicationRuntimeState(
     services: move services,
     updates,
     windowManager,
+    menu,
     routeMessage,
     deliverMessageResponse: deliverResponse,
     applicationWorkers: emptyApplicationWorkers(),
