@@ -541,10 +541,13 @@ async function stageZApplicationWorkerRuntime(
 ): Promise<ZNativeLinkRequirements> {
   if (workers.length === 0) return {};
 
-  const assetRoot = path.resolve(options.root, options.config.assetDir);
   for (const [index, worker] of workers.entries()) {
-    const relativeModule = worker.moduleUrl.replace(/^\/+/, "");
-    const builtModule = path.join(assetRoot, relativeModule);
+    const builtModule = resolveZApplicationWorkerArtifact(
+      options.root,
+      options.config.assetDir,
+      worker.moduleUrl,
+      options.devUrl !== undefined,
+    );
     if (!existsSync(builtModule)) {
       throw new Error(
         `[zapp] bundled application worker ${JSON.stringify(worker.id)} was not found at `
@@ -597,6 +600,32 @@ async function stageZApplicationWorkerRuntime(
     libraries: ["zapp_worker_zjs", "zjs", "z"],
     frameworks: ["Foundation", "Security"],
   };
+}
+
+export function resolveZApplicationWorkerArtifact(
+  root: string,
+  assetDirectory: string,
+  moduleUrl: string,
+  development: boolean,
+): string {
+  const relativeModule = moduleUrl.replace(/^\/+/, "");
+  if (!development) {
+    return path.join(path.resolve(root, assetDirectory), relativeModule);
+  }
+
+  const workerPrefix = "_workers/";
+  if (!relativeModule.startsWith(workerPrefix)) {
+    throw new Error(
+      `[zapp] development application worker URL ${JSON.stringify(moduleUrl)} `
+      + `must begin with "/${workerPrefix}"`,
+    );
+  }
+  return path.join(
+    root,
+    ".zapp",
+    "workers",
+    relativeModule.slice(workerPrefix.length),
+  );
 }
 
 export function resolveZFrontendOrigin(devUrl?: string): string {

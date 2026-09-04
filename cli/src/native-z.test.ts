@@ -14,6 +14,7 @@ import {
   renderZNativeManifest,
   rebaseZServiceManifest,
   resolveZFrontendOrigin,
+  resolveZApplicationWorkerArtifact,
   resolveZNativeHost,
   validateZCompilerIdentity,
   zNativeEntry,
@@ -22,6 +23,35 @@ import {
 } from "./native-z";
 import type { ZServiceManifest } from "./z-service-bindings";
 import type { ZProgramMetadata } from "./z-program-metadata";
+
+describe("Z application-worker artifacts", () => {
+  it("selects Vite's live worker output in development", () => {
+    expect(resolveZApplicationWorkerArtifact(
+      "/project",
+      "./dist",
+      "/_workers/_headless_indexer.mjs",
+      true,
+    )).toBe("/project/.zapp/workers/_headless_indexer.mjs");
+  });
+
+  it("selects packaged worker assets for production", () => {
+    expect(resolveZApplicationWorkerArtifact(
+      "/project",
+      "./dist",
+      "/_workers/_headless_indexer.mjs",
+      false,
+    )).toBe("/project/dist/_workers/_headless_indexer.mjs");
+  });
+
+  it("rejects a development worker outside the plugin-owned URL namespace", () => {
+    expect(() => resolveZApplicationWorkerArtifact(
+      "/project",
+      "./dist",
+      "/worker.mjs",
+      true,
+    )).toThrow('must begin with "/_workers/"');
+  });
+});
 
 describe("prepared Z service metadata", () => {
   const manifest: ZServiceManifest = {

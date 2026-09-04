@@ -466,7 +466,7 @@ import {
   ZappInvocationError,
   type CancellablePromise,
   type InvokeOptions,
-} from "@zappdev/runtime";
+} from "@zappdev/runtime/service";
 
 ${renderZWireTypes(manifest)}
 

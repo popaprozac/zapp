@@ -215,7 +215,7 @@ import {
 import type {
   CancellablePromise,
   InvokeOptions,
-} from "@zappdev/runtime";
+} from "@zappdev/runtime/service";
 
 declare function __zappWorkerSend(channel: string, payload: string): void;
 

@@ -289,6 +289,13 @@ bridge. In an embedded zjs worker, the same generated module selects the
 existing direct-host fast path. Application code and generated method names do
 not change with the JavaScript execution environment.
 
+The generated module imports its shared transport and error contracts from the
+focused `@zappdev/runtime/service` entrypoint. This keeps DOM, window, and
+native-chrome modules out of application-worker bundles while preserving the
+same `CancellablePromise` API and `ZappError` identities in both environments.
+The broad `@zappdev/runtime` entrypoint continues to re-export the same values
+for ordinary WebView application code.
+
 `zapp dev` and `zapp build` generate this compiler-owned module before Vite
 starts, including on a clean checkout. The unified `zapp()` Vite plugin maps
 the public specifier to `.zapp/generated/services.ts` for WebViews and nested

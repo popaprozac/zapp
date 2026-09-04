@@ -3,7 +3,7 @@
  *
  * @example
  * ```ts
- * import { Services } from "@zappdev/runtime";
+ * import { Services } from "@zappdev/runtime/service";
  * const result = await Services.invoke("greet", { name: "World" });
  * ```
  */

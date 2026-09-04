@@ -1,7 +1,7 @@
 // @ts-expect-error The monorepo root is not an initialized Zapp application;
 // the Zapp Vite plugin resolves this generated public module for the spike.
 import { health, type Note, NoteState, notes } from "zapp:services";
-import { PermissionDeniedError } from "@zappdev/runtime";
+import { PermissionDeniedError } from "@zappdev/runtime/service";
 // @ts-expect-error The monorepo root is not an initialized Zapp application;
 // the Zapp Vite plugin resolves this generated public module for the spike.
 import { defineNoteIndexerWorker, type IndexNotes, type NoteIndexerMessages } from "zapp:workers";

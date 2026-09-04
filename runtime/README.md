@@ -58,6 +58,25 @@ import {
 } from "@zappdev/runtime";
 ```
 
+Focused entrypoints keep environment-specific code out of bundles that do not
+need it. Generated service bindings use the same service surface in WebViews
+and application workers:
+
+```ts
+import {
+  Services,
+  PermissionDeniedError,
+  ZappError,
+  ZappInvocationError,
+  type CancellablePromise,
+  type InvokeOptions,
+} from "@zappdev/runtime/service";
+```
+
+`@zappdev/runtime/window` and `@zappdev/runtime/worker` provide the equivalent
+focused window and application-worker surfaces. The root entrypoint remains a
+convenient broad import for WebView application code.
+
 ## Context story
 
 The runtime works in three contexts, same API everywhere, different fast

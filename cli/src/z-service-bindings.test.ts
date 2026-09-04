@@ -89,6 +89,8 @@ describe("Z service binding generation", () => {
 
   it("generates typed cancellable bindings with exact integer decoding", () => {
     const source = renderZServiceBindings(manifest);
+    expect(source).toContain('from "@zappdev/runtime/service"');
+    expect(source).not.toContain('from "@zappdev/runtime"');
     expect(source).toContain("export interface Note");
     expect(source).toContain("id: bigint;");
     expect(source).toContain('Services.invoke<unknown, unknown>(\n        "notes.create"');

@@ -6,6 +6,7 @@
   "types": "index.ts",
   "exports": {
     ".": "./index.ts",
+    "./service": "./service-api.ts",
     "./window": "./window-api.ts",
     "./worker": "./application-worker-api.ts",
     "./worker-globals": "./worker-globals.ts",
