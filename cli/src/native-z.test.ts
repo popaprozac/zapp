@@ -528,6 +528,9 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("Foundation.NSLocalizedDescriptionKey");
     expect(objectiveCSmoke).toContain("forMainFrameOnly:YES");
     expect(notesFrontend).toContain('from "zapp:services"');
+    expect(cli).toContain('if (selectedNativeLanguage !== "z") {');
+    expect(cli).toContain("The replacement Z core owns its worker catalog and ZJS link graph");
+    expect(cli).toContain('const buildFile = selectedNativeLanguage === "z"');
     expect(notesFrontend).toContain("notes.create");
     expect(notesFrontend).toContain("notes.isEmpty()");
     expect(notesFrontend).toContain("windowHandle.setTitle(");

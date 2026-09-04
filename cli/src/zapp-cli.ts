@@ -202,6 +202,7 @@ async function runDev(root: string) {
   // the host is binding. No special tunnel needed.
   const devUrl = `http://localhost:${port}`;
   const isIOS = isIOSTarget(target);
+  const selectedNativeLanguage = nativeLanguage();
   if (isIOS) {
     clog(0, `target: ${target}`);
   }
@@ -225,27 +226,27 @@ async function runDev(root: string) {
   //     warn only; future iteration may auto-install.
   await verifyWorkerModules(root, config.workerModules);
 
-  // 1. Generate engine overlay (auto-define engines named in headless
-  //    config but not declared in build.zc). Must run BEFORE the engine
-  //    builds below so bareEnginesEnabled sees the generated overlay
-  //    too.
-  const engineOverlayFile = await generateEngineOverlay({ root, target, config });
+  let engineOverlayFile: string | null = null;
+  let iosBuildFile: string | null = null;
+  if (selectedNativeLanguage !== "z") {
+    // Legacy Zen-C/Nim builds consume build.zc engine and platform overlays.
+    // The replacement Z core owns its worker catalog and ZJS link graph, so
+    // running these generators would incorrectly probe vendor/zjs before the
+    // native Z builder resolves the sibling development artifacts.
+    engineOverlayFile = await generateEngineOverlay({ root, target, config });
 
-  // 1a. iOS-specific: generate the platform-scoped build file NOW so
-  //     the engine probes below see the iOS-correct directives instead
-  //     of the user's macos:-prefixed ones (which the zc compiler
-  //     drops on iOS but our regex-scan would otherwise honor —
-  //     e.g. trying to build bare-v8 for iOS even though iOS uses
-  //     bare-jsc).
-  const userBuildFileEarly = path.join(root, "zapp", "build.zc");
-  const iosBuildFile = isIOS
-    ? await generateIOSBuildFile(root, userBuildFileEarly, config)
-    : null;
+    // iOS-specific: generate the platform-scoped build file NOW so the
+    // legacy engine probes below see iOS-correct directives instead of the
+    // user's macos:-prefixed ones.
+    const userBuildFileEarly = path.join(root, "zapp", "build.zc");
+    iosBuildFile = isIOS
+      ? await generateIOSBuildFile(root, userBuildFileEarly, config)
+      : null;
+  }
 
   // 2. Generate service bindings before Vite starts. Z applications derive
   // their public `zapp:services` module from compiler metadata; legacy native
   // hosts retain the source scanner during migration.
-  const selectedNativeLanguage = nativeLanguage();
   let preparedZServices: PreparedZFrontendServices | undefined;
   if (selectedNativeLanguage === "z") {
     clog(1, "generating typed Z service module...");
@@ -258,42 +259,45 @@ async function runDev(root: string) {
   }
   // Workers are bundled by the Vite plugin during vite build/dev
 
-  // 3. Build vendored worker engines that the user opted into (either
-  //    via build.zc directives or via the engine overlay). Each
-  //    ZAPP_WORKER_ENGINE_* define enables one engine; multiple can
-  //    coexist (the dispatcher routes per-worker at runtime). First
-  //    build is slow (~3-5 min for Bare with engine-from-source);
-  //    subsequent runs reuse the cached `_deps/` tree.
-  for (const bareEngine of await bareEnginesEnabled(
-    root, engineOverlayFile ?? undefined, target, iosBuildFile ?? undefined,
-  )) {
-    await ensureBareBuilt(nativeDir, target, bareEngine, root);
+  let buildConfigFile = "";
+  let headlessFile: string | undefined;
+  let bootstrapFile: string | undefined;
+  let assetsFile: string | undefined;
+  if (selectedNativeLanguage !== "z") {
+    // Build vendored worker engines selected by the legacy overlays.
+    for (const bareEngine of await bareEnginesEnabled(
+      root, engineOverlayFile ?? undefined, target, iosBuildFile ?? undefined,
+    )) {
+      await ensureBareBuilt(nativeDir, target, bareEngine, root);
+    }
+
+    // Generate the legacy build config and bootstrap. The Z core emits and
+    // links its own application graph and intentionally consumes none of
+    // these .zc intermediates.
+    buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl, target });
+    await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
+    headlessFile = await generateHeadlessWorkers({
+      root,
+      headless: config.applicationWorkers,
+    });
+    const zappDir = path.join(root, ".zapp");
+    clog(1, "generating bootstrap...");
+    bootstrapFile = await generateBootstrap(zappDir);
+
+    // No embedded assets in legacy dev mode, but its link symbols must exist.
+    const stubAssets = `// Stub — no embedded assets in dev mode.\nraw {\n` +
+      `    #if defined(__APPLE__)\n` +
+      `    #include <compression.h>\n` +
+      `    #endif\n` +
+      `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n` +
+      `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n` +
+      `    typedef struct { const char* path; uint8_t* data; int len; int uncompressed_len; int is_brotli; } ZappEmbeddedAsset;\n` +
+      `    #endif\n` +
+      `    ZappEmbeddedAsset zapp_embedded_assets[1] = {{0}};\n` +
+      `    int zapp_embedded_assets_count = 0;\n}\n`;
+    assetsFile = path.join(zappDir, "zapp_assets.zc");
+    await Bun.write(assetsFile, stubAssets);
   }
-
-  // 4. Generate build config + bootstrap (dev mode)
-  const buildConfigFile = await generateBuildConfig({ root, config, mode: "dev", devUrl, target });
-  const platformFile = await generatePlatformConfig(root, target, iosBuildFile ?? undefined, engineOverlayFile ?? undefined, config);
-  const headlessFile = await generateHeadlessWorkers({
-    root,
-    headless: config.applicationWorkers,
-  });
-  const zappDir = path.join(root, ".zapp");
-  clog(1, "generating bootstrap...");
-  const bootstrapFile = await generateBootstrap(zappDir);
-
-  // Generate stub assets file (no embedded assets in dev, but symbols must exist for linking)
-  const stubAssets = `// Stub — no embedded assets in dev mode.\nraw {\n` +
-    `    #if defined(__APPLE__)\n` +
-    `    #include <compression.h>\n` +
-    `    #endif\n` +
-    `    #ifndef ZAPP_EMBEDDED_ASSET_DEFINED\n` +
-    `    #define ZAPP_EMBEDDED_ASSET_DEFINED\n` +
-    `    typedef struct { const char* path; uint8_t* data; int len; int uncompressed_len; int is_brotli; } ZappEmbeddedAsset;\n` +
-    `    #endif\n` +
-    `    ZappEmbeddedAsset zapp_embedded_assets[1] = {{0}};\n` +
-    `    int zapp_embedded_assets_count = 0;\n}\n`;
-  const assetsFile = path.join(zappDir, "zapp_assets.zc");
-  await Bun.write(assetsFile, stubAssets);
 
   // 3. Start Vite dev server on a fixed port
   // Detect a stale process holding the port — usually a Vite from a previous
@@ -405,7 +409,9 @@ async function runDev(root: string) {
   // For iOS we already generated `_zapp_build_ios.zc` earlier (so
   // the engine-build probes could see iOS-correct directives). Reuse
   // it here instead of regenerating.
-  const buildFile = iosBuildFile ?? path.join(root, "zapp", "build.zc");
+  const buildFile = selectedNativeLanguage === "z"
+    ? ""
+    : iosBuildFile ?? path.join(root, "zapp", "build.zc");
 
   try {
     await compileNative({
