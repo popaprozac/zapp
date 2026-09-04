@@ -8,6 +8,15 @@ import {
 } from "./note-indexer-protocol.zs";
 import { Application } from "zapp";
 import {
+  Command,
+  CommandAction,
+  CommandOptions,
+  Menu,
+  MenuGroup,
+  MenuItem,
+  MenuRole,
+} from "zapp/menu";
+import {
   WindowClosedEvent,
   WindowOptions,
 } from "zapp/window";
@@ -186,6 +195,7 @@ function observeTypedNoteIndexerMessages(
 async function main(): i32 on thread.main {
   const app = new Application();
   const notesService = createNotesService();
+  const menuNotesService = notesService;
   const notesRegistered = attempt app.services.register(
     "notes",
     move notesService
@@ -206,6 +216,36 @@ async function main(): i32 on thread.main {
     failure(error) => {
       console.log(`could not register ${error.service}: ${error.message}`);
       return 79;
+    }
+  }
+  const logNoteCount: CommandAction = move (): void => {
+    console.log(`Z Notes contains ${menuNotesService.count()} notes`);
+  };
+  const logNoteCountCommand = new Command(
+    CommandOptions({
+      label: "Log Note Count",
+      shortcut: "Primary+Shift+C",
+    }),
+    logNoteCount
+  );
+  const configuredMenu = attempt app.menu.set(Menu({
+    items: Array<MenuItem>(
+      MenuItem.role(MenuRole.application),
+      MenuItem.submenu(MenuGroup({
+        label: "Notes",
+        items: Array<MenuItem>(
+          MenuItem.command(logNoteCountCommand)
+        ),
+      })),
+      MenuItem.role(MenuRole.edit),
+      MenuItem.role(MenuRole.window)
+    ),
+  }));
+  match (configuredMenu) {
+    success => {}
+    failure(error) => {
+      console.log(`could not configure application menu: ${error.message}`);
+      return 80;
     }
   }
   const workers = app.workers;
@@ -271,6 +311,10 @@ async function main(): i32 on thread.main {
             );
           }
           select 70;
+        }
+        menu(menuError) => {
+          console.log(`application menu failed: ${menuError.message}`);
+          select 80;
         }
         window(windowError) => {
           console.log(`window ${windowError.id} failed: ${windowError.message}`);

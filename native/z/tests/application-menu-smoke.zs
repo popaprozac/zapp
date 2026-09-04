@@ -1,6 +1,7 @@
 import {
   ApplicationMenuBackend,
   ApplicationMenuSetOperation,
+  ApplicationMenuStopOperation,
   createApplicationMenu,
 } from "../framework/application-menu.zs";
 import {
@@ -27,7 +28,14 @@ function runApplicationMenuSmoke(
   ): void => {
     setObserved.sets = setObserved.sets + i32(menu.items.length);
   };
-  const backend = ApplicationMenuBackend({ set: setMenu });
+  const stopObserved = observed;
+  const stopMenu: ApplicationMenuStopOperation = move (): void => {
+    stopObserved.sets = stopObserved.sets + 10;
+  };
+  const backend = ApplicationMenuBackend({
+    set: setMenu,
+    stop: stopMenu,
+  });
   const actionObserved = observed;
   const action: CommandAction = move (): void => {
     actionObserved.actions = actionObserved.actions + 1;
@@ -46,6 +54,7 @@ function runApplicationMenuSmoke(
   command.invoke();
   if (observed.actions != 1) return 3;
   menu.stop();
+  if (observed.sets != 11) return 4;
   return 0;
 }
 

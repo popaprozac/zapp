@@ -8,9 +8,11 @@ import {
 internal type ApplicationMenuSetOperation = (
   in menu: Menu
 ) => void throws MenuError on thread.main;
+internal type ApplicationMenuStopOperation = () => void on thread.main;
 
 internal struct ApplicationMenuBackend {
   set: ApplicationMenuSetOperation;
+  stop: ApplicationMenuStopOperation;
 }
 
 function ignoreApplicationMenu(
@@ -20,7 +22,8 @@ function ignoreApplicationMenu(
 function inactiveApplicationMenuBackend(
 ): ApplicationMenuBackend on thread.main {
   const set: ApplicationMenuSetOperation = ignoreApplicationMenu;
-  return ApplicationMenuBackend({ set });
+  const stop: ApplicationMenuStopOperation = (): void => {};
+  return ApplicationMenuBackend({ set, stop });
 }
 
 function validateMenuItems(
@@ -79,6 +82,7 @@ class ApplicationMenuState on thread.main {
   }
 
   function stop(inout this): void {
+    if (this.active) this.backend.stop();
     this.active = false;
     this.backend = inactiveApplicationMenuBackend();
   }

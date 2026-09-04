@@ -1,0 +1,4 @@
+declare module "AppKit/AppKit.h" {
+  // AppKit dispatches NSMenuItem target/action callbacks on its main event loop.
+  export type NSMenuItem on thread.main;
+}

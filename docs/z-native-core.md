@@ -202,6 +202,50 @@ application source. The headless backend fails with a typed unsupported error.
 File filters use `UTType` directly, and no JSON serialization or legacy dialog
 shim exists between Z and AppKit.
 
+The same application identity owns one logical application menu. Applications
+define commands independently from native menu-item allocations, so the same
+command identity can later power menus, shortcuts, and toolbars:
+
+```zs
+import {
+  Command,
+  CommandAction,
+  CommandOptions,
+  Menu,
+  MenuGroup,
+  MenuItem,
+  MenuRole,
+} from "zapp/menu";
+
+const saveAction: CommandAction = move (): void => saveDocument();
+const save = new Command(
+  CommandOptions({ label: "Save", shortcut: "Primary+S" }),
+  saveAction
+);
+
+try app.menu.set(Menu({
+  items: Array<MenuItem>(
+    MenuItem.role(MenuRole.application),
+    MenuItem.submenu(MenuGroup({
+      label: "File",
+      items: Array<MenuItem>(MenuItem.command(save)),
+    })),
+    MenuItem.role(MenuRole.edit),
+    MenuItem.role(MenuRole.window)
+  ),
+}));
+```
+
+`MenuRole` requests typed platform behavior rather than embedding selectors or
+string commands in application source. On macOS, Zapp expands conventional
+application/edit/window groups and delegates responder actions such as copy,
+paste, undo, and close to AppKit. `Command.setEnabled` updates every installed
+native item that shares the command. The backend owns its `NSMenu`,
+`objc.Connection` target/action tokens, and enabled-state subscriptions until
+replacement or application shutdown, where teardown clears the native menu and
+releases the graph deterministically. No JSON or legacy Objective-C menu shim
+sits between application Z and AppKit.
+
 Each Z-owned `Window` also exposes a typed, main-executor event surface. Event
 channels are ordinary Z objects rather than stringly framework callbacks:
 

@@ -43,9 +43,21 @@ function main(): i32 on thread.main {
 
   createNote.invoke();
   if (observed.count != 1) return 1;
+  const enabledObserved = observed;
+  const enabledSubscription = match (attempt createNote.subscribeEnabled(
+    move (in enabled: boolean): void => {
+      if (!enabled) enabledObserved.count = enabledObserved.count + 10;
+    }
+  )) {
+    success(subscription) => subscription;
+    failure(_) => return 2;
+  };
   createNote.setEnabled(false);
   createNote.invoke();
-  if (observed.count != 1) return 2;
-  if (menu.items.length != 4) return 3;
+  if (observed.count != 11) return 3;
+  createNote.setEnabled(false);
+  if (observed.count != 11) return 4;
+  if (menu.items.length != 4) return 5;
+  enabledSubscription.unsubscribe();
   return 0;
 }

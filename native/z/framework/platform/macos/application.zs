@@ -26,6 +26,7 @@ import {
 } from "./application-host.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
 import { macOSDialogBackend } from "./dialog-backend.zs";
+import { macOSApplicationMenuBackend } from "./menu-backend.zs";
 import {
   startConfiguredApplicationWorkers,
 } from "../../configured-application.zs";
@@ -45,6 +46,7 @@ export async function runMacOSApplication(
   const context = config.contextSnapshot();
   let windows = config.windows;
   let dialogs = config.dialogs;
+  let menu = config.menu;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
     throw ApplicationError.window(WindowError({
@@ -74,12 +76,22 @@ export async function runMacOSApplication(
       throw ApplicationError.window(windowError);
     }
   }
+  const menuStarted = attempt menu.start(macOSApplicationMenuBackend());
+  match (menuStarted) {
+    success => {}
+    failure(menuError) => {
+      windows.stop();
+      abortMacOSApplicationRuntime();
+      throw ApplicationError.menu(menuError);
+    }
+  }
   dialogs.start(macOSDialogBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
     failure(startError) => {
       dialogs.stop();
+      menu.stop();
       windows.stop();
       abortMacOSApplicationRuntime();
       throw ApplicationError.lifecycle(startError);
@@ -124,6 +136,7 @@ export async function runMacOSApplication(
   workers.join();
   workerManager.finish();
   dialogs.stop();
+  menu.stop();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);
