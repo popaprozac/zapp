@@ -433,7 +433,10 @@ service twice. `NotesService` has no author-facing `invoke()` or `AsyncService`
 conformance. Framework methods are excluded from generated TypeScript
 bindings. The framework owns the registered service name and method-prefix
 routing; the service does not repeat a route list, capture its registration
-name, or construct a binding object.
+name, or construct a binding object. The explicit `"notes"` registration name
+is also the stable frontend, wire-routing, diagnostic, and capability identity:
+grants such as `"notes.create"` visibly authorize the same service installed by
+application source rather than a name inferred from its implementation class.
 
 `HealthService` is a sync-only value struct registered through the same API.
 Its generated adapter implements the non-task `Service` path, and the WebView

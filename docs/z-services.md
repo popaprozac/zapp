@@ -107,6 +107,32 @@ the application event lifetime on either failure. This snapshot is sound here
 because publication and cleanup are serialized on the main executor; Zapp does
 not treat `Once.state()` as a general concurrent check-then-act primitive.
 
+## Registration identity and capabilities
+
+The explicit registration name is the service's stable public and security
+identity, not a key for retrieving the concrete service from `Application`:
+
+```z
+try app.services.register("notes", createNotesService());
+```
+
+Here `"notes"` selects the generated frontend binding `notes`, the native wire
+prefix `notes.*`, duplicate-registration identity, and the capability namespace
+used by grants such as `"notes.create"`. Diagnostics and lifecycle failures use
+the same identity. Keeping it explicit makes the authority named in
+`security.capabilities` visibly match the service installed by application
+source; Zapp does not derive a security-sensitive public contract from a class
+name or runtime reflection.
+
+The concrete implementation may therefore change from `NotesService` to
+another checked type without renaming the frontend API. Distinct instances of
+one implementation type may also receive distinct public identities when that
+is intentional. Registration still derives the method list and generated
+codecs from the service type, so authors name the service once rather than
+maintaining a handwritten route table. An inferred-name convenience can be
+reconsidered if real applications demonstrate enough repetition, but explicit
+identity is the designed default in this tier.
+
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's
 owned state. This is Z's shallow `readonly` contract, not a recursive freeze.
