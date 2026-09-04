@@ -1,0 +1,130 @@
+import { thread } from "std/thread";
+import {
+  Menu,
+  MenuError,
+  MenuItem,
+} from "./menu.zs";
+
+internal type ApplicationMenuSetOperation = (
+  in menu: Menu
+) => void throws MenuError on thread.main;
+
+internal struct ApplicationMenuBackend {
+  set: ApplicationMenuSetOperation;
+}
+
+function ignoreApplicationMenu(
+  in menu: Menu
+): void throws MenuError on thread.main {}
+
+function inactiveApplicationMenuBackend(
+): ApplicationMenuBackend on thread.main {
+  const set: ApplicationMenuSetOperation = ignoreApplicationMenu;
+  return ApplicationMenuBackend({ set });
+}
+
+function validateMenuItems(
+  in items: Array<MenuItem>
+): void throws MenuError on thread.main {
+  for (const item of items) {
+    match (in item) {
+      command(command) => {
+        if (command.label.byteLength == 0) {
+          throw MenuError({ message: "menu command labels cannot be empty" });
+        }
+      }
+      submenu(group) => {
+        if (group.label.byteLength == 0) {
+          throw MenuError({ message: "submenu labels cannot be empty" });
+        }
+        try validateMenuItems(in group.items);
+      }
+      separator => {}
+      role(_) => {}
+    }
+  }
+}
+
+readonly class StoredApplicationMenu on thread.main {
+  menu: Menu;
+}
+
+class ApplicationMenuState on thread.main {
+  current: StoredApplicationMenu;
+  configured: boolean;
+  backend: ApplicationMenuBackend;
+  active: boolean;
+
+  function set(
+    inout this,
+    menu: Menu
+  ): void throws MenuError {
+    try validateMenuItems(in menu.items);
+    const replacement = new StoredApplicationMenu({ menu: move menu });
+    if (this.active) try this.backend.set(in replacement.menu);
+    this.current = replacement;
+    this.configured = true;
+  }
+
+  function start(
+    inout this,
+    backend: ApplicationMenuBackend
+  ): void throws MenuError {
+    this.backend = backend;
+    this.active = true;
+    if (this.configured) {
+      const selected = this.current;
+      try this.backend.set(in selected.menu);
+    }
+  }
+
+  function stop(inout this): void {
+    this.active = false;
+    this.backend = inactiveApplicationMenuBackend();
+  }
+}
+
+function createApplicationMenuState(
+): ApplicationMenuState on thread.main {
+  return new ApplicationMenuState({
+    current: new StoredApplicationMenu({
+      menu: Menu({ items: Array<MenuItem>() }),
+    }),
+    configured: false,
+    backend: inactiveApplicationMenuBackend(),
+    active: false,
+  });
+}
+
+// The application owns one logical menu bar. Its definition may be installed
+// before run(), then realized by the selected platform backend during startup.
+export readonly class ApplicationMenu on thread.main {
+  internal readonly state: ApplicationMenuState;
+
+  internal constructor() {
+    this.state = createApplicationMenuState();
+  }
+
+  function set(
+    inout this,
+    menu: Menu
+  ): void throws MenuError on thread.main {
+    try this.state.set(move menu);
+  }
+
+  internal function start(
+    inout this,
+    backend: ApplicationMenuBackend
+  ): void throws MenuError on thread.main {
+    try this.state.start(backend);
+  }
+
+  internal function stop(inout this): void on thread.main {
+    this.state.stop();
+  }
+}
+
+internal function createApplicationMenu(
+): ApplicationMenu on thread.main {
+  return new ApplicationMenu();
+}

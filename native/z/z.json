@@ -8,6 +8,7 @@
     "exports": {
       "./window": "api/zapp/window.zs",
       "./dialog": "api/zapp/dialog.zs",
+      "./menu": "api/zapp/menu.zs",
       "./service": "api/zapp/service.zs",
       "./worker": "framework/worker/worker-manager.zs"
     },

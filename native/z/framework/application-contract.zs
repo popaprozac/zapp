@@ -6,6 +6,7 @@ import { AsyncServices } from "./async-services.zs";
 import { ServiceLifecycles } from "./service-lifecycle.zs";
 import { WindowManager } from "./window.zs";
 import { DialogManager } from "./dialog.zs";
+import { ApplicationMenu } from "./application-menu.zs";
 import { WorkerManager } from "./worker/worker-manager.zs";
 import { thread } from "std/thread";
 import {
@@ -23,6 +24,7 @@ export readonly class PreparedApplication on thread.main {
   readonly events: ApplicationEvents;
   readonly windows: WindowManager;
   readonly dialogs: DialogManager;
+  readonly menu: ApplicationMenu;
   readonly services: AsyncServices;
   readonly lifecycles: ServiceLifecycles;
   readonly workers: WorkerManager;
