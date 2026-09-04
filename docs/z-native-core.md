@@ -246,6 +246,43 @@ replacement or application shutdown, where teardown clears the native menu and
 releases the graph deterministically. No JSON or legacy Objective-C menu shim
 sits between application Z and AppKit.
 
+Trusted WebView code uses the same logical command model through focused
+package exports:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+import { Command, MenuRole } from "@zappdev/runtime/menu";
+import { notes } from "zapp:services";
+
+const newNote = new Command({
+  label: "New Note",
+  shortcut: "Primary+N",
+  action: async () => {
+    await notes.create({ title: "Untitled" });
+  },
+});
+
+await Application.current().menu.set([
+  { role: MenuRole.Application },
+  {
+    label: "File",
+    items: [
+      { command: newNote },
+      { type: "separator" },
+      { role: MenuRole.Close },
+    ],
+  },
+]);
+```
+
+The native menu remains an ordinary AppKit menu. Only invocation of a
+WebView-owned command crosses the bridge. Each installation receives an opaque
+owner token and command identities; replacement or owner-window teardown
+invalidates that generation before releasing its callbacks. A stale WebView
+cannot mutate or receive callbacks from a newer application menu. The `menu`
+application permission and originating window's capability profiles are both
+checked by native Z before installation or mutation.
+
 Each Z-owned `Window` also exposes a typed, main-executor event surface. Event
 channels are ordinary Z objects rather than stringly framework callbacks:
 
