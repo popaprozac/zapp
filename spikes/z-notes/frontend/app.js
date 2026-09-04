@@ -17,9 +17,32 @@ const indexButton = document.querySelector("#index-notes");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
+const noteTitle = document.querySelector("#note-title");
+const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
 const windowEvents = document.querySelector("#window-events");
 const workerIndex = document.querySelector("#worker-index");
+
+function renderNotes(items) {
+  noteList.replaceChildren(...items.map((note) => {
+    const item = document.createElement("li");
+    const title = document.createElement("strong");
+    const details = document.createElement("small");
+    title.textContent = note.title;
+    details.textContent = [
+      `#${note.id}`,
+      note.state,
+      note.subtitle,
+    ].filter(Boolean).join(" · ");
+    item.append(title, details);
+    return item;
+  }));
+  document.body.dataset.notesLoaded = "ok";
+}
+
+async function refreshNotes() {
+  renderNotes(await notes.list());
+}
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
 // client in development. The native smoke verifies the matching mode, proving
@@ -189,7 +212,8 @@ button.addEventListener("click", async () => {
   status.textContent = "Routing…";
   try {
     await verifyTypedServiceError();
-    const note = await notes.create({ title: "WebView note", state: "active" });
+    const title = noteTitle.value.trim();
+    const note = await notes.create({ title, state: "active" });
     if (note.subtitle !== null) {
       throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
     }
@@ -207,6 +231,7 @@ button.addEventListener("click", async () => {
       throw new Error(`Unexpected health status: ${healthStatus}`);
     }
     status.textContent = `Created note ${note.id}\n${note.title}`;
+    await refreshNotes();
     windowHandle.setTitle(`Z Notes — ${note.title}`);
     document.body.dataset.roundTrip = "ok";
     document.body.dataset.health = "ok";
@@ -214,6 +239,10 @@ button.addEventListener("click", async () => {
     status.textContent = `Failure\n${String(error)}`;
     document.body.dataset.roundTrip = "error";
   }
+});
+
+noteTitle.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") button.click();
 });
 
 cancelButton.addEventListener("click", async () => {
@@ -267,4 +296,9 @@ cancelButton.addEventListener("click", async () => {
       document.body.dataset.roundTrip = "error";
     }
   }
+});
+
+refreshNotes().catch((error) => {
+  status.textContent = `Could not load notes\n${String(error)}`;
+  document.body.dataset.notesLoaded = "error";
 });

@@ -85,6 +85,11 @@ This demonstrates that ordinary application code neither hardcodes macOS
 directories nor repeatedly opens native storage for each request. The app's
 `z.json` declares `sqlite3` because it is a native dependency of Z source,
 while `zapp.config.ts` remains concerned with framework/product configuration.
+The embedded frontend calls the generated `notes.list()` binding on launch,
+renders those persisted values, and refreshes the same list after a typed
+`notes.create(...)` call. A title field and Enter-key submission make this a
+small usable notes surface while the worker, cancellation, and native-window
+controls remain visible as composition diagnostics.
 After the platform loop exits, the smoke checks that the retained `app`
 identity has transitioned to `stopped`.
 

@@ -26,6 +26,17 @@
         font: inherit;
       }
 
+      input {
+        min-width: 0;
+        flex: 1 1 220px;
+        padding: 10px 12px;
+        border: 1px solid rgb(128 128 128 / 35%);
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+      }
+
       .controls {
         display: flex;
         flex-wrap: wrap;
@@ -43,17 +54,39 @@
         border-radius: 10px;
         background: rgb(128 128 128 / 14%);
       }
+
+      #notes {
+        display: grid;
+        gap: 8px;
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      #notes li {
+        display: grid;
+        gap: 3px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: rgb(128 128 128 / 14%);
+      }
+
+      #notes small {
+        opacity: 0.68;
+      }
     </style>
   </head>
   <body>
     <main>
-      <h1>Zapp is calling a Z service</h1>
-      <p>This page is an embedded frontend asset calling generated service bindings.</p>
+      <h1>Z Notes</h1>
+      <p>Notes are owned by a Z service and persisted in SQLite.</p>
       <div class="controls">
+        <input id="note-title" aria-label="Note title" value="WebView note">
         <button id="ping" type="button">Create a note in Z</button>
         <button id="cancel" type="button">Cancel a suspended request</button>
         <button id="index-notes" type="button">Index notes in a Zapp worker</button>
       </div>
+      <ul id="notes" aria-live="polite"></ul>
       <h2>Application worker analysis</h2>
       <pre id="worker-index">Waiting for an index request…</pre>
       <h2>Native window actions routed through Z</h2>
