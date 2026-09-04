@@ -7,6 +7,7 @@ import {
   health,
   NoteCreationError,
   NoteMutationError,
+  NoteTransferError,
   NoteDescription,
   notes,
 } from "zapp:services";
@@ -15,6 +16,8 @@ import { noteIndexer } from "zapp:workers";
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");
 const indexButton = document.querySelector("#index-notes");
+const importNotesButton = document.querySelector("#import-notes");
+const exportNotesButton = document.querySelector("#export-notes");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
@@ -90,6 +93,54 @@ function renderNotes(items) {
 async function refreshNotes() {
   renderNotes(await notes.list());
 }
+
+function describeTransferError(action, error) {
+  if (error instanceof NoteTransferError) {
+    return `Could not ${action} notes\n${error.details?.message}`;
+  }
+  return `Could not ${action} notes\n${String(error)}`;
+}
+
+importNotesButton.addEventListener("click", async () => {
+  importNotesButton.disabled = true;
+  status.textContent = "Choose a Z Notes JSON file…";
+  try {
+    const imported = await notes.importFile();
+    if (imported === null) {
+      status.textContent = "Import cancelled";
+      return;
+    }
+    await refreshNotes();
+    status.textContent = [
+      `Imported ${imported.count} note${imported.count === 1n ? "" : "s"}`,
+      imported.path,
+    ].join("\n");
+  } catch (error) {
+    status.textContent = describeTransferError("import", error);
+  } finally {
+    importNotesButton.disabled = false;
+  }
+});
+
+exportNotesButton.addEventListener("click", async () => {
+  exportNotesButton.disabled = true;
+  status.textContent = "Choose where to export Z Notes…";
+  try {
+    const exported = await notes.exportFile();
+    if (exported === null) {
+      status.textContent = "Export cancelled";
+      return;
+    }
+    status.textContent = [
+      `Exported ${exported.count} note${exported.count === 1n ? "" : "s"}`,
+      exported.path,
+    ].join("\n");
+  } catch (error) {
+    status.textContent = describeTransferError("export", error);
+  } finally {
+    exportNotesButton.disabled = false;
+  }
+});
 
 // Vite replaces `import.meta.hot` in production and supplies the live HMR
 // client in development. The native smoke verifies the matching mode, proving

@@ -19,6 +19,8 @@ zapp/
 ├── notes-core.zs     # shared model, behavior, and checked wire conversion
 ├── notes-service.zs  # suspending service and lifecycle adapter
 ├── notes-persistence.zs # application-owned SQLite storage
+├── notes-transfer.zs # versioned JSON import/export codec
+├── notes-transfer.test.zs # native codec round-trip regression
 ├── sqlite3.h.zd      # checked SQLite ownership/status/text contract
 ├── health-service.zs # sync-only value service
 └── sync-notes-service.zs # allocation-lean strict-C adapter
@@ -95,6 +97,18 @@ changed, return the resulting `Note`, and surface a generated
 Enter-key submission keep this a small usable notes surface while the worker,
 cancellation, and native-window controls remain visible as composition
 diagnostics.
+
+**Import JSON…** and **Export JSON…** exercise the application-owned
+`app.dialogs` manager through generated async service bindings. Cancellation
+is ordinary absence (`null` in generated TypeScript, `Option.none` in Z), while
+native dialog, filesystem, and codec failures become a generated
+`NoteTransferError`. Export writes a versioned document containing portable
+note content rather than database IDs. Import validates that document, assigns
+fresh IDs, persists the complete batch in one SQLite transaction, and only
+then publishes the notes to the main-thread catalog; a failed batch leaves both
+the database and in-memory model unchanged. The WebView never receives or
+submits an arbitrary filesystem path.
+
 After the platform loop exits, the smoke checks that the retained `app`
 identity has transitioned to `stopped`.
 
@@ -484,7 +498,9 @@ generated `NoteCreationError` and its structured details, then displays the
 returned native-service value in the DOM. Edit a rendered title and click
 **Save**, **Archive**, or **Delete** to exercise the generated mutation
 bindings, typed `NoteMutationError`, application-owned catalog, and persistent
-SQLite connection without handwritten frontend routing. **Cancel a suspended request**
+SQLite connection without handwritten frontend routing. Use **Export JSON…**
+and **Import JSON…** to verify native save/open panels, typed cancellation, and
+the versioned Z-owned transfer codec. **Cancel a suspended request**
 starts `notes.count`, aborts it with a standard `AbortController` while the
 service is yielded, and then proves a later request still succeeds. Expected
 evidence after creating a note directly:

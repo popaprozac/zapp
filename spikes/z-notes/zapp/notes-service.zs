@@ -8,6 +8,12 @@ import {
 } from "zapp/service";
 import { Application } from "zapp";
 import {
+  DialogError,
+  FileFilter,
+  OpenDialogOptions,
+  SaveDialogOptions,
+} from "zapp/dialog";
+import {
   CreateNoteInput,
   EditNoteInput,
   Note,
@@ -22,6 +28,10 @@ import {
   NotesStorage,
   createNotesStorage,
 } from "./notes-persistence.zs";
+import {
+  decodeNotesDocument,
+  encodeNotesDocument,
+} from "./notes-transfer.zs";
 import console from "std/console";
 import fs from "std/fs";
 
@@ -33,6 +43,21 @@ export struct NoteCreationError {
 export struct NoteMutationError {
   id: u64;
   message: String;
+}
+
+export enum NoteTransferOperation {
+  importFile,
+  exportFile,
+}
+
+export struct NoteTransferError {
+  operation: NoteTransferOperation;
+  message: String;
+}
+
+export struct NoteTransfer {
+  path: String;
+  count: u64;
 }
 
 class NotesCatalog on thread.main {
@@ -84,6 +109,10 @@ class NotesCatalog on thread.main {
   function configureDataDirectory(inout this, path: String): void {
     this.dataDirectory = move path;
   }
+
+  function directory(): String {
+    return copy this.dataDirectory;
+  }
 }
 
 export readonly class NotesService implements ServiceLifecycle {
@@ -124,6 +153,116 @@ export readonly class NotesService implements ServiceLifecycle {
 
   function list(): Array<Note> on thread.main {
     return this.catalog.list();
+  }
+
+  async function importFile(
+  ): Option<NoteTransfer> throws NoteTransferError on thread.main {
+    const application = Application.current();
+    const defaultPath = this.catalog.directory();
+    const selected = attempt await application.dialogs.openFile(
+      OpenDialogOptions({
+        title: "Import Z Notes",
+        defaultPath: move defaultPath,
+        filters: Array<FileFilter>(FileFilter({
+          name: "JSON",
+          extensions: Array<String>("json"),
+        })),
+      })
+    );
+    const selection = match (selected) {
+      success(value) => value;
+      failure(error) => throw transferDialogError(
+        NoteTransferOperation.importFile,
+        in error
+      );
+    };
+    const path = match (selection) {
+      some(value) => value;
+      none => return Option<NoteTransfer>.none;
+    };
+    const loaded = attempt fs.readText(path);
+    const source = match (loaded) {
+      success(value) => value;
+      failure(error) => throw noteTransferError(
+        NoteTransferOperation.importFile,
+        `could not read ${path}: ${error}`
+      );
+    };
+    const decoded = attempt decodeNotesDocument(in source);
+    const inputs = match (decoded) {
+      success(value) => value;
+      failure(error) => throw noteTransferError(
+        NoteTransferOperation.importFile,
+        copy error.message
+      );
+    };
+
+    const previous = this.catalog.list();
+    let newNotes = Array<Note>();
+    for (const input of inputs) {
+      newNotes.push(this.core.create(copy input));
+    }
+    const stored = attempt this.storage.insertMany(in newNotes);
+    match (stored) {
+      success => {}
+      failure(status) => {
+        this.core.restore(in previous);
+        throw noteTransferError(
+          NoteTransferOperation.importFile,
+          `could not persist imported notes: sqlite status ${status}`
+        );
+      }
+    }
+    const catalog = this.catalog;
+    for (const note of newNotes) {
+      catalog.add(copy note);
+    }
+    return Option.some(NoteTransfer({
+      path: move path,
+      count: u64(newNotes.length),
+    }));
+  }
+
+  async function exportFile(
+  ): Option<NoteTransfer> throws NoteTransferError on thread.main {
+    const notes = this.catalog.list();
+    const source = encodeNotesDocument(in notes);
+    const application = Application.current();
+    const defaultPath = this.catalog.directory();
+    const selected = attempt await application.dialogs.saveFile(
+      SaveDialogOptions({
+        title: "Export Z Notes",
+        defaultPath: move defaultPath,
+        defaultName: "z-notes.json",
+        filters: Array<FileFilter>(FileFilter({
+          name: "JSON",
+          extensions: Array<String>("json"),
+        })),
+      })
+    );
+    const selection = match (selected) {
+      success(value) => value;
+      failure(error) => throw transferDialogError(
+        NoteTransferOperation.exportFile,
+        in error
+      );
+    };
+    const path = match (selection) {
+      some(value) => value;
+      none => return Option<NoteTransfer>.none;
+    };
+    const written = attempt fs.writeText(path, source);
+    match (written) {
+      success => {}
+      failure(error) => throw noteTransferError(
+        NoteTransferOperation.exportFile,
+        `could not write ${path}: ${error}`
+      );
+    }
+    return Option.some(NoteTransfer({
+      path: move path,
+      count: u64(notes.length),
+    }));
   }
 
   function edit(
@@ -334,4 +473,18 @@ export function createNotesService(): NotesService on thread.main {
 
 function noteMutationError(id: u64, message: String): NoteMutationError {
   return NoteMutationError({ id, message: move message });
+}
+
+function noteTransferError(
+  operation: NoteTransferOperation,
+  message: String
+): NoteTransferError {
+  return NoteTransferError({ operation, message: move message });
+}
+
+function transferDialogError(
+  operation: NoteTransferOperation,
+  in error: DialogError
+): NoteTransferError {
+  return noteTransferError(operation, copy error.message);
 }

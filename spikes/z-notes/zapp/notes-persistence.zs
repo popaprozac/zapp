@@ -32,6 +32,28 @@ export class NoteDatabase on thread.main {
     if (status != sqlite.SQLITE_DONE) throw status;
   }
 
+  private function execute(in sql: String): void throws i32 {
+    let statement;
+    try sqlite.sqlite3_prepare_v2(
+      this.database,
+      sql,
+      -1,
+      out statement,
+      null
+    );
+    if (statement == null) throw -1;
+    const status = sqlite.sqlite3_step(statement);
+    if (status != sqlite.SQLITE_DONE) throw status;
+  }
+
+  private function rollback(): void {
+    const rolledBack = attempt this.execute("ROLLBACK");
+    match (rolledBack) {
+      success => {}
+      failure(_) => {}
+    }
+  }
+
   function loadNotes(): Array<Note> throws i32 {
     let notes = Array<Note>();
     let statement;
@@ -100,6 +122,28 @@ export class NoteDatabase on thread.main {
     if (status != sqlite.SQLITE_DONE) throw status;
   }
 
+  function insertNotes(in notes: Array<Note>): void throws i32 {
+    try this.execute("BEGIN IMMEDIATE");
+    for (const note of notes) {
+      const inserted = attempt this.insertNote(in note);
+      match (inserted) {
+        success => {}
+        failure(status) => {
+          this.rollback();
+          throw status;
+        }
+      }
+    }
+    const committed = attempt this.execute("COMMIT");
+    match (committed) {
+      success => {}
+      failure(status) => {
+        this.rollback();
+        throw status;
+      }
+    }
+  }
+
   function updateNote(in note: Note): void throws i32 {
     let statement;
     try sqlite.sqlite3_prepare_v2(
@@ -160,6 +204,13 @@ export class NotesStorage on thread.main {
   function insert(in note: Note): void throws i32 {
     match (in this.database) {
       some(database) => try database.insertNote(in note);
+      none => throw -1;
+    }
+  }
+
+  function insertMany(in notes: Array<Note>): void throws i32 {
+    match (in this.database) {
+      some(database) => try database.insertNotes(in notes);
       none => throw -1;
     }
   }
