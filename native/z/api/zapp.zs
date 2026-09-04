@@ -50,6 +50,10 @@ import {
   WindowManager,
   createWindowManager,
 } from "../framework/window.zs";
+import {
+  DialogManager,
+  createDialogManager,
+} from "../framework/dialog.zs";
 
 export type ApplicationError = FrameworkApplicationError;
 export type ApplicationState = FrameworkApplicationState;
@@ -122,6 +126,7 @@ export readonly class Application {
   readonly capabilities: ApplicationCapabilities;
   readonly events: ApplicationEvents;
   readonly windows: WindowManager;
+  readonly dialogs: DialogManager;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
   internal readonly runState: ApplicationRunState;
@@ -135,6 +140,7 @@ export readonly class Application {
     this.capabilities = configuredApplicationCapabilities();
     this.events = createApplicationEvents();
     this.windows = createWindowManager();
+    this.dialogs = createDialogManager();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
     this.runState = new ApplicationRunState({
@@ -216,6 +222,7 @@ function prepareApplication(
   const capabilities = app.capabilities;
   const events = app.events;
   const windows = app.windows;
+  const dialogs = app.dialogs;
   const workers = app.workers;
   const services = app.services;
   const { routes, asynchronous, lifecycles } = services.prepare();
@@ -226,6 +233,7 @@ function prepareApplication(
     capabilities,
     events,
     windows,
+    dialogs,
     services: new AsyncServices({
       synchronous: routes,
       asynchronous,

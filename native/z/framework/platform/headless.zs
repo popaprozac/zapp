@@ -21,6 +21,7 @@ import {
   installApplicationWorkerManager,
 } from "../worker/manager-runtime.zs";
 import { bridgeFailure } from "../bridge.zs";
+import { unsupportedDialogBackend } from "../dialog.zs";
 
 class HeadlessApplicationRuntime {
   readonly updates: TaskScope;
@@ -115,10 +116,15 @@ export async function runApplicationPlatform(
   });
   const runtimeLifetime = installHeadlessApplicationRuntime(runtime);
   if (runtime.configuredNameBytes == 0) return 64;
+  let dialogs = config.dialogs;
+  dialogs.start(unsupportedDialogBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
-    failure(startError) => throw ApplicationError.lifecycle(startError);
+    failure(startError) => {
+      dialogs.stop();
+      throw ApplicationError.lifecycle(startError);
+    }
   }
   let workerManager = config.workers;
   const workerManagerLifetime = installApplicationWorkerManager(
@@ -155,6 +161,7 @@ export async function runApplicationPlatform(
   workers.requestCancellation();
   workers.join();
   workerManager.finish();
+  dialogs.stop();
   await updates.close();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {

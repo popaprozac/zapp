@@ -608,6 +608,17 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/window.zs", import.meta.url),
       "utf8",
     );
+    const dialogs = readFileSync(
+      new URL("../../native/z/framework/dialog.zs", import.meta.url),
+      "utf8",
+    );
+    const macOSDialogs = readFileSync(
+      new URL(
+        "../../native/z/framework/platform/macos/dialog-backend.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const applicationServices = readFileSync(
       new URL("../../native/z/framework/application-services.zs", import.meta.url),
       "utf8",
@@ -715,6 +726,7 @@ describe("Z native host inputs", () => {
     expect(application).toContain(
       "this.windows = createWindowManager();",
     );
+    expect(application).toContain("this.dialogs = createDialogManager();");
     expect(application).toContain(
       "this.workers = createWorkerManager(configuredApplicationWorkers());",
     );
@@ -735,6 +747,7 @@ describe("Z native host inputs", () => {
     expect(contract).toContain("readonly context: ApplicationContext");
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(contract).toContain("readonly events: ApplicationEvents");
+    expect(contract).toContain("readonly dialogs: DialogManager");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
@@ -760,6 +773,16 @@ describe("Z native host inputs", () => {
       'capabilities: Array<String> = Array<String>("default")',
     );
     expect(windows).not.toMatch(/\b__[A-Za-z]/);
+    expect(dialogs).toContain("export readonly class DialogManager on thread.main");
+    expect(dialogs).toContain("async function openFile(");
+    expect(dialogs).toContain("async function openFiles(");
+    expect(dialogs).toContain("async function openDirectory(");
+    expect(dialogs).toContain("async function saveFile(");
+    expect(dialogs).toContain("Option<String> throws DialogError on thread.main");
+    expect(dialogs).toContain("Option<Array<String>> throws DialogError on thread.main");
+    expect(macOSDialogs).toContain("AppKit.NSOpenPanel.openPanel()");
+    expect(macOSDialogs).toContain("AppKit.NSSavePanel.savePanel()");
+    expect(macOSDialogs).toContain("panel.allowedContentTypes = contentTypes");
     expect(applicationServices).toContain("internal struct ConfiguredServices");
     expect(applicationServices).toContain("export readonly class ApplicationServices on thread.main");
     expect(applicationServices).toContain("internal function prepare(inout this): ConfiguredServices");

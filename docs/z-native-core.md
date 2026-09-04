@@ -171,6 +171,37 @@ WebView -> Z -> AppKit composition rather than only the manager seam.
 The interactive page also exposes visible rename, temporary hide/show, and
 close controls so the same production route can be exercised by hand.
 
+The application identity now also owns a typed `DialogManager`. File and
+directory selection are authority-granting application operations, so they are
+not hidden behind a process-global `Dialog` namespace and WebView content does
+not supply an arbitrary filesystem path:
+
+```zs
+import { FileFilter, OpenDialogOptions } from "zapp/dialog";
+
+const selected = try await app.dialogs.openFile(OpenDialogOptions({
+  title: "Import notes",
+  filters: Array<FileFilter>(FileFilter({
+    name: "JSON",
+    extensions: Array<String>("json"),
+  })),
+}));
+
+match (selected) {
+  some(path) => importNotes(move path);
+  none => {}
+}
+```
+
+`openFile`, `openFiles`, `openDirectory`, and `saveFile` all return `Option`
+for ordinary user cancellation and throw `DialogError` for native or framework
+failure. Their public surface is async and `on thread.main`. The first macOS
+backend uses AppKit's nested modal run loop internally; replacing it with
+sheet-based suspension is an implementation improvement that does not change
+application source. The headless backend fails with a typed unsupported error.
+File filters use `UTType` directly, and no JSON serialization or legacy dialog
+shim exists between Z and AppKit.
+
 Each Z-owned `Window` also exposes a typed, main-executor event surface. Event
 channels are ordinary Z objects rather than stringly framework callbacks:
 

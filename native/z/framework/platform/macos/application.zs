@@ -25,6 +25,7 @@ import {
   runMacOSApplicationLoop,
 } from "./application-host.zs";
 import { macOSWindowBackend } from "./window-backend.zs";
+import { macOSDialogBackend } from "./dialog-backend.zs";
 import {
   startConfiguredApplicationWorkers,
 } from "../../configured-application.zs";
@@ -43,6 +44,7 @@ export async function runMacOSApplication(
 ): i32 throws ApplicationError on thread.main {
   const context = config.contextSnapshot();
   let windows = config.windows;
+  let dialogs = config.dialogs;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
     throw ApplicationError.window(WindowError({
@@ -72,10 +74,12 @@ export async function runMacOSApplication(
       throw ApplicationError.window(windowError);
     }
   }
+  dialogs.start(macOSDialogBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
     failure(startError) => {
+      dialogs.stop();
       windows.stop();
       abortMacOSApplicationRuntime();
       throw ApplicationError.lifecycle(startError);
@@ -119,6 +123,7 @@ export async function runMacOSApplication(
   cancelAllMacOSApplicationWorkerServices();
   workers.join();
   workerManager.finish();
+  dialogs.stop();
   windows.stop();
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);

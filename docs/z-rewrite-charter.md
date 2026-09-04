@@ -342,8 +342,8 @@ once accepted, shutdown remains deterministic and is observed by awaiting
 
 This does not make `Application` a universal manager container:
 
-- application-owned registries belong on `app`, initially `windows` and
-  `services`;
+- application-owned registries and authority-granting lifecycles belong on
+  `app`, initially `windows`, `services`, and `dialogs`;
 - resource behavior belongs on its handle, such as `window.show()` and
   `window.close()`;
 - types and options come from focused modules such as `zapp/window`; and

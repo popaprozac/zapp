@@ -7,6 +7,7 @@
     "entry": "api/zapp.zs",
     "exports": {
       "./window": "api/zapp/window.zs",
+      "./dialog": "api/zapp/dialog.zs",
       "./service": "api/zapp/service.zs",
       "./worker": "framework/worker/worker-manager.zs"
     },
@@ -18,7 +19,12 @@
         "framework/platform/macos"
       ],
       "link": {
-        "frameworks": ["AppKit", "WebKit", "CoreFoundation"]
+        "frameworks": [
+          "AppKit",
+          "WebKit",
+          "CoreFoundation",
+          "UniformTypeIdentifiers"
+        ]
       }
     }
   }
