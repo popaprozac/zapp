@@ -12,6 +12,9 @@ export default {
       "@zappdev/runtime/application": fileURLToPath(
         new URL("../../runtime/application-api.ts", import.meta.url),
       ),
+      "@zappdev/runtime/clipboard": fileURLToPath(
+        new URL("../../runtime/clipboard-public.ts", import.meta.url),
+      ),
       "@zappdev/runtime/menu": fileURLToPath(
         new URL("../../runtime/menu-public.ts", import.meta.url),
       ),

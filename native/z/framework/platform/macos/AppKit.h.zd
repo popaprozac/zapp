@@ -1,4 +1,11 @@
 declare module "AppKit/AppKit.h" {
   // AppKit dispatches NSMenuItem target/action callbacks on its main event loop.
   export type NSMenuItem on thread.main;
+
+  // NSPasteboard reads the NSString synchronously; it does not consume the
+  // Z-owned UTF-8 storage bridged for this call.
+  export function NSPasteboard.setString(
+    in string: _,
+    dataType: _
+  ): _;
 }

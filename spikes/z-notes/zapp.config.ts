@@ -10,10 +10,20 @@ export default defineConfig({
     assets: "./dist",
   },
   security: {
-    permissions: ["window:create", "menu"],
+    permissions: [
+      "window:create",
+      "menu",
+      "clipboard:read",
+      "clipboard:write",
+    ],
     capabilities: {
       default: {
-        permissions: ["window:create", "menu"],
+        permissions: [
+          "window:create",
+          "menu",
+          "clipboard:read",
+          "clipboard:write",
+        ],
         services: ["notes", "health"],
         workers: ["noteIndexer"],
       },

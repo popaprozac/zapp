@@ -283,7 +283,11 @@ test("validateCapabilityProfiles requires explicit default and bounded grants", 
   expect(() => validateCapabilityProfiles({
     default: { permissions: ["clipboard:read"] },
   }, ["clipboard:read"]))
-    .toThrow(/currently supports "window:create", "menu", and services/);
+    .not.toThrow();
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["fs:read"] },
+  }, ["fs:read"]))
+    .toThrow(/currently supports "window:create", "menu", clipboard access, and services/);
   expect(() => validateCapabilityProfiles({
     default: { permissions: ["menu"] },
   }, ["menu"])).not.toThrow();

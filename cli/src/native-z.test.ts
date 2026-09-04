@@ -186,6 +186,8 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("configuredApplicationMetadata");
     expect(output).toContain("configuredApplicationPermissions");
     expect(output).toContain("windowCreate: true");
+    expect(output).toContain("clipboardRead: false");
+    expect(output).toContain("clipboardWrite: false");
   });
 
   it("compiles an explicit window-create denial into native Z policy", () => {
@@ -197,6 +199,18 @@ describe("renderZApplicationMetadata", () => {
       permissions: [],
     });
     expect(output).toContain("windowCreate: false");
+  });
+
+  it("requires explicit clipboard grants in generated native Z policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "Clipboard",
+      identifier: "com.example.clipboard",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: ["clipboard:read"],
+    });
+    expect(output).toContain("clipboardRead: true");
+    expect(output).toContain("clipboardWrite: false");
   });
 
   it("emits exact immutable capability grants into native Z", () => {

@@ -25,6 +25,11 @@ import {
 } from "../../worker-bridge.zs";
 import { ApplicationWorkers } from "../../worker/application-workers.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
+import { ClipboardManager } from "../../clipboard.zs";
+import {
+  ClipboardBridgeRoute,
+  routeClipboardBridgeMessage,
+} from "../../clipboard-bridge.zs";
 import {
   FrontendMenuCommandDispatch,
   MenuBridgeRoute,
@@ -182,6 +187,7 @@ function selectWindowMessageRoute(
   const selected = current.capabilitiesForWindow(windowId);
   const workers = current.applicationWorkers;
   const menu = current.menu;
+  const clipboard = current.clipboard;
   const logicalId = current.logicalWindowId(windowId);
   match (selected) {
     some(capabilities) => match (logicalId) {
@@ -192,6 +198,7 @@ function selectWindowMessageRoute(
         workers,
         windowId,
         in windowName,
+        clipboard,
         menu,
         inout windows
       );
@@ -216,9 +223,20 @@ function selectWindowMessageRouteWithCapabilities(
   workers: ApplicationWorkers,
   nativeWindowId: i32,
   in logicalWindowId: String,
+  clipboard: ClipboardManager,
   menu: ApplicationMenu,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
+  const clipboardRoute = routeClipboardBridgeMessage(
+    in message,
+    in permissions,
+    selectedCapabilities,
+    clipboard
+  );
+  match (clipboardRoute) {
+    response(value) => return WindowMessageRoute.framework(value);
+    unhandled => {}
+  }
   const dispatch: FrontendMenuCommandDispatch = deliverFrontendMenuCommand;
   const menuRoute = routeMenuBridgeMessage(
     in message,

@@ -934,10 +934,16 @@ export function validateCapabilityProfiles(
     const permissionErrors = validatePermissions(profile.permissions);
     if (permissionErrors.length > 0) throw new Error(permissionErrors[0]);
     for (const permission of profile.permissions ?? []) {
-      if (permission !== "window:create" && permission !== "menu") {
+      if (
+        permission !== "window:create"
+        && permission !== "menu"
+        && permission !== "clipboard:read"
+        && permission !== "clipboard:write"
+        && permission !== "clipboard"
+      ) {
         throw new Error(
           `[zapp] security.capabilities.${name} cannot grant ${JSON.stringify(permission)} yet; ` +
-          'the Z-native per-window permission tier currently supports "window:create", "menu", and services',
+          'the Z-native per-window permission tier currently supports "window:create", "menu", clipboard access, and services',
         );
       }
       if (!isPermissionAllowed(permission, global)) {

@@ -202,6 +202,42 @@ application source. The headless backend fails with a typed unsupported error.
 File filters use `UTType` directly, and no JSON serialization or legacy dialog
 shim exists between Z and AppKit.
 
+The application also owns a focused `ClipboardManager`. Text is the first
+portable tier: reads distinguish an empty clipboard from an empty string,
+writes replace the current contents, and clear uses the platform clipboard's
+native invalidation operation.
+
+```zs
+import { Application } from "zapp";
+
+const app = Application.current();
+const text: Option<String> = try app.clipboard.readText();
+try app.clipboard.writeText("Copied from Z");
+try app.clipboard.clear();
+```
+
+These synchronous Z methods are `on thread.main` because the initial macOS
+backend calls `NSPasteboard` directly. The focused WebView facade preserves the
+same application-owned shape while naturally returning promises across IPC:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+import { ClipboardError } from "@zappdev/runtime/clipboard";
+
+const clipboard = Application.current().clipboard;
+await clipboard.writeText("Copied from the WebView");
+const text = await clipboard.readText(); // string | null
+await clipboard.clear();
+```
+
+Clipboard reads and writes require separate `clipboard:read` and
+`clipboard:write` grants. The originating window's capability profile narrows
+the application-wide ceiling, and the Z router checks both before touching
+AppKit. Trusted native Z application code calls the manager directly; the
+permission boundary protects less-trusted WebView content. HTML, files, and
+images remain future typed clipboard tiers rather than untyped payloads on the
+text API.
+
 The same application identity owns one logical application menu. Applications
 define commands independently from native menu-item allocations, so the same
 command identity can later power menus, shortcuts, and toolbars:

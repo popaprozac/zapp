@@ -173,6 +173,7 @@ test("package exports focused application and menu facades", async () => {
     new URL("./package.json", import.meta.url),
   ).json() as { exports: Record<string, string> };
   expect(manifest.exports["./application"]).toBe("./application-api.ts");
+  expect(manifest.exports["./clipboard"]).toBe("./clipboard-public.ts");
   expect(manifest.exports["./menu"]).toBe("./menu-public.ts");
   const publicMenu = await import("./menu-public");
   expect(Object.keys(publicMenu).sort()).toEqual([

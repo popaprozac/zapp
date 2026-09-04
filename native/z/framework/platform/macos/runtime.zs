@@ -6,6 +6,7 @@ import { TaskScope } from "std/async";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
+import { ClipboardManager } from "../../clipboard.zs";
 import {
   MacOSApplicationRuntime,
   initializeMacOSApplicationRuntimeState,
@@ -26,6 +27,7 @@ internal function initializeMacOSApplicationRuntime(
   services: AsyncServices,
   updates: TaskScope,
   windowManager: WindowManager,
+  clipboard: ClipboardManager,
   menu: ApplicationMenu
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const route: DesktopRouteMessageOperation = routeMessageOnMain;
@@ -37,6 +39,7 @@ internal function initializeMacOSApplicationRuntime(
     move services,
     updates,
     windowManager,
+    clipboard,
     menu,
     route,
     deliver

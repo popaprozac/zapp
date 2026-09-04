@@ -167,7 +167,8 @@ end. Resize delivers the same
 position or timestamp fields that the native event did not provide.
 
 The frontend window factory is allowed explicitly by
-`security.permissions: ["window:create"]`. Zapp mirrors that manifest for a
+`security.permissions`, alongside `menu`, `clipboard:read`, and
+`clipboard:write`. Zapp mirrors that manifest for a
 friendly TypeScript error, but the compiled Z router remains authoritative: a
 handcrafted `__window:create` message cannot bypass the permission check.
 The config also declares a `default` capability profile granting the `notes`
@@ -179,6 +180,14 @@ capability list. The smoke's successful calls from both windows therefore
 exercise native profile enforcement and inheritance, while focused framework
 tests prove a narrow profile returns a structured `PermissionDeniedError`
 before service code runs.
+
+The primary WebView also exercises the application-owned clipboard from the
+focused TypeScript facade. **Copy note title** writes the current title,
+**Read text** distinguishes `null` from an empty string, and **Clear** replaces
+the pasteboard contents. The same `Application.current().clipboard` surface is
+backed by direct `NSPasteboard` calls in Z; there is no handwritten clipboard
+shim. Both application policy and the originating window's `default`
+capability profile explicitly grant the operation.
 
 `WindowOptions.url` is a logical application-relative URL, not a transport
 address. This example deliberately uses `/notes`. In a packaged build the

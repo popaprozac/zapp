@@ -8,6 +8,7 @@
     ".": "./index.ts",
     "./service": "./service-api.ts",
     "./application": "./application-api.ts",
+    "./clipboard": "./clipboard-public.ts",
     "./menu": "./menu-public.ts",
     "./window": "./window-api.ts",
     "./worker": "./application-worker-api.ts",

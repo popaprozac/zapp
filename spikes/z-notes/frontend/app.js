@@ -4,6 +4,7 @@ import {
   WindowEvent,
 } from "@zappdev/runtime/window";
 import { Application } from "@zappdev/runtime/application";
+import { ClipboardError } from "@zappdev/runtime/clipboard";
 import { Command, CommandState, MenuRole } from "@zappdev/runtime/menu";
 import {
   health,
@@ -20,6 +21,9 @@ const cancelButton = document.querySelector("#cancel");
 const indexButton = document.querySelector("#index-notes");
 const importNotesButton = document.querySelector("#import-notes");
 const exportNotesButton = document.querySelector("#export-notes");
+const copyTitleButton = document.querySelector("#copy-title");
+const readClipboardButton = document.querySelector("#read-clipboard");
+const clearClipboardButton = document.querySelector("#clear-clipboard");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
@@ -28,6 +32,45 @@ const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
 const windowEvents = document.querySelector("#window-events");
 const workerIndex = document.querySelector("#worker-index");
+const clipboardStatus = document.querySelector("#clipboard-status");
+
+const application = Application.current();
+
+function describeClipboardError(error) {
+  if (error instanceof ClipboardError) {
+    return `Clipboard ${error.operation ?? "operation"} failed\n${error.message}`;
+  }
+  return `Clipboard operation failed\n${String(error)}`;
+}
+
+copyTitleButton.addEventListener("click", async () => {
+  try {
+    await application.clipboard.writeText(noteTitle.value);
+    clipboardStatus.textContent = "Copied the current note title.";
+  } catch (error) {
+    clipboardStatus.textContent = describeClipboardError(error);
+  }
+});
+
+readClipboardButton.addEventListener("click", async () => {
+  try {
+    const text = await application.clipboard.readText();
+    clipboardStatus.textContent = text === null
+      ? "The clipboard does not contain text."
+      : `Clipboard text:\n${text}`;
+  } catch (error) {
+    clipboardStatus.textContent = describeClipboardError(error);
+  }
+});
+
+clearClipboardButton.addEventListener("click", async () => {
+  try {
+    await application.clipboard.clear();
+    clipboardStatus.textContent = "Clipboard cleared.";
+  } catch (error) {
+    clipboardStatus.textContent = describeClipboardError(error);
+  }
+});
 
 function renderNotes(items) {
   noteList.replaceChildren(...items.map((note) => {
@@ -175,7 +218,7 @@ if (currentWindowId === "win-1") {
       await createNoteFromInput();
     },
   });
-  void Application.current().menu.set([
+  void application.menu.set([
     { role: MenuRole.Application },
     {
       label: "File",

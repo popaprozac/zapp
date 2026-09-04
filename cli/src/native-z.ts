@@ -233,6 +233,20 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
       "menu",
       resolvePermissions(config.permissions),
     )},
+    clipboardRead: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "clipboard:read",
+        resolvePermissions(config.permissions),
+      )
+    },
+    clipboardWrite: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "clipboard:write",
+        resolvePermissions(config.permissions),
+      )
+    },
   });
 }
 
