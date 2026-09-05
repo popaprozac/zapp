@@ -191,6 +191,9 @@ Z `window.events.navigationRequested` subscriber. The TypeScript
 but cannot change either one. The frontend-created diagnostics window inherits
 the same profile. Declared `openExternal` schemes are reserved for an explicit
 future shell operation and are never an automatic navigation side effect.
+The third navigation-policy button loads a same-origin subframe that attempts
+to send a raw WebKit close message without the Zapp bootstrap. Native routing
+rejects it because only the main frame at `"self"` owns bridge authority.
 
 The primary WebView also exercises the application-owned clipboard from the
 focused TypeScript facade. **Copy note title** writes the current title,

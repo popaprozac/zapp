@@ -92,6 +92,19 @@ typed event for observation only. `openExternal` is compiled as authority for
 the future explicit shell manager—it never causes navigation to open an
 external application as a side effect.
 
+Navigation permission is not bridge permission. The native WebKit message
+entrypoint verifies provenance before it reads or decodes a message:
+
+- the sender must be the main frame;
+- that frame's native request URL must have the generated `"self"` origin;
+- only then may the window's capability profiles authorize an operation.
+
+Consequently, a remote origin listed under `navigate` is view-only by default,
+and a same-origin subframe cannot bypass the boundary by calling WebKit's raw
+`window.webkit.messageHandlers.zapp` object. If trusted remote bridge access is
+ever needed, it will require a separate explicit grant rather than inheriting
+authority from `navigate`.
+
 | Permission | Verbs | Covers |
 |---|---|---|
 | `clipboard` | `:read`, `:write` | Clipboard reads / writes+clear |

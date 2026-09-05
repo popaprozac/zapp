@@ -34,7 +34,8 @@ void zapp_desktop_smoke_start_window(
       @"setTimeout(()=>document.querySelector('#notification-status')?.click(),500);"
       @"setTimeout(()=>document.querySelector('#navigation-profile')?.click(),650);"
       @"setTimeout(()=>document.querySelector('#navigation-native')?.click(),800);"
-      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1000);"
+      @"setTimeout(()=>document.querySelector('#bridge-subframe')?.click(),900);"
+      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1300);"
     injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
     forMainFrameOnly:YES];
   [content_controller addUserScript:smoke];

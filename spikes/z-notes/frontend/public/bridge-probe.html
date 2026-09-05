@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+  const windowId = new URL(location.href).searchParams.get("windowId");
+  window.webkit?.messageHandlers?.zapp?.postMessage(JSON.stringify({
+    t: 4,
+    m: "close",
+    a: { windowId },
+  }));
+  parent.postMessage({ type: "zapp-subframe-bridge-probe" }, location.origin);
+</script>

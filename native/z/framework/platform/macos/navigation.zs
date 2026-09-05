@@ -67,14 +67,21 @@ function hasSameOrigin(
   return port.isEqualToNumber(originPort);
 }
 
+internal function hasConfiguredFrontendOrigin(
+  in url: Foundation.NSURL
+): boolean on thread.main {
+  const origin = frontendOrigin();
+  return origin != null && hasSameOrigin(in url, in origin);
+}
+
 function profileAllowsURL(
   in profile: String,
   in url: Foundation.NSURL
 ): boolean on thread.main {
-  if (configuredNavigationAllowsSelf(in profile)) {
-    const origin = frontendOrigin();
-    if (origin != null && hasSameOrigin(in url, in origin)) return true;
-  }
+  if (
+    configuredNavigationAllowsSelf(in profile)
+    && hasConfiguredFrontendOrigin(in url)
+  ) return true;
 
   let index: usize = 0;
   while (true) {

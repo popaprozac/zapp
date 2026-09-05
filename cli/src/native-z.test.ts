@@ -486,6 +486,7 @@ describe("Z native host inputs", () => {
       "utf8",
     ));
     const macOSPlatform = macOSModules.join("\n");
+    const messageHandler = macOSModules[5];
     const objectiveCSmoke = readFileSync(
       new URL("../../native/z/framework/platform/macos/desktop-smoke.m", import.meta.url),
       "utf8",
@@ -514,6 +515,14 @@ describe("Z native host inputs", () => {
     expect(macOSModules).toHaveLength(17);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
+    expect(messageHandler).toContain("if (!frame.mainFrame)");
+    expect(messageHandler).toContain("hasConfiguredFrontendOrigin(in sourceURL)");
+    expect(messageHandler.indexOf("if (!frame.mainFrame)")).toBeLessThan(
+      messageHandler.indexOf("const body = message.body"),
+    );
+    expect(messageHandler.indexOf("hasConfiguredFrontendOrigin(in sourceURL)")).toBeLessThan(
+      messageHandler.indexOf("const body = message.body"),
+    );
     expect(macOSPlatform).toContain("body instanceof WebKit.NSString");
     expect(macOSPlatform).toContain("const text: String = body");
     expect(macOSPlatform).toContain("objc.register({");

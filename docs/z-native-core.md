@@ -513,6 +513,11 @@ request. The focused TypeScript event is a read-only observation delivered
 after the native decision. Frontend-created windows inherit their creator's
 profile, and neither a denied navigation nor `target="_blank"` implicitly opens
 an external application.
+The `WKScriptMessageHandler` independently validates `WKFrameInfo` before
+reading the message body: only the main frame whose request has the generated
+frontend origin may enter decoding and routing. This keeps navigation,
+injection, and bridge authority distinct and blocks raw script-message calls
+from same-origin or remote subframes.
 Window request construction, loading, centering, and initial visibility are
 also ordinary checked Z/AppKit calls rather than host-side Objective-C policy.
 

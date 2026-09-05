@@ -36,6 +36,7 @@ const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
 const navigationProfileButton = document.querySelector("#navigation-profile");
 const navigationNativeButton = document.querySelector("#navigation-native");
+const bridgeSubframeButton = document.querySelector("#bridge-subframe");
 const noteTitle = document.querySelector("#note-title");
 const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
@@ -332,13 +333,19 @@ renderWindowEvents();
 
 let observedProfileDenial = false;
 let observedNativeVeto = false;
+let observedSubframeIsolation = false;
 
 function renderNavigationPolicy() {
   navigationPolicy.textContent = [
     `Profile denial: ${observedProfileDenial ? "observed" : "waiting"}`,
     `Native veto: ${observedNativeVeto ? "observed" : "waiting"}`,
+    `Subframe bridge isolation: ${observedSubframeIsolation ? "observed" : "waiting"}`,
   ].join("\n");
-  if (observedProfileDenial && observedNativeVeto) {
+  if (
+    observedProfileDenial
+    && observedNativeVeto
+    && observedSubframeIsolation
+  ) {
     document.body.dataset.navigationPolicy = "ok";
   }
 }
@@ -373,11 +380,36 @@ navigationNativeButton.addEventListener("click", () => {
   probeNavigation("https://docs.z-language.com/zapp-native-veto");
 });
 
+bridgeSubframeButton.addEventListener("click", () => {
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.src = `/bridge-probe.html?windowId=${encodeURIComponent(currentWindowId)}`;
+  document.body.append(frame);
+  const observeProbe = (event) => {
+    if (
+      event.source !== frame.contentWindow
+      || event.origin !== location.origin
+      || event.data?.type !== "zapp-subframe-bridge-probe"
+    ) return;
+    window.removeEventListener("message", observeProbe);
+    // If the raw subframe message reached routing, this native window closes
+    // before the checkpoint. Remaining alive demonstrates frame rejection.
+    setTimeout(() => {
+      observedSubframeIsolation = true;
+      frame.remove();
+      renderNavigationPolicy();
+    }, 250);
+  };
+  window.addEventListener("message", observeProbe);
+});
+
 if (currentWindowId !== "win-1") {
   observedProfileDenial = true;
   observedNativeVeto = true;
   navigationProfileButton.disabled = true;
   navigationNativeButton.disabled = true;
+  bridgeSubframeButton.disabled = true;
+  observedSubframeIsolation = true;
 }
 renderNavigationPolicy();
 

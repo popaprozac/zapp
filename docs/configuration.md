@@ -435,6 +435,13 @@ profile. Unknown profile names fail window realization with a typed
 `WindowError`. Every main-frame and subframe navigation passes through the
 same native check.
 
+Allowing an origin to navigate does not grant it the native bridge. The macOS
+message entrypoint accepts bridge traffic only from the main frame at
+`"self"`, and performs that check before message decoding. Remote pages are
+therefore view-only, while same-origin subframes cannot invoke services or
+window actions through WebKit's raw message handler. Trusted remote bridge
+access is intentionally not inferred and has no configuration form yet.
+
 After the profile check, native Z may narrow the result synchronously:
 
 ```z
