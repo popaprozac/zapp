@@ -1044,10 +1044,12 @@ export function validateCapabilityProfiles(
         && permission !== "clipboard"
         && permission !== "notifications"
         && permission !== "shell:open"
+        && permission !== "shell:reveal"
+        && permission !== "shell:trash"
       ) {
         throw new Error(
           `[zapp] security.capabilities.${name} cannot grant ${JSON.stringify(permission)} yet; ` +
-          'the Z-native per-window permission tier currently supports "window:create", "menu", "notifications", "shell:open", clipboard access, and services',
+          'the Z-native per-window permission tier currently supports "window:create", "menu", "notifications", shell access, clipboard access, and services',
         );
       }
       if (!isPermissionAllowed(permission, global)) {

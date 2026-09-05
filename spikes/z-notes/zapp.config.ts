@@ -17,6 +17,7 @@ export default defineConfig({
       "clipboard:write",
       "notifications",
       "shell:open",
+      "shell:reveal",
     ],
     capabilities: {
       default: {
@@ -27,6 +28,7 @@ export default defineConfig({
           "clipboard:write",
           "notifications",
           "shell:open",
+          "shell:reveal",
         ],
         services: ["notes", "health"],
         workers: ["noteIndexer"],
@@ -40,6 +42,9 @@ export default defineConfig({
         navigate: ["self", "https://docs.z-language.com"],
         openExternal: ["https:", "mailto:"],
       },
+    },
+    filesystem: {
+      allow: ["$resources"],
     },
   },
   webview: {

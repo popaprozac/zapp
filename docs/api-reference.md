@@ -98,67 +98,34 @@ App.on(AppEvent.BEFORE_QUIT, async () => {
 See [`App.setQuitGuard`](#appsetquitguardenabled-boolean-void) for
 the full guard API.
 
-### `App.openExternal(url: string): void`
+### `Application.current().shell`
 
-Opens a URL in the system's default browser (not in the app's webview).
-
-```ts
-App.openExternal("https://example.com");
-```
-
-### `App.showItemInFolder(path: string): void`
-
-Reveal a file or folder in Finder, with the item selected — same as
-right-click → "Show in Finder". Fire-and-forget; silently no-ops if
-the path is empty or doesn't exist. Path variables (`$userData`,
-`~/`, etc.) are expanded the same way `app.fs.*` resolves them.
+The focused shell manager makes every operating-system handoff explicit and
+reports policy or platform failure through `ShellError`:
 
 ```ts
-App.showItemInFolder("/Users/me/Downloads/zapp-app.dmg");
-App.showItemInFolder("$userData/exports/report.pdf");
+import { Application } from "@zappdev/runtime/application";
+import { ShellError } from "@zappdev/runtime/shell";
+
+const shell = Application.current().shell;
+await shell.openExternal("https://example.com");
+await shell.openPath("$userData/exports/report.pdf");
+await shell.reveal("$userData/exports/report.pdf");
+await shell.trash("$userData/old-report.pdf");
 ```
 
-Note: passing a folder reveals the folder *inside its parent* (with
-the folder selected), not the folder's contents. To open a folder
-itself in Finder, use `App.openPath(folder)`.
+`openExternal` requires `shell:open` plus an allowed navigation-profile
+scheme. `openPath`, `reveal`, and `trash` require their corresponding
+`shell:open`, `shell:reveal`, or `shell:trash` permission and a target under
+`security.filesystem.allow`. `trash` moves the item to the operating system
+Trash; it does not permanently delete it. The promise resolves when the OS
+accepts the handoff, not when another application finishes handling it.
 
-Not gated by the FS allowlist — Finder reveal is a user-visible
-action and doesn't mutate disk state.
-
-### `App.openPath(path: string): void`
-
-Open a file or folder using the system default application —
-equivalent to a double-click in Finder. For URLs with schemes
-(`https://`, `mailto:`, etc.) use `App.openExternal` instead; this
-method takes filesystem paths only. Path variables are expanded.
-
-```ts
-App.openPath("/Users/me/Documents/notes.md");   // opens in default editor
-App.openPath("/Users/me/Documents");             // opens folder in Finder
-App.openPath("$userData/cache");                  // path-var expansion
-```
-
-Not gated by the FS allowlist — handing off to the default app is a
-user-visible action that the user can cancel.
-
-### `App.trashItem(path: string): void`
-
-Move a file or folder to the user's Trash. Reversible via Finder's
-"Put Back" command. Fire-and-forget; silent on failure — path missing,
-permission denied, **or path not in `config.fs.allow`**. To confirm
-removal, follow with `app.fs.exists(path)`. Path variables are
-expanded.
-
-```ts
-App.trashItem("$userData/old-cache.db");
-```
-
-**Gated by the FS allowlist.** Same `config.fs.allow` list that gates
-`app.fs.remove` — without this gate, JS could trash arbitrary paths
-on disk, bypassing the allowlist that protects every other
-path-mutating call. Files the user picks via `Dialog.openFile`
-extend the session allowlist automatically, so the common
-"user picks file → app trashes it" flow works out of the box.
+`ShellError` carries `operation`, the original `target`, and a descriptive
+message. The legacy `App.openExternal`, `App.openPath`,
+`App.showItemInFolder`, and `App.trashItem` methods remain compatibility
+surfaces while the Z-owned runtime migration proceeds; new code should use the
+focused manager.
 
 ### `App.on(event: AppEvent, handler): () => void`
 
@@ -3779,7 +3746,7 @@ A bare module name grants all its verbs (`"clipboard"` ⊇ `clipboard:read` +
 | `screen` | — | display enumeration / cursor |
 | `embed` | — | `<zapp-webview>` panels |
 | `window:create` | — | creating new windows (ops on existing windows are never gated) |
-| `shell` | `:open`, `:reveal`, `:trash` | openExternal/openPath · showItemInFolder · trashItem |
+| `shell` | `:open`, `:reveal`, `:trash` | openExternal/openPath · reveal · trash |
 
 Not gated in v1: window ops on existing windows, app lifecycle, `Events`,
 `Sync`, user `Services`, `protocols`/`deepLinkSchemes` (config declaration

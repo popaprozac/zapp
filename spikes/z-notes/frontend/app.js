@@ -39,6 +39,7 @@ const navigationProfileButton = document.querySelector("#navigation-profile");
 const navigationNativeButton = document.querySelector("#navigation-native");
 const bridgeSubframeButton = document.querySelector("#bridge-subframe");
 const openExternalButton = document.querySelector("#open-external");
+const revealResourcesButton = document.querySelector("#reveal-resources");
 const noteTitle = document.querySelector("#note-title");
 const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
@@ -417,7 +418,7 @@ openExternalButton.addEventListener("click", async () => {
       if (
         !(error instanceof ShellError)
         || error.operation !== "openExternal"
-        || error.url !== "file:///tmp/zapp-denied"
+        || error.target !== "file:///tmp/zapp-denied"
       ) throw error;
     }
     await application.shell.openExternal("https://docs.z-language.com");
@@ -433,6 +434,36 @@ openExternalButton.addEventListener("click", async () => {
     document.body.dataset.shellOpen = "error";
   } finally {
     openExternalButton.disabled = false;
+  }
+});
+
+revealResourcesButton.addEventListener("click", async () => {
+  revealResourcesButton.disabled = true;
+  shellResult.textContent = "Checking compiled filesystem path authority…";
+  try {
+    try {
+      await application.shell.reveal("$home");
+      throw new Error("Expected filesystem authority to deny the home directory");
+    } catch (error) {
+      if (
+        !(error instanceof ShellError)
+        || error.operation !== "reveal"
+        || error.target !== "$home"
+      ) throw error;
+    }
+    await application.shell.reveal("$resources");
+    shellResult.textContent = [
+      "Denied $home through compiled filesystem authority.",
+      "Revealed the application resources directory.",
+    ].join("\n");
+    document.body.dataset.shellReveal = "ok";
+  } catch (error) {
+    shellResult.textContent = error instanceof ShellError
+      ? `Shell ${error.operation ?? "operation"} failed\n${error.message}`
+      : `Shell operation failed\n${String(error)}`;
+    document.body.dataset.shellReveal = "error";
+  } finally {
+    revealResourcesButton.disabled = false;
   }
 });
 

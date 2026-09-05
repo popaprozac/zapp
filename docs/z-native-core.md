@@ -291,9 +291,9 @@ there is no blocking semaphore, global response buffer, JSON hop, or handwritten
 Objective-C adapter between the manager and the framework call. Scheduling,
 actions, categories, and delivery events remain later typed tiers.
 
-External URL handoff is a separate focused manager. It is intentionally not a
-navigation side effect: application code names the operation, while Zapp keeps
-the URL scheme and originating-window authority explicit.
+Operating-system handoff is a separate focused manager. URL handoff is
+intentionally not a navigation side effect, and filesystem handoff remains
+inside the path authority declared by `security.filesystem.allow`.
 
 ```zs
 import { Application } from "zapp";
@@ -306,6 +306,8 @@ match (opened) {
   success => {}
   failure(error) => console.error(error.message);
 }
+
+try Application.current().shell.reveal("$resources");
 ```
 
 The WebView facade preserves the manager shape:
@@ -320,16 +322,25 @@ try {
   );
 } catch (error) {
   if (error instanceof ShellError) {
-    console.error(error.operation, error.url, error.message);
+    console.error(error.operation, error.target, error.message);
   }
 }
+
+await Application.current().shell.openPath("$userData/report.pdf");
+await Application.current().shell.reveal("$userData/report.pdf");
+await Application.current().shell.trash("$userData/old-report.pdf");
 ```
 
-Frontend calls require app-wide `shell:open`, the same grant in the
-originating window's capability profile, and a matching scheme in its compiled
-navigation profile. Native Z calls are direct `NSWorkspace` calls on macOS and
-do not serialize through the WebView bridge. Smoke mode exercises the complete
-policy route without launching the user's browser.
+Frontend calls require the corresponding app-wide `shell:open`,
+`shell:reveal`, or `shell:trash` grant and the same grant in the originating
+window's capability profile. External URLs additionally require a matching
+scheme in the selected navigation profile. Filesystem targets must resolve
+inside `security.filesystem.allow`; `shell:*` authorizes the operation while
+the filesystem policy constrains its target. Native Z does not serialize
+through the WebView bridge or repeat its permission checks, but the focused
+manager applies the same filesystem resource authority. Smoke mode exercises
+the routes without launching another application, opening Finder, or moving a
+file.
 
 The same application identity owns one logical application menu. Applications
 define commands independently from native menu-item allocations, so the same

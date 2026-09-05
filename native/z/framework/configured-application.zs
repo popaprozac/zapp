@@ -39,6 +39,8 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
     clipboardWrite: false,
     notifications: false,
     shellOpen: false,
+    shellReveal: false,
+    shellTrash: false,
   });
 }
 

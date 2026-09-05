@@ -108,6 +108,9 @@ App.on(AppEvent.OPEN_URL, (data) => { ... });
 
 // Focused replacement application surface
 await Application.current().shell.openExternal("https://docs.z-language.com");
+await Application.current().shell.openPath("$userData/report.pdf");
+await Application.current().shell.reveal("$userData/report.pdf");
+await Application.current().shell.trash("$userData/old-report.pdf");
 
 // Windows
 const w = Window.current();                          // webview only

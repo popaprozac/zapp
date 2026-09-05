@@ -36,7 +36,8 @@ void zapp_desktop_smoke_start_window(
       @"setTimeout(()=>document.querySelector('#navigation-native')?.click(),800);"
       @"setTimeout(()=>document.querySelector('#bridge-subframe')?.click(),900);"
       @"setTimeout(()=>document.querySelector('#open-external')?.click(),1050);"
-      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1450);"
+      @"setTimeout(()=>document.querySelector('#reveal-resources')?.click(),1250);"
+      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1650);"
     injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
     forMainFrameOnly:YES];
   [content_controller addUserScript:smoke];
@@ -115,6 +116,7 @@ void zapp_desktop_smoke_observe_response(
           @"notificationStatus:document.body?.dataset?.notificationStatus??null,"
           @"navigationPolicy:document.body?.dataset?.navigationPolicy??null,"
           @"shellOpen:document.body?.dataset?.shellOpen??null,"
+          @"shellReveal:document.body?.dataset?.shellReveal??null,"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
@@ -132,6 +134,7 @@ void zapp_desktop_smoke_observe_response(
             && [(NSString *)state containsString:@"\"notificationStatus\":\"ok\""]
             && [(NSString *)state containsString:@"\"navigationPolicy\":\"ok\""]
             && [(NSString *)state containsString:@"\"shellOpen\":\"ok\""]
+            && [(NSString *)state containsString:@"\"shellReveal\":\"ok\""]
             && [(NSString *)state containsString:expected_hmr];
           BOOL terminal_failure = [state isKindOfClass:[NSString class]]
             && (

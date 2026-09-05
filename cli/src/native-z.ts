@@ -265,6 +265,20 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
         resolvePermissions(config.permissions),
       )
     },
+    shellReveal: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "shell:reveal",
+        resolvePermissions(config.permissions),
+      )
+    },
+    shellTrash: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "shell:trash",
+        resolvePermissions(config.permissions),
+      )
+    },
   });
 }
 
@@ -688,6 +702,7 @@ export function renderZConfiguredWebView(
     origins: [],
     externalSchemes: [],
   }],
+  filesystemAllow: readonly string[] = [],
 ): string {
   const development = frontendOrigin.startsWith("http://")
     || frontendOrigin.startsWith("https://");
@@ -762,6 +777,15 @@ export function renderZConfiguredWebView(
       source += `    return Option.some(${JSON.stringify(scheme)});\n`;
       source += `  }\n`;
     });
+  });
+  source += `  return Option.none;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredFilesystemAllowAtIndex(\n`;
+  source += `  index: usize\n`;
+  source += `): Option<String> {\n`;
+  filesystemAllow.forEach((entry, index) => {
+    const root = entry.endsWith("/**") ? entry.slice(0, -3) : entry;
+    source += `  if (index == ${index}) return Option.some(${JSON.stringify(root)});\n`;
   });
   source += `  return Option.none;\n`;
   source += `}\n`;
@@ -1490,6 +1514,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
         resolveZFrontendOrigin(options.devUrl),
         injectionEntries,
         navigationProfiles,
+        options.config.fs?.allow ?? [],
       ),
       "utf8",
     );

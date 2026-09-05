@@ -163,7 +163,7 @@ export readonly class Application {
     this.dialogs = createDialogManager();
     this.clipboard = createClipboardManager();
     this.notifications = createNotificationManager();
-    this.shell = createShellManager();
+    this.shell = createShellManager(in this.context.paths);
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();

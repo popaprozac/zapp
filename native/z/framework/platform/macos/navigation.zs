@@ -99,6 +99,7 @@ internal function navigationProfileAllowsExternalURL(
     }
     index = index + 1;
   }
+  return false;
 }
 
 function profileAllowsURL(
@@ -122,6 +123,7 @@ function profileAllowsURL(
     }
     index = index + 1;
   }
+  return false;
 }
 
 internal class DesktopNavigationDelegate on thread.main

@@ -323,13 +323,13 @@ test("validateCapabilityProfiles requires explicit default and bounded grants", 
   }, ["clipboard:read"]))
     .not.toThrow();
   expect(() => validateCapabilityProfiles({
-    default: { permissions: ["shell:open"] },
-  }, ["shell:open"]))
+    default: { permissions: ["shell:open", "shell:reveal", "shell:trash"] },
+  }, ["shell:open", "shell:reveal", "shell:trash"]))
     .not.toThrow();
   expect(() => validateCapabilityProfiles({
     default: { permissions: ["fs:read"] },
   }, ["fs:read"]))
-    .toThrow(/currently supports "window:create", "menu", "notifications", "shell:open", clipboard access, and services/);
+    .toThrow(/currently supports "window:create", "menu", "notifications", shell access, clipboard access, and services/);
   expect(() => validateCapabilityProfiles({
     default: { permissions: ["menu"] },
   }, ["menu"])).not.toThrow();

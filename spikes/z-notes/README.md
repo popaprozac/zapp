@@ -195,6 +195,10 @@ rejected with a focused `ShellError`, then deliberately opens an allowed
 The route intersects the app-wide permission, the window capability profile,
 and its compiled navigation scheme list; navigation itself never performs an
 automatic shell handoff.
+**Reveal app resources** first proves `$home` is rejected, then reveals the
+allowlisted `$resources` directory. This second route intersects
+`shell:reveal` at application and window scope with the compiled filesystem
+path authority; it does not require a redundant filesystem read permission.
 The third navigation-policy button loads a same-origin subframe that attempts
 to send a raw WebKit close message without the Zapp bootstrap. Native routing
 rejects it because only the main frame at `"self"` owns bridge authority.

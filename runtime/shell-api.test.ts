@@ -14,7 +14,7 @@ test("Application shell routes explicit external URLs through the checked bridge
     permissions: {
       platform: "macos",
       active: true,
-      allow: ["shell:open"],
+      allow: ["shell:open", "shell:reveal", "shell:trash"],
     },
   };
   (globalThis as any)[BRIDGE_KEY] = {
@@ -30,10 +30,27 @@ test("Application shell routes explicit external URLs through the checked bridge
 
   try {
     await Application.current().shell.openExternal("https://z-language.com");
-    expect(invokes).toEqual([{
-      method: "__zapp:shell:open-external",
-      args: { url: "https://z-language.com" },
-    }]);
+    await Application.current().shell.openPath("$userData/report.txt");
+    await Application.current().shell.reveal("$userData/report.txt");
+    await Application.current().shell.trash("$userData/report.txt");
+    expect(invokes).toEqual([
+      {
+        method: "__zapp:shell:open-external",
+        args: { url: "https://z-language.com" },
+      },
+      {
+        method: "__zapp:shell:open-path",
+        args: { path: "$userData/report.txt" },
+      },
+      {
+        method: "__zapp:shell:reveal",
+        args: { path: "$userData/report.txt" },
+      },
+      {
+        method: "__zapp:shell:trash",
+        args: { path: "$userData/report.txt" },
+      },
+    ]);
   } finally {
     (globalThis as any)[BRIDGE_KEY] = previousBridge;
     (globalThis as any)[CONFIG_KEY] = previousConfig;
@@ -57,17 +74,17 @@ test("shell access is denied before an undeclared request reaches native Z", asy
   }
 });
 
-test("native shell failures restore the focused URL and operation", () => {
+test("native shell failures restore the focused target and operation", () => {
   const error = errorFromBridgePayload(JSON.stringify({
     code: "SHELL_ERROR",
     message: "window profile denied the URL",
     operation: "openExternal",
-    url: "file:///tmp/denied",
+    target: "file:///tmp/denied",
   }));
   expect(error).toBeInstanceOf(ShellError);
   expect(error).toMatchObject({
     code: "SHELL_ERROR",
     operation: "openExternal",
-    url: "file:///tmp/denied",
+    target: "file:///tmp/denied",
   });
 });

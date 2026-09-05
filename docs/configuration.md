@@ -470,7 +470,7 @@ That frontend call requires app-wide `shell:open`, `shell:open` in the
 originating window's selected capability profiles, and a matching scheme in
 its navigation profile. Zapp derives the profile from the native window; the
 request cannot substitute another profile. Policy denial and operating-system
-failure reject with a focused `ShellError` carrying `operation` and `url`.
+failure reject with a focused `ShellError` carrying `operation` and `target`.
 
 Trusted native Z is already inside the application boundary and uses the same
 manager without a bridge or JSON hop:
@@ -481,6 +481,31 @@ import { Application } from "zapp";
 const app = Application.current();
 try app.shell.openExternal("https://docs.z-language.com");
 ```
+
+Filesystem handoff uses explicit operations and the same compiled authority:
+
+```ts
+security: {
+  permissions: ["shell:open", "shell:reveal", "shell:trash"],
+  filesystem: { allow: ["$userData/**", "$resources"] },
+  capabilities: {
+    default: {
+      permissions: ["shell:open", "shell:reveal", "shell:trash"],
+    },
+  },
+}
+```
+
+```ts
+const shell = Application.current().shell;
+await shell.openPath("$userData/report.pdf");
+await shell.reveal("$userData/report.pdf");
+await shell.trash("$userData/old-report.pdf");
+```
+
+Path-based manager calls require a configured filesystem root. A bare
+`shell:*` permission never grants authority over every path, and `trash` moves
+an item to the operating system Trash rather than permanently deleting it.
 
 ## Frontend origin and window URLs
 

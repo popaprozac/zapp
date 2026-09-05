@@ -20,11 +20,15 @@ readonly struct FrontendOpenExternal {
   url: String;
 }
 
+readonly struct FrontendShellPath {
+  path: String;
+}
+
 readonly struct ShellBridgeError {
   code: String;
   message: String;
   operation: String;
-  url: String;
+  target: String;
 }
 
 internal type ShellExternalURLPolicy = (
@@ -40,6 +44,30 @@ export enum ShellBridgeRoute {
 function shellOperationName(operation: ShellOperation): String {
   return match (operation) {
     openExternal => "openExternal";
+    openPath => "openPath";
+    reveal => "reveal";
+    trash => "trash";
+  };
+}
+
+function shellPermissionName(operation: ShellOperation): String {
+  return match (operation) {
+    openExternal => "shell:open";
+    openPath => "shell:open";
+    reveal => "shell:reveal";
+    trash => "shell:trash";
+  };
+}
+
+function applicationAllowsShellOperation(
+  operation: ShellOperation,
+  in permissions: ApplicationPermissions
+): boolean {
+  return match (operation) {
+    openExternal => permissions.shellOpen;
+    openPath => permissions.shellOpen;
+    reveal => permissions.shellReveal;
+    trash => permissions.shellTrash;
   };
 }
 
@@ -51,7 +79,7 @@ function shellFailure(
     code: "SHELL_ERROR",
     message: copy error.message,
     operation: shellOperationName(error.operation),
-    url: copy error.url,
+    target: copy error.target,
   });
   return BridgeResponse({
     id,
@@ -67,10 +95,58 @@ function shellPolicyFailure(
 ): BridgeResponse {
   const error = ShellError({
     operation: ShellOperation.openExternal,
-    url: copy url,
+    target: copy url,
     message: `window navigation profile "${profile}" does not allow opening "${url}" externally`,
   });
   return shellFailure(id, in error);
+}
+
+function performShellPathOperation(
+  operation: ShellOperation,
+  in path: String,
+  shell: ShellManager
+): void throws ShellError on thread.main {
+  match (operation) {
+    openPath => try shell.openPath(in path);
+    reveal => try shell.reveal(in path);
+    trash => try shell.trash(in path);
+    openExternal => throw ShellError({
+      operation,
+      target: copy path,
+      message: "an external URL cannot be handled as a filesystem path",
+    });
+  }
+}
+
+function routeShellPathMessage(
+  in message: BridgeMessage,
+  operation: ShellOperation,
+  shell: ShellManager
+): ShellBridgeRoute on thread.main {
+  const decoded = attempt json.decode<FrontendShellPath>(in message.arguments);
+  const input = match (decoded) {
+    success(value) => value;
+    failure(error) => {
+      const invalid = ShellError({
+        operation,
+        target: "",
+        message: `invalid shell path request: ${error.message}`,
+      });
+      return ShellBridgeRoute.response(shellFailure(message.id, in invalid));
+    }
+  };
+  const operated = attempt performShellPathOperation(
+    operation,
+    in input.path,
+    shell
+  );
+  return match (operated) {
+    success => ShellBridgeRoute.response(bridgeSuccess(message.id, "null"));
+    failure(error) => ShellBridgeRoute.response(shellFailure(
+      message.id,
+      in error
+    ));
+  };
 }
 
 export function routeShellBridgeMessage(
@@ -81,35 +157,50 @@ export function routeShellBridgeMessage(
   policy: ShellExternalURLPolicy,
   shell: ShellManager
 ): ShellBridgeRoute on thread.main {
-  if (
-    message.kind != BridgeMessageKind.invoke
-    || message.method != "__zapp:shell:open-external"
-  ) return ShellBridgeRoute.unhandled;
-  if (!permissions.shellOpen) {
+  if (message.kind != BridgeMessageKind.invoke) {
+    return ShellBridgeRoute.unhandled;
+  }
+  let operation = ShellOperation.openExternal;
+  if (message.method == "__zapp:shell:open-external") {
+    operation = ShellOperation.openExternal;
+  } else if (message.method == "__zapp:shell:open-path") {
+    operation = ShellOperation.openPath;
+  } else if (message.method == "__zapp:shell:reveal") {
+    operation = ShellOperation.reveal;
+  } else if (message.method == "__zapp:shell:trash") {
+    operation = ShellOperation.trash;
+  } else {
+    return ShellBridgeRoute.unhandled;
+  }
+  const permission = shellPermissionName(operation);
+  if (!applicationAllowsShellOperation(operation, in permissions)) {
     return ShellBridgeRoute.response(bridgePermissionFailure(
       message.id,
-      "shell:open"
+      move permission
     ));
   }
-  if (!capabilities.allowsPermission("shell:open")) {
+  if (!capabilities.allowsPermission(in permission)) {
     return ShellBridgeRoute.response(bridgeCapabilityFailure(
       message.id,
-      "shell:open"
+      move permission
     ));
+  }
+  if (operation != ShellOperation.openExternal) {
+    return routeShellPathMessage(in message, operation, shell);
   }
   const decoded = attempt json.decode<FrontendOpenExternal>(
     in message.arguments
   );
   const input = match (decoded) {
     success(value) => value;
-    failure(error) => return ShellBridgeRoute.response(shellFailure(
-      message.id,
-      in ShellError({
+    failure(error) => {
+      const invalid = ShellError({
         operation: ShellOperation.openExternal,
-        url: "",
+        target: "",
         message: `invalid external URL request: ${error.message}`,
-      })
-    ));
+      });
+      return ShellBridgeRoute.response(shellFailure(message.id, in invalid));
+    }
   };
   if (!policy(in navigationProfile, in input.url)) {
     return ShellBridgeRoute.response(shellPolicyFailure(

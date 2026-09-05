@@ -54,3 +54,9 @@ internal function configuredNavigationExternalSchemeAtIndex(
 ): Option<String> {
   return Option.none;
 }
+
+internal function configuredFilesystemAllowAtIndex(
+  index: usize
+): Option<String> {
+  return Option.none;
+}
