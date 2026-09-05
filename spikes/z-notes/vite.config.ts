@@ -18,6 +18,9 @@ export default {
       "@zappdev/runtime/notifications": fileURLToPath(
         new URL("../../runtime/notifications-public.ts", import.meta.url),
       ),
+      "@zappdev/runtime/shell": fileURLToPath(
+        new URL("../../runtime/shell-public.ts", import.meta.url),
+      ),
       "@zappdev/runtime/menu": fileURLToPath(
         new URL("../../runtime/menu-public.ts", import.meta.url),
       ),

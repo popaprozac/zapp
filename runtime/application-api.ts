@@ -12,16 +12,22 @@ import {
   applicationNotifications,
   type NotificationManager,
 } from "./notifications-api";
+import {
+  applicationShell,
+  type ShellManager,
+} from "./shell-api";
 
 export interface ApplicationHandle {
   readonly clipboard: ClipboardManager;
   readonly notifications: NotificationManager;
+  readonly shell: ShellManager;
   readonly menu: ApplicationMenu;
 }
 
 const current: ApplicationHandle = Object.freeze({
   clipboard: applicationClipboard,
   notifications: applicationNotifications,
+  shell: applicationShell,
   menu: applicationMenu,
 });
 

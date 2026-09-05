@@ -24,6 +24,7 @@ import { bridgeFailure } from "../bridge.zs";
 import { unsupportedDialogBackend } from "../dialog.zs";
 import { unsupportedClipboardBackend } from "../clipboard.zs";
 import { unsupportedNotificationBackend } from "../notifications.zs";
+import { unsupportedShellBackend } from "../shell.zs";
 
 class HeadlessApplicationRuntime {
   readonly updates: TaskScope;
@@ -124,10 +125,13 @@ export async function runApplicationPlatform(
   clipboard.start(unsupportedClipboardBackend());
   let notifications = config.notifications;
   notifications.start(unsupportedNotificationBackend());
+  let shell = config.shell;
+  shell.start(unsupportedShellBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
     failure(startError) => {
+      shell.stop();
       notifications.stop();
       clipboard.stop();
       dialogs.stop();
@@ -169,6 +173,7 @@ export async function runApplicationPlatform(
   workers.requestCancellation();
   workers.join();
   workerManager.finish();
+  shell.stop();
   notifications.stop();
   clipboard.stop();
   dialogs.stop();

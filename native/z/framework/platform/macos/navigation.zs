@@ -6,6 +6,7 @@ import { thread } from "std/thread";
 import {
   configuredFrontendOrigin,
   configuredNavigationAllowsSelf,
+  configuredNavigationExternalSchemeAtIndex,
   configuredNavigationOriginAtIndex,
 } from "./configured-webview.zs";
 import { WindowManager } from "../../window.zs";
@@ -72,6 +73,32 @@ internal function hasConfiguredFrontendOrigin(
 ): boolean on thread.main {
   const origin = frontendOrigin();
   return origin != null && hasSameOrigin(in url, in origin);
+}
+
+internal function navigationProfileAllowsExternalURL(
+  in profile: String,
+  in address: String
+): boolean on thread.main {
+  const url = Foundation.NSURL.URLWithString(copy address);
+  if (url == null) return false;
+  const scheme = url.scheme;
+  if (scheme == null) return false;
+  const normalizedScheme: String = scheme.lowercaseString;
+  let index: usize = 0;
+  while (true) {
+    const configured = configuredNavigationExternalSchemeAtIndex(
+      in profile,
+      index
+    );
+    match (configured) {
+      some(value) => {
+        const expected = value.copyBytes(0, value.byteLength - 1);
+        if (normalizedScheme == expected) return true;
+      }
+      none => return false;
+    }
+    index = index + 1;
+  }
 }
 
 function profileAllowsURL(

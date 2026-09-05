@@ -26,10 +26,16 @@ import {
 import { ApplicationWorkers } from "../../worker/application-workers.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
 import { ClipboardManager } from "../../clipboard.zs";
+import { ShellManager } from "../../shell.zs";
 import {
   ClipboardBridgeRoute,
   routeClipboardBridgeMessage,
 } from "../../clipboard-bridge.zs";
+import {
+  ShellBridgeRoute,
+  ShellExternalURLPolicy,
+  routeShellBridgeMessage,
+} from "../../shell-bridge.zs";
 import {
   NotificationBridgeRoute,
   routeNotificationBridgeMessage,
@@ -40,6 +46,7 @@ import {
   routeMenuBridgeMessage,
 } from "../../menu-bridge.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
+import { navigationProfileAllowsExternalURL } from "./navigation.zs";
 
 enum WindowMessageRoute {
   framework BridgeResponse,
@@ -249,6 +256,7 @@ function selectWindowMessageRoute(
   const workers = current.applicationWorkers;
   const menu = current.menu;
   const clipboard = current.clipboard;
+  const shell = current.shell;
   const logicalId = current.logicalWindowId(windowId);
   match (selected) {
     some(capabilities) => match (logicalId) {
@@ -260,6 +268,7 @@ function selectWindowMessageRoute(
         windowId,
         in windowName,
         clipboard,
+        shell,
         menu,
         inout windows
       );
@@ -285,6 +294,7 @@ function selectWindowMessageRouteWithCapabilities(
   nativeWindowId: i32,
   in logicalWindowId: String,
   clipboard: ClipboardManager,
+  shell: ShellManager,
   menu: ApplicationMenu,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
@@ -295,6 +305,29 @@ function selectWindowMessageRouteWithCapabilities(
     clipboard
   );
   match (clipboardRoute) {
+    response(value) => return WindowMessageRoute.framework(value);
+    unhandled => {}
+  }
+  const ownerOptions = windows.options(in logicalWindowId);
+  const navigationProfile = match (ownerOptions) {
+    some(options) => copy options.navigation;
+    none => return WindowMessageRoute.framework(bridgeFailure(
+      message.id,
+      "INVALID_WINDOW",
+      "unknown originating window"
+    ));
+  };
+  const externalURLPolicy: ShellExternalURLPolicy =
+    navigationProfileAllowsExternalURL;
+  const shellRoute = routeShellBridgeMessage(
+    in message,
+    in permissions,
+    selectedCapabilities,
+    in navigationProfile,
+    externalURLPolicy,
+    shell
+  );
+  match (shellRoute) {
     response(value) => return WindowMessageRoute.framework(value);
     unhandled => {}
   }

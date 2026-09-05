@@ -7,4 +7,5 @@ export readonly struct ApplicationPermissions {
   clipboardRead: boolean = false;
   clipboardWrite: boolean = false;
   notifications: boolean = false;
+  shellOpen: boolean = false;
 }

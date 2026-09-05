@@ -74,8 +74,10 @@ import {
 ```
 
 `@zappdev/runtime/window` and `@zappdev/runtime/worker` provide the equivalent
-focused window and application-worker surfaces. The root entrypoint remains a
-convenient broad import for WebView application code.
+focused window and application-worker surfaces. `@zappdev/runtime/shell`
+exports the focused `ShellError` contract used by
+`Application.current().shell`. The root entrypoint remains a convenient broad
+import for WebView application code.
 
 ## Context story
 
@@ -103,6 +105,9 @@ through a service call if you need to act on a specific existing window.
 App.quit();
 App.openExternal("https://...");
 App.on(AppEvent.OPEN_URL, (data) => { ... });
+
+// Focused replacement application surface
+await Application.current().shell.openExternal("https://docs.z-language.com");
 
 // Windows
 const w = Window.current();                          // webview only

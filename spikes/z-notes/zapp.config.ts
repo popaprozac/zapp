@@ -16,6 +16,7 @@ export default defineConfig({
       "clipboard:read",
       "clipboard:write",
       "notifications",
+      "shell:open",
     ],
     capabilities: {
       default: {
@@ -25,6 +26,7 @@ export default defineConfig({
           "clipboard:read",
           "clipboard:write",
           "notifications",
+          "shell:open",
         ],
         services: ["notes", "health"],
         workers: ["noteIndexer"],

@@ -9,6 +9,7 @@ export interface ZappErrorPayload {
 /** @internal Parsed transport metadata before a feature claims the error. */
 export interface BridgeErrorPayload extends ZappErrorPayload {
   operation?: string;
+  url?: string;
   windowId?: string;
   workerId?: string;
   service?: string;
@@ -106,6 +107,9 @@ export function errorFromBridgePayload(payload: string): Error {
           : {}),
         ...(typeof parsed.operation === "string" && parsed.operation.length > 0
           ? { operation: parsed.operation }
+          : {}),
+        ...(typeof parsed.url === "string" && parsed.url.length > 0
+          ? { url: parsed.url }
           : {}),
         ...(typeof parsed.windowId === "string" && parsed.windowId.length > 0
           ? { windowId: parsed.windowId }

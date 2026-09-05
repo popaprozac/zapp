@@ -63,6 +63,10 @@ import {
   createNotificationManager,
 } from "../framework/notifications.zs";
 import {
+  ShellManager,
+  createShellManager,
+} from "../framework/shell.zs";
+import {
   ApplicationMenu,
   createApplicationMenu,
 } from "../framework/application-menu.zs";
@@ -141,6 +145,7 @@ export readonly class Application {
   readonly dialogs: DialogManager;
   readonly clipboard: ClipboardManager;
   readonly notifications: NotificationManager;
+  readonly shell: ShellManager;
   readonly menu: ApplicationMenu;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
@@ -158,6 +163,7 @@ export readonly class Application {
     this.dialogs = createDialogManager();
     this.clipboard = createClipboardManager();
     this.notifications = createNotificationManager();
+    this.shell = createShellManager();
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
@@ -243,6 +249,7 @@ function prepareApplication(
   const dialogs = app.dialogs;
   const clipboard = app.clipboard;
   const notifications = app.notifications;
+  const shell = app.shell;
   const menu = app.menu;
   const workers = app.workers;
   const services = app.services;
@@ -257,6 +264,7 @@ function prepareApplication(
     dialogs,
     clipboard,
     notifications,
+    shell,
     menu,
     services: new AsyncServices({
       synchronous: routes,

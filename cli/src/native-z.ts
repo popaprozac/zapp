@@ -258,6 +258,13 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
         resolvePermissions(config.permissions),
       )
     },
+    shellOpen: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "shell:open",
+        resolvePermissions(config.permissions),
+      )
+    },
   });
 }
 

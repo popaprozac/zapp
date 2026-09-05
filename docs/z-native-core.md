@@ -291,6 +291,46 @@ there is no blocking semaphore, global response buffer, JSON hop, or handwritten
 Objective-C adapter between the manager and the framework call. Scheduling,
 actions, categories, and delivery events remain later typed tiers.
 
+External URL handoff is a separate focused manager. It is intentionally not a
+navigation side effect: application code names the operation, while Zapp keeps
+the URL scheme and originating-window authority explicit.
+
+```zs
+import { Application } from "zapp";
+import console from "std/console";
+
+const opened = attempt Application.current().shell.openExternal(
+  "https://docs.z-language.com"
+);
+match (opened) {
+  success => {}
+  failure(error) => console.error(error.message);
+}
+```
+
+The WebView facade preserves the manager shape:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+import { ShellError } from "@zappdev/runtime/shell";
+
+try {
+  await Application.current().shell.openExternal(
+    "https://docs.z-language.com",
+  );
+} catch (error) {
+  if (error instanceof ShellError) {
+    console.error(error.operation, error.url, error.message);
+  }
+}
+```
+
+Frontend calls require app-wide `shell:open`, the same grant in the
+originating window's capability profile, and a matching scheme in its compiled
+navigation profile. Native Z calls are direct `NSWorkspace` calls on macOS and
+do not serialize through the WebView bridge. Smoke mode exercises the complete
+policy route without launching the user's browser.
+
 The same application identity owns one logical application menu. Applications
 define commands independently from native menu-item allocations, so the same
 command identity can later power menus, shortcuts, and toolbars:

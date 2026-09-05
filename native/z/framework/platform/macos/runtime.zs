@@ -8,6 +8,7 @@ import { WindowManager } from "../../window.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
 import { ClipboardManager } from "../../clipboard.zs";
 import { NotificationManager } from "../../notifications.zs";
+import { ShellManager } from "../../shell.zs";
 import {
   MacOSApplicationRuntime,
   initializeMacOSApplicationRuntimeState,
@@ -30,6 +31,7 @@ internal function initializeMacOSApplicationRuntime(
   windowManager: WindowManager,
   clipboard: ClipboardManager,
   notifications: NotificationManager,
+  shell: ShellManager,
   menu: ApplicationMenu
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const route: DesktopRouteMessageOperation = routeMessageOnMain;
@@ -43,6 +45,7 @@ internal function initializeMacOSApplicationRuntime(
     windowManager,
     clipboard,
     notifications,
+    shell,
     menu,
     route,
     deliver

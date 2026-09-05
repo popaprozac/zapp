@@ -10,6 +10,7 @@
     "./application": "./application-api.ts",
     "./clipboard": "./clipboard-public.ts",
     "./notifications": "./notifications-public.ts",
+    "./shell": "./shell-public.ts",
     "./menu": "./menu-public.ts",
     "./window": "./window-api.ts",
     "./worker": "./application-worker-api.ts",

@@ -35,7 +35,8 @@ void zapp_desktop_smoke_start_window(
       @"setTimeout(()=>document.querySelector('#navigation-profile')?.click(),650);"
       @"setTimeout(()=>document.querySelector('#navigation-native')?.click(),800);"
       @"setTimeout(()=>document.querySelector('#bridge-subframe')?.click(),900);"
-      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1300);"
+      @"setTimeout(()=>document.querySelector('#open-external')?.click(),1050);"
+      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1450);"
     injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
     forMainFrameOnly:YES];
   [content_controller addUserScript:smoke];
@@ -113,6 +114,7 @@ void zapp_desktop_smoke_observe_response(
           @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
           @"notificationStatus:document.body?.dataset?.notificationStatus??null,"
           @"navigationPolicy:document.body?.dataset?.navigationPolicy??null,"
+          @"shellOpen:document.body?.dataset?.shellOpen??null,"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
@@ -129,6 +131,7 @@ void zapp_desktop_smoke_observe_response(
             && [(NSString *)state containsString:@"\"dynamicWindow\":\"ready\""]
             && [(NSString *)state containsString:@"\"notificationStatus\":\"ok\""]
             && [(NSString *)state containsString:@"\"navigationPolicy\":\"ok\""]
+            && [(NSString *)state containsString:@"\"shellOpen\":\"ok\""]
             && [(NSString *)state containsString:expected_hmr];
           BOOL terminal_failure = [state isKindOfClass:[NSString class]]
             && (
@@ -139,6 +142,7 @@ void zapp_desktop_smoke_observe_response(
               || [(NSString *)state containsString:@"\"dynamicWindow\":\"error\""]
               || [(NSString *)state containsString:@"\"notificationStatus\":\"error\""]
               || [(NSString *)state containsString:@"\"navigationPolicy\":\"error\""]
+              || [(NSString *)state containsString:@"\"shellOpen\":\"error\""]
             );
           // Several legitimate requests may complete while the scripted
           // scenario is still in flight (notably frontend window creation).

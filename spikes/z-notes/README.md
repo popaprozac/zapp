@@ -189,8 +189,12 @@ profile, while a profile-approved documentation URL is cancelled by a trusted
 Z `window.events.navigationRequested` subscriber. The TypeScript
 `WindowEvent.NAVIGATION_REQUESTED` subscription observes both final decisions
 but cannot change either one. The frontend-created diagnostics window inherits
-the same profile. Declared `openExternal` schemes are reserved for an explicit
-future shell operation and are never an automatic navigation side effect.
+the same profile. **Open Z documentation** first proves a `file:` URL is
+rejected with a focused `ShellError`, then deliberately opens an allowed
+`https:` URL through `Application.current().shell.openExternal(...)`.
+The route intersects the app-wide permission, the window capability profile,
+and its compiled navigation scheme list; navigation itself never performs an
+automatic shell handoff.
 The third navigation-policy button loads a same-origin subframe that attempts
 to send a raw WebKit close message without the Zapp bootstrap. Native routing
 rejects it because only the main frame at `"self"` owns bridge authority.

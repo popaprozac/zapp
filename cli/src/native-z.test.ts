@@ -189,6 +189,7 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("clipboardRead: false");
     expect(output).toContain("clipboardWrite: false");
     expect(output).toContain("notifications: false");
+    expect(output).toContain("shellOpen: false");
   });
 
   it("compiles an explicit window-create denial into native Z policy", () => {
@@ -223,6 +224,17 @@ describe("renderZApplicationMetadata", () => {
       permissions: ["notifications"],
     });
     expect(output).toContain("notifications: true");
+  });
+
+  it("requires an explicit shell-open grant in generated native Z policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "External Links",
+      identifier: "com.example.external-links",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: ["shell:open"],
+    });
+    expect(output).toContain("shellOpen: true");
   });
 
   it("emits exact immutable capability grants into native Z", () => {
@@ -336,6 +348,7 @@ describe("renderZConfiguredWebView", () => {
     expect(output).toContain('profile == "default"');
     expect(output).toContain('Option.some("https://docs.example.com")');
     expect(output).toContain('Option.some("mailto:")');
+    expect(output).toContain("configuredNavigationExternalSchemeAtIndex");
   });
 });
 
@@ -474,6 +487,7 @@ describe("Z native host inputs", () => {
       "response-delivery.zs",
       "runtime.zs",
       "scheme-handler.zs",
+      "shell-backend.zs",
       "webview-injections.zs",
       "window-backend.zs",
       "window-construction.zs",
@@ -512,7 +526,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(17);
+    expect(macOSModules).toHaveLength(18);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
     expect(messageHandler).toContain("if (!frame.mainFrame)");
@@ -565,6 +579,8 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("function resolveLogicalURL(");
     expect(macOSPlatform).toContain("function profileAllowsURL(");
     expect(macOSPlatform).toContain("configuredNavigationOriginAtIndex(");
+    expect(macOSPlatform).toContain("navigationProfileAllowsExternalURL(");
+    expect(macOSPlatform).toContain("AppKit.NSWorkspace.sharedWorkspace.openURL(url)");
     expect(macOSPlatform).toContain("unknown window navigation profile");
     expect(macOSPlatform).toContain("windows.navigationRequestedNative(");
     expect(macOSPlatform).toContain("deliverWebViewWindowNavigationRequested(");
@@ -701,6 +717,14 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/dialog.zs", import.meta.url),
       "utf8",
     );
+    const shell = readFileSync(
+      new URL("../../native/z/framework/shell.zs", import.meta.url),
+      "utf8",
+    );
+    const shellBridge = readFileSync(
+      new URL("../../native/z/framework/shell-bridge.zs", import.meta.url),
+      "utf8",
+    );
     const macOSDialogs = readFileSync(
       new URL(
         "../../native/z/framework/platform/macos/dialog-backend.zs",
@@ -816,6 +840,7 @@ describe("Z native host inputs", () => {
       "this.windows = createWindowManager();",
     );
     expect(application).toContain("this.dialogs = createDialogManager();");
+    expect(application).toContain("this.shell = createShellManager();");
     expect(application).toContain(
       "this.workers = createWorkerManager(configuredApplicationWorkers());",
     );
@@ -837,6 +862,13 @@ describe("Z native host inputs", () => {
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(contract).toContain("readonly events: ApplicationEvents");
     expect(contract).toContain("readonly dialogs: DialogManager");
+    expect(contract).toContain("readonly shell: ShellManager");
+    expect(shell).toContain("export readonly class ShellManager on thread.main");
+    expect(shell).toContain("function openExternal(");
+    expect(shellBridge).toContain('message.method != "__zapp:shell:open-external"');
+    expect(shellBridge).toContain("if (!permissions.shellOpen)");
+    expect(shellBridge).toContain('allowsPermission("shell:open")');
+    expect(shellBridge).toContain("if (!policy(in navigationProfile, in input.url))");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");

@@ -10,6 +10,7 @@ import {
   NotificationPermission,
 } from "@zappdev/runtime/notifications";
 import { Command, CommandState, MenuRole } from "@zappdev/runtime/menu";
+import { ShellError } from "@zappdev/runtime/shell";
 import {
   health,
   NoteCreationError,
@@ -37,6 +38,7 @@ const closeWindowButton = document.querySelector("#close-window");
 const navigationProfileButton = document.querySelector("#navigation-profile");
 const navigationNativeButton = document.querySelector("#navigation-native");
 const bridgeSubframeButton = document.querySelector("#bridge-subframe");
+const openExternalButton = document.querySelector("#open-external");
 const noteTitle = document.querySelector("#note-title");
 const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
@@ -45,6 +47,7 @@ const workerIndex = document.querySelector("#worker-index");
 const clipboardStatus = document.querySelector("#clipboard-status");
 const notificationResult = document.querySelector("#notification-result");
 const navigationPolicy = document.querySelector("#navigation-policy");
+const shellResult = document.querySelector("#shell-result");
 
 const application = Application.current();
 
@@ -401,6 +404,36 @@ bridgeSubframeButton.addEventListener("click", () => {
     }, 250);
   };
   window.addEventListener("message", observeProbe);
+});
+
+openExternalButton.addEventListener("click", async () => {
+  openExternalButton.disabled = true;
+  shellResult.textContent = "Checking the compiled external URL policy…";
+  try {
+    try {
+      await application.shell.openExternal("file:///tmp/zapp-denied");
+      throw new Error("Expected the window profile to deny file URLs");
+    } catch (error) {
+      if (
+        !(error instanceof ShellError)
+        || error.operation !== "openExternal"
+        || error.url !== "file:///tmp/zapp-denied"
+      ) throw error;
+    }
+    await application.shell.openExternal("https://docs.z-language.com");
+    shellResult.textContent = [
+      "Denied file: through compiled policy.",
+      "Opened https: through the operating system.",
+    ].join("\n");
+    document.body.dataset.shellOpen = "ok";
+  } catch (error) {
+    shellResult.textContent = error instanceof ShellError
+      ? `Shell ${error.operation ?? "operation"} failed\n${error.message}`
+      : `Shell operation failed\n${String(error)}`;
+    document.body.dataset.shellOpen = "error";
+  } finally {
+    openExternalButton.disabled = false;
+  }
 });
 
 if (currentWindowId !== "win-1") {

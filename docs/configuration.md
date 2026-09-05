@@ -400,7 +400,7 @@ window before entering a service and reports a structured
 ## Window navigation profiles
 
 `security.navigation` is an immutable catalog of origins a trusted WebView may
-navigate to and URL schemes the future explicit shell manager may open:
+navigate to and URL schemes the explicit shell manager may open:
 
 ```ts
 security: {
@@ -455,8 +455,32 @@ const subscription = try window.events.navigationRequested.subscribe(
 The TypeScript `WindowHandle` exposes the same request as a read-only
 `WindowEvent.NAVIGATION_REQUESTED` payload containing `url`, `mainFrame`,
 `allowedByProfile`, and `cancelled`. JavaScript cannot authorize or cancel it.
-Navigation never interprets `openExternal` as an automatic handoff; that list
-is reserved for a deliberate future `app.shell.openExternal(...)` call.
+Navigation never interprets `openExternal` as an automatic handoff. A trusted
+WebView must make a deliberate manager call:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+
+await Application.current().shell.openExternal(
+  "https://docs.z-language.com",
+);
+```
+
+That frontend call requires app-wide `shell:open`, `shell:open` in the
+originating window's selected capability profiles, and a matching scheme in
+its navigation profile. Zapp derives the profile from the native window; the
+request cannot substitute another profile. Policy denial and operating-system
+failure reject with a focused `ShellError` carrying `operation` and `url`.
+
+Trusted native Z is already inside the application boundary and uses the same
+manager without a bridge or JSON hop:
+
+```zs
+import { Application } from "zapp";
+
+const app = Application.current();
+try app.shell.openExternal("https://docs.z-language.com");
+```
 
 ## Frontend origin and window URLs
 

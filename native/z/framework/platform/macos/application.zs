@@ -28,6 +28,7 @@ import { macOSWindowBackend } from "./window-backend.zs";
 import { macOSDialogBackend } from "./dialog-backend.zs";
 import { macOSClipboardBackend } from "./clipboard-backend.zs";
 import { macOSNotificationBackend } from "./notifications-backend.zs";
+import { macOSShellBackend } from "./shell-backend.zs";
 import { macOSApplicationMenuBackend } from "./menu-backend.zs";
 import {
   startConfiguredApplicationWorkers,
@@ -50,6 +51,7 @@ export async function runMacOSApplication(
   let dialogs = config.dialogs;
   let clipboard = config.clipboard;
   let notifications = config.notifications;
+  let shell = config.shell;
   let menu = config.menu;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
@@ -69,6 +71,7 @@ export async function runMacOSApplication(
     windows,
     clipboard,
     notifications,
+    shell,
     menu
   );
   const workerManagerLifetime = installApplicationWorkerManager(
@@ -95,10 +98,12 @@ export async function runMacOSApplication(
   dialogs.start(macOSDialogBackend());
   clipboard.start(macOSClipboardBackend());
   notifications.start(macOSNotificationBackend());
+  shell.start(macOSShellBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
     failure(startError) => {
+      shell.stop();
       notifications.stop();
       clipboard.stop();
       dialogs.stop();
@@ -146,6 +151,7 @@ export async function runMacOSApplication(
   cancelAllMacOSApplicationWorkerServices();
   workers.join();
   workerManager.finish();
+  shell.stop();
   notifications.stop();
   clipboard.stop();
   dialogs.stop();
