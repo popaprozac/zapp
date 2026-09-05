@@ -61,6 +61,22 @@ class WindowCloseDecision on thread.main {
   }
 }
 
+class WindowNavigationDecision on thread.main {
+  cancelled: boolean;
+
+  internal constructor() {
+    this.cancelled = false;
+  }
+
+  function cancel(inout this): void {
+    this.cancelled = true;
+  }
+
+  function wasCancelled(): boolean {
+    return this.cancelled;
+  }
+}
+
 export readonly struct WindowFocusedEvent {
   windowId: String;
 }
@@ -102,10 +118,43 @@ export readonly class WindowCloseRequestedEvent on thread.main {
   }
 }
 
+// A trusted native observer may narrow the configured navigation ceiling by
+// cancelling this request. It cannot grant a request denied by the profile.
+export readonly class WindowNavigationRequestedEvent on thread.main {
+  readonly windowId: String;
+  readonly url: String;
+  readonly mainFrame: boolean;
+  readonly allowedByProfile: boolean;
+  internal readonly decision: WindowNavigationDecision;
+
+  internal constructor(
+    windowId: String,
+    url: String,
+    mainFrame: boolean,
+    allowedByProfile: boolean
+  ) {
+    this.windowId = move windowId;
+    this.url = move url;
+    this.mainFrame = mainFrame;
+    this.allowedByProfile = allowedByProfile;
+    this.decision = new WindowNavigationDecision();
+  }
+
+  function cancel(): void {
+    let decision = this.decision;
+    decision.cancel();
+  }
+
+  internal function wasCancelled(): boolean {
+    return this.decision.wasCancelled();
+  }
+}
+
 export enum WindowEvent {
   focused WindowFocusedEvent,
   blurred WindowBlurredEvent,
   resized WindowResizedEvent,
+  navigationRequested WindowNavigationRequestedEvent,
   closeRequested WindowCloseRequestedEvent,
   closed WindowClosedEvent,
 }

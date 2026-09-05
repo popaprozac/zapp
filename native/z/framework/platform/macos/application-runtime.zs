@@ -31,6 +31,7 @@ import {
   deliverWebViewResponse,
 } from "./response-delivery.zs";
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
+import { configuredNavigationProfileExists } from "./configured-webview.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import {
   deliverApplicationWorkerLifecycle,
@@ -124,6 +125,12 @@ internal class MacOSApplicationRuntime {
     in options: WindowOptions,
     selectedCapabilities: CapabilitySelection
   ): void throws WindowError on thread.main {
+    if (!configuredNavigationProfileExists(options.navigation)) {
+      throw WindowError({
+        id: copy id,
+        message: `unknown window navigation profile "${options.navigation}"`,
+      });
+    }
     for (const profile of options.inject) {
       if (!webViewInjectionProfileExists(profile)) {
         throw WindowError({

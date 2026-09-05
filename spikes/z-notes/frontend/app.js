@@ -34,6 +34,8 @@ const notificationShowButton = document.querySelector("#notification-show");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
+const navigationProfileButton = document.querySelector("#navigation-profile");
+const navigationNativeButton = document.querySelector("#navigation-native");
 const noteTitle = document.querySelector("#note-title");
 const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
@@ -41,6 +43,7 @@ const windowEvents = document.querySelector("#window-events");
 const workerIndex = document.querySelector("#worker-index");
 const clipboardStatus = document.querySelector("#clipboard-status");
 const notificationResult = document.querySelector("#notification-result");
+const navigationPolicy = document.querySelector("#navigation-policy");
 
 const application = Application.current();
 
@@ -326,6 +329,57 @@ windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
   renderWindowEvents();
 });
 renderWindowEvents();
+
+let observedProfileDenial = false;
+let observedNativeVeto = false;
+
+function renderNavigationPolicy() {
+  navigationPolicy.textContent = [
+    `Profile denial: ${observedProfileDenial ? "observed" : "waiting"}`,
+    `Native veto: ${observedNativeVeto ? "observed" : "waiting"}`,
+  ].join("\n");
+  if (observedProfileDenial && observedNativeVeto) {
+    document.body.dataset.navigationPolicy = "ok";
+  }
+}
+
+windowHandle.subscribe(WindowEvent.NAVIGATION_REQUESTED, (event) => {
+  if (
+    event.url === "https://outside.invalid/zapp-profile-denial"
+    && !event.allowedByProfile
+    && event.cancelled
+  ) observedProfileDenial = true;
+  if (
+    event.url === "https://docs.z-language.com/zapp-native-veto"
+    && event.allowedByProfile
+    && event.cancelled
+  ) observedNativeVeto = true;
+  renderNavigationPolicy();
+});
+
+function probeNavigation(url) {
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.src = url;
+  document.body.append(frame);
+  setTimeout(() => frame.remove(), 1000);
+}
+
+navigationProfileButton.addEventListener("click", () => {
+  probeNavigation("https://outside.invalid/zapp-profile-denial");
+});
+
+navigationNativeButton.addEventListener("click", () => {
+  probeNavigation("https://docs.z-language.com/zapp-native-veto");
+});
+
+if (currentWindowId !== "win-1") {
+  observedProfileDenial = true;
+  observedNativeVeto = true;
+  navigationProfileButton.disabled = true;
+  navigationNativeButton.disabled = true;
+}
+renderNavigationPolicy();
 
 let nextIndexRequest = 1;
 

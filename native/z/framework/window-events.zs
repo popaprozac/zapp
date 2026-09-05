@@ -8,6 +8,7 @@ import {
   WindowClosedEvent,
   WindowEvent,
   WindowFocusedEvent,
+  WindowNavigationRequestedEvent,
   WindowResizedEvent,
   WindowSize,
 } from "./events.zs";
@@ -20,6 +21,7 @@ export readonly class WindowEvents on thread.main {
   readonly focused: Event<WindowFocusedEvent>;
   readonly blurred: Event<WindowBlurredEvent>;
   readonly resized: Event<WindowResizedEvent>;
+  readonly navigationRequested: Event<WindowNavigationRequestedEvent>;
   readonly closeRequested: Event<WindowCloseRequestedEvent>;
   readonly closed: Event<WindowClosedEvent>;
 
@@ -28,6 +30,7 @@ export readonly class WindowEvents on thread.main {
     this.focused = new Event<WindowFocusedEvent>();
     this.blurred = new Event<WindowBlurredEvent>();
     this.resized = new Event<WindowResizedEvent>();
+    this.navigationRequested = new Event<WindowNavigationRequestedEvent>();
     this.closeRequested = new Event<WindowCloseRequestedEvent>();
     this.closed = new Event<WindowClosedEvent>();
   }
@@ -78,6 +81,26 @@ export readonly class WindowEvents on thread.main {
     return !event.wasCancelled();
   }
 
+  internal function publishNavigationRequested(
+    in windowId: String,
+    in url: String,
+    mainFrame: boolean,
+    allowedByProfile: boolean
+  ): boolean {
+    const event = new WindowNavigationRequestedEvent(
+      copy windowId,
+      copy url,
+      mainFrame,
+      allowedByProfile
+    );
+    let navigationRequested = this.navigationRequested;
+    navigationRequested.publish(in event);
+    const aggregate = WindowEvent.navigationRequested(event);
+    let all = this.all;
+    all.publish(in aggregate);
+    return !event.wasCancelled();
+  }
+
   internal function publishClosed(in windowId: String): void {
     const event = WindowClosedEvent({ windowId: copy windowId });
     let closed = this.closed;
@@ -93,12 +116,14 @@ export readonly class WindowEvents on thread.main {
     let focused = this.focused;
     let blurred = this.blurred;
     let resized = this.resized;
+    let navigationRequested = this.navigationRequested;
     let closeRequested = this.closeRequested;
     let closed = this.closed;
     all.finish();
     focused.finish();
     blurred.finish();
     resized.finish();
+    navigationRequested.finish();
     closeRequested.finish();
     closed.finish();
   }

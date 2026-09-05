@@ -37,6 +37,13 @@ readonly struct WebViewWindowSizePayload {
   height: u32;
 }
 
+readonly struct WebViewWindowNavigationPayload {
+  url: String;
+  mainFrame: boolean;
+  allowedByProfile: boolean;
+  cancelled: boolean;
+}
+
 function javascriptJSON(in source: String): String {
   let output = TextBuffer();
   let segmentStart: usize = 0;
@@ -150,6 +157,32 @@ internal function deliverWebViewWindowResize(
   const payload = WebViewWindowSizePayload({ width, height });
   const dataJson = json.encode(in payload);
   const script = windowEventScript(in windowId, "resize", in dataJson);
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
+}
+
+internal function deliverWebViewWindowNavigationRequested(
+  in webView: WebKit.WKWebView,
+  in windowId: String,
+  in url: String,
+  mainFrame: boolean,
+  allowedByProfile: boolean,
+  cancelled: boolean
+): void on thread.main {
+  const payload = WebViewWindowNavigationPayload({
+    url: copy url,
+    mainFrame,
+    allowedByProfile,
+    cancelled,
+  });
+  const dataJson = json.encode(in payload);
+  const script = windowEventScript(
+    in windowId,
+    "navigation-requested",
+    in dataJson
+  );
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}

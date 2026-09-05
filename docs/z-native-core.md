@@ -503,10 +503,16 @@ registration happen through checked Objective-C interop. The generated
 `configured-webview.zs` module carries the origin, bundled bootstrap, and
 ordered injection sources as ordinary typed Z values; production native glue
 no longer exposes or reads a parallel C configuration table.
-Initial URL resolution and application-origin navigation policy live in
+Initial URL resolution and compiled navigation-profile enforcement live in
 `navigation.zs`. A retained Z-owned `WKNavigationDelegate` adapter handles
-native completion blocks directly, permits subframe and same-origin main-frame
-navigation, rejects external main-frame navigation, and reports load failures.
+native completion blocks directly and checks both main-frame and subframe
+requests. `"self"` resolves to the generated development or packaged origin;
+additional HTTP(S) origins come from the selected immutable profile. The
+window's typed Z `navigationRequested` event may only cancel a profile-approved
+request. The focused TypeScript event is a read-only observation delivered
+after the native decision. Frontend-created windows inherit their creator's
+profile, and neither a denied navigation nor `target="_blank"` implicitly opens
+an external application.
 Window request construction, loading, centering, and initial visibility are
 also ordinary checked Z/AppKit calls rather than host-side Objective-C policy.
 

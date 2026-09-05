@@ -181,6 +181,17 @@ exercise native profile enforcement and inheritance, while focused framework
 tests prove a narrow profile returns a structured `PermissionDeniedError`
 before service code runs.
 
+The config also compiles a `default` navigation profile. It permits the
+logical application origin and `https://docs.z-language.com`; the primary
+window uses that profile through `WindowOptions.navigation`'s default. The UI
+contains two visible subframe probes: one origin is rejected by the compiled
+profile, while a profile-approved documentation URL is cancelled by a trusted
+Z `window.events.navigationRequested` subscriber. The TypeScript
+`WindowEvent.NAVIGATION_REQUESTED` subscription observes both final decisions
+but cannot change either one. The frontend-created diagnostics window inherits
+the same profile. Declared `openExternal` schemes are reserved for an explicit
+future shell operation and are never an automatic navigation side effect.
+
 The primary WebView also exercises the application-owned clipboard from the
 focused TypeScript facade. **Copy note title** writes the current title,
 **Read text** distinguishes `null` from an empty string, and **Clear** replaces

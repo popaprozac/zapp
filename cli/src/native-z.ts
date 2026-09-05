@@ -6,6 +6,10 @@ import type { BuildTarget } from "./build-target";
 import type { ResolvedConfig } from "./config";
 import type { ResolvedCapabilityProfile } from "./capabilities";
 import {
+  resolveNavigationProfiles,
+  type ResolvedNavigationProfile,
+} from "./navigation-profiles";
+import {
   renderZApplicationWorkerCatalog,
   renderZApplicationWorkerStartup,
   zEmbeddedApplicationWorkerPath,
@@ -671,6 +675,12 @@ export function renderZConfiguredWebView(
   bootstrap: string,
   frontendOrigin: string,
   injections: BuiltWebviewInjection[],
+  navigationProfiles: ResolvedNavigationProfile[] = [{
+    name: "default",
+    allowsSelf: true,
+    origins: [],
+    externalSchemes: [],
+  }],
 ): string {
   const development = frontendOrigin.startsWith("http://")
     || frontendOrigin.startsWith("https://");
@@ -703,6 +713,48 @@ export function renderZConfiguredWebView(
     source += `      phase: ${entry.phase},\n`;
     source += `    }));\n`;
     source += `  }\n`;
+  });
+  source += `  return Option.none;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredNavigationProfileExists(\n`;
+  source += `  in profile: String\n`;
+  source += `): boolean {\n`;
+  navigationProfiles.forEach((profile) => {
+    source += `  if (profile == ${JSON.stringify(profile.name)}) return true;\n`;
+  });
+  source += `  return false;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredNavigationAllowsSelf(\n`;
+  source += `  in profile: String\n`;
+  source += `): boolean {\n`;
+  navigationProfiles.forEach((profile) => {
+    source += `  if (profile == ${JSON.stringify(profile.name)}) return ${profile.allowsSelf};\n`;
+  });
+  source += `  return false;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredNavigationOriginAtIndex(\n`;
+  source += `  in profile: String,\n`;
+  source += `  index: usize\n`;
+  source += `): Option<String> {\n`;
+  navigationProfiles.forEach((profile) => {
+    profile.origins.forEach((origin, index) => {
+      source += `  if (profile == ${JSON.stringify(profile.name)} && index == ${index}) {\n`;
+      source += `    return Option.some(${JSON.stringify(origin)});\n`;
+      source += `  }\n`;
+    });
+  });
+  source += `  return Option.none;\n`;
+  source += `}\n\n`;
+  source += `internal function configuredNavigationExternalSchemeAtIndex(\n`;
+  source += `  in profile: String,\n`;
+  source += `  index: usize\n`;
+  source += `): Option<String> {\n`;
+  navigationProfiles.forEach((profile) => {
+    profile.externalSchemes.forEach((scheme, index) => {
+      source += `  if (profile == ${JSON.stringify(profile.name)} && index == ${index}) {\n`;
+      source += `    return Option.some(${JSON.stringify(scheme)});\n`;
+      source += `  }\n`;
+    });
   });
   source += `  return Option.none;\n`;
   source += `}\n`;
@@ -1261,6 +1313,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     options.config,
     serviceManifest,
   );
+  const navigationProfiles = resolveNavigationProfiles(options.config);
   const applicationWorkers = resolveApplicationWorkers(
     options.config,
     capabilityProfiles,
@@ -1314,6 +1367,11 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
   await writeFile(
     path.join(stage, "capabilities.zmeta.json"),
     `${JSON.stringify({ schemaVersion: 1, profiles: capabilityProfiles }, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(stage, "navigation.zmeta.json"),
+    `${JSON.stringify({ schemaVersion: 1, profiles: navigationProfiles }, null, 2)}\n`,
     "utf8",
   );
   await writeFile(
@@ -1424,6 +1482,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
         bootstrapSource,
         resolveZFrontendOrigin(options.devUrl),
         injectionEntries,
+        navigationProfiles,
       ),
       "utf8",
     );

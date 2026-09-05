@@ -574,8 +574,17 @@ export interface SecurityConfig {
   permissions?: ZappPermission[];
   /** Named, trusted grants selected by native WindowOptions. */
   capabilities?: Record<string, CapabilityProfileConfig>;
+  /** Named, immutable navigation ceilings selected by trusted windows. */
+  navigation?: Record<string, NavigationProfileConfig>;
   /** Filesystem access and persisted dialog-grant policy. */
   filesystem?: FsConfig;
+}
+
+export interface NavigationProfileConfig {
+  /** Origins that may load inside the WebView. `self` is the logical app origin. */
+  navigate?: string[];
+  /** URL schemes that trusted native code may later open through the system. */
+  openExternal?: string[];
 }
 
 export interface CapabilityProfileConfig {
@@ -683,6 +692,7 @@ export interface ResolvedConfig {
   fs?: FsConfig;
   permissions?: ZappPermission[];
   capabilityProfiles?: Record<string, CapabilityProfileConfig>;
+  navigationProfiles?: Record<string, NavigationProfileConfig>;
   macos?: MacOSConfig;
   ios?: IOSConfig;
   webEngine?: PlatformValue<WebEngine>;
@@ -872,6 +882,98 @@ export function validateWebviewInject(
     }
     if (entryCount === 0) {
       throw new Error(`[zapp] webview.inject.${name} must declare at least one file`);
+    }
+  }
+}
+
+function canonicalNavigationOrigin(value: string): string {
+  const parsed = new URL(value);
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    || parsed.username.length > 0
+    || parsed.password.length > 0
+    || parsed.pathname !== "/"
+    || parsed.search.length > 0
+    || parsed.hash.length > 0
+  ) {
+    throw new Error("expected an HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  return parsed.origin;
+}
+
+export function validateNavigationProfiles(
+  profiles: Record<string, NavigationProfileConfig> | undefined,
+): void {
+  if (profiles === undefined) return;
+  if (profiles === null || typeof profiles !== "object" || Array.isArray(profiles)) {
+    throw new Error("[zapp] security.navigation must be an object keyed by profile name");
+  }
+  if (!("default" in profiles)) {
+    throw new Error('[zapp] security.navigation must declare a "default" profile');
+  }
+  const profileName = /^[A-Za-z][A-Za-z0-9._-]*$/;
+  const externalScheme = /^[A-Za-z][A-Za-z0-9+.-]*:$/;
+  const allowedKeys = new Set(["navigate", "openExternal"]);
+  for (const [name, profile] of Object.entries(profiles)) {
+    if (!profileName.test(name)) {
+      throw new Error(
+        `[zapp] security.navigation profile ${JSON.stringify(name)} must start with a letter ` +
+        "and contain only letters, digits, '.', '_', or '-'",
+      );
+    }
+    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
+      throw new Error(`[zapp] security.navigation.${name} must be an object`);
+    }
+    for (const key of Object.keys(profile)) {
+      if (!allowedKeys.has(key)) {
+        throw new Error(
+          `[zapp] security.navigation.${name}.${key} is unknown; ` +
+          "use navigate or openExternal",
+        );
+      }
+    }
+    for (const key of allowedKeys) {
+      const values = profile[key as keyof NavigationProfileConfig];
+      if (values === undefined) continue;
+      if (!Array.isArray(values)) {
+        throw new Error(`[zapp] security.navigation.${name}.${key} must be a string[]`);
+      }
+      const seen = new Set<string>();
+      for (const value of values) {
+        if (typeof value !== "string" || value.trim().length === 0) {
+          throw new Error(
+            `[zapp] security.navigation.${name}.${key} entries must be non-empty strings`,
+          );
+        }
+        let canonical: string;
+        if (key === "navigate") {
+          if (value === "self") canonical = value;
+          else {
+            try {
+              canonical = canonicalNavigationOrigin(value);
+            } catch {
+              throw new Error(
+                `[zapp] security.navigation.${name}.navigate entry ${JSON.stringify(value)} ` +
+                "must be \"self\" or an HTTP(S) origin without a path",
+              );
+            }
+          }
+        } else {
+          if (!externalScheme.test(value)) {
+            throw new Error(
+              `[zapp] security.navigation.${name}.openExternal entry ${JSON.stringify(value)} ` +
+              'must be a URL scheme ending in ":"',
+            );
+          }
+          canonical = value.toLowerCase();
+        }
+        if (seen.has(canonical)) {
+          throw new Error(
+            `[zapp] security.navigation.${name}.${key} repeats ${JSON.stringify(value)}`,
+          );
+        }
+        seen.add(canonical);
+      }
     }
   }
 }
@@ -1365,6 +1467,7 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     workerModules: config.workers?.modules,
     permissions: config.security?.permissions,
     capabilityProfiles: config.security?.capabilities,
+    navigationProfiles: config.security?.navigation,
     fs: config.security?.filesystem,
     native: config.native,
     macos: config.targets?.macOS,
@@ -1437,6 +1540,7 @@ export async function loadConfig(
       config.security?.capabilities,
       config.security?.permissions,
     );
+    validateNavigationProfiles(config.security?.navigation);
     validateWorkers(config.workers, config.security?.capabilities);
     rejectRemovedEngines(config);
     await substituteZjsOnWindows(config);

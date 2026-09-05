@@ -16,10 +16,11 @@ Zapp has three trust zones:
    third-party content into the main webview.**
 
 Additional standing boundaries:
-- **Navigation allowlist** — top-level navigation in the main webview is
-  default-deny (built-in schemes + dev localhost only); allow specific
-  origins natively via the security manager. `target="_blank"` opens in the
-  system browser, never in-app.
+- **Navigation profiles** — every main-frame and subframe request is checked
+  against an immutable build-time profile. `"self"` denotes the logical app
+  origin in both development and packaged builds. Web content cannot select a
+  different profile, and `target="_blank"` does not implicitly escape to the
+  system browser.
 - **FS path allowlist** — `security.filesystem.allow` in zapp.config.ts; every FS call is
   prefix-checked natively before the syscall (plus session grants from
   user-picked dialog paths). Composes with the `fs` permission below.
@@ -67,6 +68,29 @@ The current per-window framework-permission tier supports `menu`,
 `window:create`, `notifications`, `clipboard:read`, and `clipboard:write`;
 registered service methods are independently profile-gated. Other built-in
 permissions remain app-global and cannot yet be listed inside a profile.
+
+Navigation authority is deliberately separate from service capabilities:
+
+```ts
+security: {
+  navigation: {
+    default: { navigate: ["self"], openExternal: [] },
+    documentation: {
+      navigate: ["self", "https://docs.z-language.com"],
+      openExternal: ["https:", "mailto:"],
+    },
+  },
+},
+```
+
+Native Z selects one declared profile with
+`WindowOptions({ navigation: "documentation" })`. A trusted
+`window.events.navigationRequested` subscriber may call `event.cancel()` to
+narrow that ceiling for a particular request; it cannot turn a denied request
+into an allowed one. Frontend TypeScript can subscribe to the corresponding
+typed event for observation only. `openExternal` is compiled as authority for
+the future explicit shell manager—it never causes navigation to open an
+external application as a side effect.
 
 | Permission | Verbs | Covers |
 |---|---|---|

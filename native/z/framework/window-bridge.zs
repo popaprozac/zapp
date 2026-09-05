@@ -75,7 +75,9 @@ function rejectsTrustedWindowPolicy(in source: String): boolean {
   match (parsed) {
     success(value) => {
       match (in value) {
-        object(fields) => return fields.has("inject") || fields.has("capabilities");
+        object(fields) => return fields.has("inject")
+          || fields.has("capabilities")
+          || fields.has("navigation");
         _ => return false;
       }
     }
@@ -86,6 +88,7 @@ function rejectsTrustedWindowPolicy(in source: String): boolean {
 function createWindow(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
+  in ownerWindowId: String,
   capabilities: CapabilitySelection,
   inout windows: WindowManager
 ): BridgeResponse on thread.main {
@@ -99,9 +102,19 @@ function createWindow(
     return bridgeFailure(
       message.id,
       "INVALID_ARGUMENTS",
-      "INVALID_WINDOW_OPTIONS: inject and capabilities are native application policy"
+      "INVALID_WINDOW_OPTIONS: inject, capabilities, and navigation are native application policy"
     );
   }
+
+  const ownerOptions = windows.options(in ownerWindowId);
+  const inheritedNavigation = match (ownerOptions) {
+    some(options) => copy options.navigation;
+    none => return bridgeFailure(
+      message.id,
+      "INVALID_WINDOW",
+      "unknown originating window"
+    );
+  };
 
   const decoded = attempt json.decode<FrontendWindowOptions>(
     in message.arguments
@@ -121,6 +134,7 @@ function createWindow(
         visible: options.visible,
         resizable: options.resizable,
         capabilities: capabilities.copyNames(),
+        navigation: move inheritedNavigation,
       }));
       select match (created) {
         success(window) => {
@@ -207,6 +221,7 @@ function routeWindowAction(
 export function routeWindowBridgeMessage(
   in message: BridgeMessage,
   in permissions: ApplicationPermissions,
+  in ownerWindowId: String,
   capabilities: CapabilitySelection,
   inout windows: WindowManager
 ): WindowBridgeRoute on thread.main {
@@ -223,6 +238,7 @@ export function routeWindowBridgeMessage(
     return WindowBridgeRoute.response(createWindow(
       in message,
       in permissions,
+      in ownerWindowId,
       capabilities,
       inout windows
     ));

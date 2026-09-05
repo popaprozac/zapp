@@ -3,7 +3,15 @@ import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
 import objc from "std/objc";
 import { thread } from "std/thread";
-import { configuredFrontendOrigin } from "./configured-webview.zs";
+import {
+  configuredFrontendOrigin,
+  configuredNavigationAllowsSelf,
+  configuredNavigationOriginAtIndex,
+} from "./configured-webview.zs";
+import { WindowManager } from "../../window.zs";
+import {
+  deliverWebViewWindowNavigationRequested,
+} from "./response-delivery.zs";
 import {
   macOSApplicationSmokeMode,
   setMacOSApplicationResult,
@@ -33,11 +41,10 @@ internal function resolveLogicalURL(
   return resolved.absoluteURL;
 }
 
-function hasFrontendOrigin(
-  in url: Foundation.NSURL
+function hasSameOrigin(
+  in url: Foundation.NSURL,
+  in origin: Foundation.NSURL
 ): boolean on thread.main {
-  const origin = frontendOrigin();
-  if (origin == null) return false;
   const scheme = url.scheme;
   const originScheme = origin.scheme;
   const host = url.host;
@@ -60,9 +67,36 @@ function hasFrontendOrigin(
   return port.isEqualToNumber(originPort);
 }
 
+function profileAllowsURL(
+  in profile: String,
+  in url: Foundation.NSURL
+): boolean on thread.main {
+  if (configuredNavigationAllowsSelf(in profile)) {
+    const origin = frontendOrigin();
+    if (origin != null && hasSameOrigin(in url, in origin)) return true;
+  }
+
+  let index: usize = 0;
+  while (true) {
+    const configured = configuredNavigationOriginAtIndex(in profile, index);
+    match (configured) {
+      some(value) => {
+        const origin = Foundation.NSURL.URLWithString(value);
+        if (origin != null && hasSameOrigin(in url, in origin)) return true;
+      }
+      none => return false;
+    }
+    index = index + 1;
+  }
+}
+
 internal class DesktopNavigationDelegate on thread.main
   implements WebKit.WKNavigationDelegate {
+  readonly id: String;
+  readonly profile: String;
   readonly window: WebKit.NSWindow;
+  readonly webView: WebKit.WKWebView;
+  readonly windows: Weak<WindowManager>;
 
   function didFailProvisionalNavigation(
     in webView: WebKit.WKWebView,
@@ -94,15 +128,8 @@ internal class DesktopNavigationDelegate on thread.main
     in decisionHandler: (policy: WebKit.WKNavigationActionPolicy) => void
   ): void as "webView:decidePolicyForNavigationAction:decisionHandler:" {
     const target = navigationAction.targetFrame;
-    if (target != null && !target.mainFrame) {
-      decisionHandler(WebKit.WKNavigationActionPolicyAllow);
-      return;
-    }
     const url = navigationAction.request.URL;
-    if (target != null && url != null && hasFrontendOrigin(url)) {
-      decisionHandler(WebKit.WKNavigationActionPolicyAllow);
-      return;
-    }
+    const mainFrame: boolean = target != null && target.mainFrame;
     let address = "<invalid>";
     if (url != null) {
       const absolute = url.absoluteString;
@@ -111,14 +138,55 @@ internal class DesktopNavigationDelegate on thread.main
         address = move text;
       }
     }
-    console.error(`blocked navigation outside the application origin: ${address}`);
-    decisionHandler(WebKit.WKNavigationActionPolicyCancel);
+
+    const allowedByProfile: boolean = target != null
+      && url != null
+      && profileAllowsURL(in this.profile, in url);
+    let acceptedByNative = false;
+    const current = attempt this.windows.upgrade();
+    match (current) {
+      success(windows) => acceptedByNative = windows.navigationRequestedNative(
+        in this.id,
+        in address,
+        mainFrame,
+        allowedByProfile
+      );
+      failure(_) => {}
+    }
+    const allowed: boolean = allowedByProfile && acceptedByNative;
+    if (allowed) {
+      decisionHandler(WebKit.WKNavigationActionPolicyAllow);
+    } else {
+      console.error(`blocked navigation by window policy: ${address}`);
+      decisionHandler(WebKit.WKNavigationActionPolicyCancel);
+    }
+    // WebKit requires its decision completion before scheduling work back into
+    // the page. This event is observational and cannot affect the result.
+    const retainedWebView = this.webView;
+    deliverWebViewWindowNavigationRequested(
+      in retainedWebView,
+      in this.id,
+      in address,
+      mainFrame,
+      allowedByProfile,
+      !allowed
+    );
   }
 }
 
 internal function createDesktopNavigationDelegate(
-  in window: WebKit.NSWindow
+  id: String,
+  profile: String,
+  in window: WebKit.NSWindow,
+  in webView: WebKit.WKWebView,
+  windows: Weak<WindowManager>
 ): objc.Adapter<WebKit.WKNavigationDelegate> on thread.main {
-  const delegate = new DesktopNavigationDelegate({ window });
+  const delegate = new DesktopNavigationDelegate({
+    id,
+    profile,
+    window,
+    webView,
+    windows,
+  });
   return objc.adapt<WebKit.WKNavigationDelegate>(delegate);
 }

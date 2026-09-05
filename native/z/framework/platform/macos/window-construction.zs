@@ -107,7 +107,13 @@ internal function createMacOSWindowRuntime(
       message: `could not resolve window URL "${options.url}"`,
     });
   }
-  const navigationDelegate = createDesktopNavigationDelegate(window);
+  const navigationDelegate = createDesktopNavigationDelegate(
+    copy id,
+    copy options.navigation,
+    window,
+    webView,
+    windowManager
+  );
   webView.navigationDelegate = navigationDelegate;
   const windowDelegate = createDesktopWindowDelegate(
     copy id,

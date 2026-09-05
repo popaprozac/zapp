@@ -33,6 +33,12 @@ export default defineConfig({
         services: ["notes.count", "notes.isEmpty", "notes.list", "health.status"],
       },
     },
+    navigation: {
+      default: {
+        navigate: ["self", "https://docs.z-language.com"],
+        openExternal: ["https:", "mailto:"],
+      },
+    },
   },
   webview: {
     inject: {

@@ -6,7 +6,7 @@ import {
   createConfigContext, defaultApplicationIdentifier, defineConfig, loadConfig,
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild, validateWebviewInject,
-  validateCapabilityProfiles, validateWorkers,
+  validateCapabilityProfiles, validateNavigationProfiles, validateWorkers,
 } from "./config";
 
 test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
@@ -80,6 +80,12 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
               services: ["notes"],
             },
           },
+          navigation: {
+            default: {
+              navigate: ["self", "https://docs.example.com"],
+              openExternal: ["https:", "mailto:"],
+            },
+          },
           filesystem: { allow: ["$userData"] },
         },
         native: {
@@ -129,6 +135,12 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
         services: ["notes"],
       },
     });
+    expect(config.navigationProfiles).toEqual({
+      default: {
+        navigate: ["self", "https://docs.example.com"],
+        openExternal: ["https:", "mailto:"],
+      },
+    });
     expect(config.fs).toEqual({ allow: ["$userData"] });
     expect(config.native).toEqual({
       frameworks: { macOS: ["AppKit"] },
@@ -148,6 +160,32 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("validateNavigationProfiles keeps WebView authority explicit and origin-shaped", () => {
+  expect(() => validateNavigationProfiles({
+    default: {
+      navigate: ["self", "https://docs.example.com"],
+      openExternal: ["https:", "mailto:"],
+    },
+    diagnostics: { navigate: ["self"] },
+  })).not.toThrow();
+
+  expect(() => validateNavigationProfiles({
+    docs: { navigate: ["self"] },
+  })).toThrow(/must declare a "default" profile/);
+  expect(() => validateNavigationProfiles({
+    default: { navigate: ["https://docs.example.com/guide"] },
+  })).toThrow(/HTTP\(S\) origin without a path/);
+  expect(() => validateNavigationProfiles({
+    default: { navigate: ["https://docs.example.com", "https://docs.example.com/"] },
+  })).toThrow(/repeats/);
+  expect(() => validateNavigationProfiles({
+    default: { openExternal: ["https"] },
+  })).toThrow(/URL scheme ending in/);
+  expect(() => validateNavigationProfiles({
+    default: { navigate: ["self"], arbitrary: [] } as any,
+  })).toThrow(/arbitrary is unknown/);
 });
 
 test("validateWorkers keeps runtime modules separate from native authority", () => {

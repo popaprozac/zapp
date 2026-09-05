@@ -32,6 +32,9 @@ void zapp_desktop_smoke_start_window(
     initWithSource:
       @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
       @"setTimeout(()=>document.querySelector('#notification-status')?.click(),500);"
+      @"setTimeout(()=>document.querySelector('#navigation-profile')?.click(),650);"
+      @"setTimeout(()=>document.querySelector('#navigation-native')?.click(),800);"
+      @"setTimeout(()=>document.querySelector('#notification-status')?.click(),1000);"
     injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
     forMainFrameOnly:YES];
   [content_controller addUserScript:smoke];
@@ -108,6 +111,7 @@ void zapp_desktop_smoke_observe_response(
           @"inject:document.body?.dataset?.inject??null,"
           @"dynamicWindow:document.body?.dataset?.dynamicWindow??null,"
           @"notificationStatus:document.body?.dataset?.notificationStatus??null,"
+          @"navigationPolicy:document.body?.dataset?.navigationPolicy??null,"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
@@ -123,6 +127,7 @@ void zapp_desktop_smoke_observe_response(
             && [(NSString *)state containsString:@"\"inject\":\"ready\""]
             && [(NSString *)state containsString:@"\"dynamicWindow\":\"ready\""]
             && [(NSString *)state containsString:@"\"notificationStatus\":\"ok\""]
+            && [(NSString *)state containsString:@"\"navigationPolicy\":\"ok\""]
             && [(NSString *)state containsString:expected_hmr];
           BOOL terminal_failure = [state isKindOfClass:[NSString class]]
             && (
@@ -132,6 +137,7 @@ void zapp_desktop_smoke_observe_response(
               || [(NSString *)state containsString:@"\"inject\":\"error\""]
               || [(NSString *)state containsString:@"\"dynamicWindow\":\"error\""]
               || [(NSString *)state containsString:@"\"notificationStatus\":\"error\""]
+              || [(NSString *)state containsString:@"\"navigationPolicy\":\"error\""]
             );
           // Several legitimate requests may complete while the scripted
           // scenario is still in flight (notably frontend window creation).

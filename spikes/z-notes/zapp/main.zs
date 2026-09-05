@@ -19,6 +19,7 @@ import {
 } from "zapp/menu";
 import {
   WindowClosedEvent,
+  WindowNavigationRequestedEvent,
   WindowOptions,
 } from "zapp/window";
 import {
@@ -295,6 +296,21 @@ async function main(): i32 on thread.main {
     failure(error) => {
       console.log(`could not observe window close: ${error.message}`);
       return 73;
+    }
+  };
+  const navigationSubscriptionResult = attempt
+    window.events.navigationRequested.subscribe(
+      move (in event: WindowNavigationRequestedEvent): void => {
+        if (event.url == "https://docs.z-language.com/zapp-native-veto") {
+          event.cancel();
+        }
+      }
+    );
+  const navigationSubscription = match (navigationSubscriptionResult) {
+    success(subscription) => subscription;
+    failure(error) => {
+      console.log(`could not observe window navigation: ${error.message}`);
+      return 74;
     }
   };
   const result = attempt await app.run();

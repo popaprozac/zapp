@@ -25,3 +25,32 @@ internal function configuredWebViewInjectionAtIndex(
 ): Option<ConfiguredWebViewInjection> {
   return Option.none;
 }
+
+internal function configuredNavigationProfileExists(
+  in profile: String
+): boolean {
+  return profile == "default";
+}
+
+internal function configuredNavigationAllowsSelf(
+  in profile: String
+): boolean {
+  return profile == "default";
+}
+
+internal function configuredNavigationOriginAtIndex(
+  in profile: String,
+  index: usize
+): Option<String> {
+  return Option.none;
+}
+
+// Reserved now so the compiled security catalog has one stable shape when the
+// explicit app.shell.openExternal(...) manager lands. Navigation never opens
+// an external URL as an implicit side effect.
+internal function configuredNavigationExternalSchemeAtIndex(
+  in profile: String,
+  index: usize
+): Option<String> {
+  return Option.none;
+}

@@ -15,6 +15,7 @@ export struct WindowOptions {
   resizable: boolean = true;
   inject: Array<String> = Array<String>();
   capabilities: Array<String> = Array<String>("default");
+  navigation: String = "default";
 }
 
 struct WindowRecord {
@@ -256,6 +257,28 @@ class WindowManagerState on thread.main {
     }
   }
 
+  function navigationRequestedNative(
+    inout this,
+    in id: String,
+    in url: String,
+    mainFrame: boolean,
+    allowedByProfile: boolean
+  ): boolean {
+    const found = this.get(in id);
+    return match (found) {
+      some(window) => {
+        let events = window.events;
+        select events.publishNavigationRequested(
+          in id,
+          in url,
+          mainFrame,
+          allowedByProfile
+        );
+      }
+      none => false;
+    };
+  }
+
   function setTitle(
     inout this,
     in id: String,
@@ -372,6 +395,21 @@ export readonly class WindowManager on thread.main {
     height: u32
   ): void on thread.main {
     this.state.resizedNative(in id, width, height);
+  }
+
+  internal function navigationRequestedNative(
+    inout this,
+    in id: String,
+    in url: String,
+    mainFrame: boolean,
+    allowedByProfile: boolean
+  ): boolean on thread.main {
+    return this.state.navigationRequestedNative(
+      in id,
+      in url,
+      mainFrame,
+      allowedByProfile
+    );
   }
 
   internal function setTitle(

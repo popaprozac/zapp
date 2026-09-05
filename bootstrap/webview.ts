@@ -211,6 +211,16 @@
       if (dataJson) {
         try {
           const d = JSON.parse(dataJson);
+          if (eventName === "navigation-requested") {
+            Object.assign(payload, {
+              url: d.url,
+              mainFrame: d.mainFrame,
+              allowedByProfile: d.allowedByProfile,
+              cancelled: d.cancelled,
+            });
+            bridge._onEvent(evName, JSON.stringify(payload));
+            return;
+          }
           // sidebar-resized / inspector-resized carry a bare width (no height)
           // and use the top-level `width` payload contract (Sidebar/Inspector
           // ResizedPayload); everything else is the generic window-resize/move

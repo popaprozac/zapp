@@ -317,6 +317,12 @@ describe("renderZConfiguredWebView", () => {
         sourcePath: "src/preload.ts",
         source: 'globalThis.preloaded = "yes";',
       }],
+      [{
+        name: "default",
+        allowsSelf: true,
+        origins: ["https://docs.example.com"],
+        externalSchemes: ["https:", "mailto:"],
+      }],
     );
     expect(output).toContain('return "zapp://app/";');
     expect(output).toContain("configuredFrontendIsDevelopment");
@@ -326,6 +332,10 @@ describe("renderZConfiguredWebView", () => {
     expect(output).toContain('source: "globalThis.preloaded = \\"yes\\";"');
     expect(output).toContain("phase: 1");
     expect(output).toContain("Option<ConfiguredWebViewInjection>");
+    expect(output).toContain("configuredNavigationProfileExists");
+    expect(output).toContain('profile == "default"');
+    expect(output).toContain('Option.some("https://docs.example.com")');
+    expect(output).toContain('Option.some("mailto:")');
   });
 });
 
@@ -544,7 +554,12 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("implements WebKit.WKNavigationDelegate");
     expect(macOSPlatform).toContain("objc.adapt<WebKit.WKNavigationDelegate>(delegate)");
     expect(macOSPlatform).toContain("function resolveLogicalURL(");
-    expect(macOSPlatform).toContain("function hasFrontendOrigin(");
+    expect(macOSPlatform).toContain("function profileAllowsURL(");
+    expect(macOSPlatform).toContain("configuredNavigationOriginAtIndex(");
+    expect(macOSPlatform).toContain("unknown window navigation profile");
+    expect(macOSPlatform).toContain("windows.navigationRequestedNative(");
+    expect(macOSPlatform).toContain("deliverWebViewWindowNavigationRequested(");
+    expect(macOSPlatform).toContain("allowedByProfile && acceptedByNative");
     expect(macOSPlatform).toContain("decisionHandler(WebKit.WKNavigationActionPolicyAllow)");
     expect(macOSPlatform).toContain("webView.navigationDelegate = navigationDelegate");
     expect(macOSPlatform).toContain("implements WebKit.NSWindowDelegate");
@@ -561,6 +576,9 @@ describe("Z native host inputs", () => {
     expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.FOCUS");
     expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.BLUR");
     expect(notesFrontend).toContain("windowHandle.subscribe(WindowEvent.RESIZE");
+    expect(notesFrontend).toContain(
+      "windowHandle.subscribe(WindowEvent.NAVIGATION_REQUESTED",
+    );
     expect(notesHTML).toContain('id="window-events"');
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
@@ -572,6 +590,9 @@ describe("Z native host inputs", () => {
     expect(windowBridge).toContain('message.method == "hide"');
     expect(windowBridge).toContain('message.method == "close"');
     expect(windowBridge).toContain('message.method == "setTitle"');
+    expect(windowBridge).toContain('fields.has("navigation")');
+    expect(windowBridge).toContain("copy options.navigation");
+    expect(windowBridge).toContain("navigation: move inheritedNavigation");
     expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
     expect(macOSPlatform).toContain("u32(math.trunc(value))");
     expect(macOSPlatform).toContain("WebKit.NSMakeRect(");

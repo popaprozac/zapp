@@ -19,7 +19,12 @@ test("focused window package exports only composed runtime values", () => {
     "createWindow",
     "currentWindow",
   ]);
-  expect(WindowEvent).toEqual({ FOCUS: 1, BLUR: 2, RESIZE: 3 });
+  expect(WindowEvent).toEqual({
+    FOCUS: 1,
+    BLUR: 2,
+    RESIZE: 3,
+    NAVIGATION_REQUESTED: 4,
+  });
   expect("Window" in windowAPI).toBe(false);
 });
 
@@ -39,10 +44,63 @@ test("focused WindowHandle retains typed event payloads and subscriptions", () =
         void payload.timestamp;
       },
     );
+    const navigation: WindowEventSubscription = window.subscribe(
+      WindowEvent.NAVIGATION_REQUESTED,
+      (payload) => {
+        void payload.url;
+        void payload.mainFrame;
+        void payload.allowedByProfile;
+        void payload.cancelled;
+      },
+    );
     focused.unsubscribe();
     resized.unsubscribe();
+    navigation.unsubscribe();
   };
   expect(typeof compile).toBe("function");
+});
+
+test("frontend navigation events are observational typed decisions", () => {
+  const listeners: Record<string, Array<(value: unknown) => void>> = {};
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
+  (globalThis as any)[BRIDGE_KEY] = {
+    on(name: string, handler: (value: unknown) => void) {
+      (listeners[name] ??= []).push(handler);
+      return () => {};
+    },
+    invoke() { return Promise.resolve(undefined); },
+    emit() {},
+    post() {},
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "win-navigation";
+
+  try {
+    let observed: unknown;
+    currentWindow().subscribe(WindowEvent.NAVIGATION_REQUESTED, (event) => {
+      observed = event;
+    });
+    for (const handler of listeners["window:navigation-requested"] ?? []) {
+      handler({
+        windowId: "win-navigation",
+        url: "https://docs.z-language.com/",
+        mainFrame: false,
+        allowedByProfile: true,
+        cancelled: true,
+        ignored: "not projected",
+      });
+    }
+    expect(observed).toEqual({
+      windowId: "win-navigation",
+      url: "https://docs.z-language.com/",
+      mainFrame: false,
+      allowedByProfile: true,
+      cancelled: true,
+    });
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
+  }
 });
 
 test("focused subscriptions project exact Z-aligned event values", () => {

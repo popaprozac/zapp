@@ -44,11 +44,24 @@ export interface WindowResizedEvent {
   readonly size: WindowSize;
 }
 
+/**
+ * Read-only observation of a native navigation decision. Web content cannot
+ * grant or cancel navigation; trusted Z subscribers own that authority.
+ */
+export interface WindowNavigationRequestedEvent {
+  readonly windowId: string;
+  readonly url: string;
+  readonly mainFrame: boolean;
+  readonly allowedByProfile: boolean;
+  readonly cancelled: boolean;
+}
+
 /** Window events implemented through the Z-owned native path. */
 export const WindowEvent = {
   FOCUS: 1,
   BLUR: 2,
   RESIZE: 3,
+  NAVIGATION_REQUESTED: 4,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
@@ -75,6 +88,10 @@ export interface WindowHandle {
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.NAVIGATION_REQUESTED,
+    handler: (event: WindowNavigationRequestedEvent) => void,
+  ): WindowEventSubscription;
 
   show(): void;
   hide(): void;
@@ -85,7 +102,8 @@ export interface WindowHandle {
 type FocusedEventHandler =
   | ((event: WindowFocusedEvent) => void)
   | ((event: WindowBlurredEvent) => void)
-  | ((event: WindowResizedEvent) => void);
+  | ((event: WindowResizedEvent) => void)
+  | ((event: WindowNavigationRequestedEvent) => void);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -95,6 +113,7 @@ const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
   [WindowEvent.FOCUS]: "window:focus",
   [WindowEvent.BLUR]: "window:blur",
   [WindowEvent.RESIZE]: "window:resize",
+  [WindowEvent.NAVIGATION_REQUESTED]: "window:navigation-requested",
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -149,6 +168,10 @@ class FocusedWindowHandle implements WindowHandle {
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.NAVIGATION_REQUESTED,
+    handler: (event: WindowNavigationRequestedEvent) => void,
+  ): WindowEventSubscription;
   subscribe(event: WindowEvent, handler: FocusedEventHandler): WindowEventSubscription {
     const cleanup = getBridge().on(WINDOW_EVENT_NAMES[event], (value) => {
       if (!isRecord(value) || value.windowId !== this.id) return;
@@ -160,6 +183,30 @@ class FocusedWindowHandle implements WindowHandle {
         if (typeof width !== "number" || typeof height !== "number") return;
         const receive = handler as (event: WindowResizedEvent) => void;
         receive({ windowId: this.id, size: { width, height } });
+        return;
+      }
+
+      if (event === WindowEvent.NAVIGATION_REQUESTED) {
+        const url = value.url;
+        const mainFrame = value.mainFrame;
+        const allowedByProfile = value.allowedByProfile;
+        const cancelled = value.cancelled;
+        if (
+          typeof url !== "string"
+          || typeof mainFrame !== "boolean"
+          || typeof allowedByProfile !== "boolean"
+          || typeof cancelled !== "boolean"
+        ) return;
+        const receive = handler as (
+          event: WindowNavigationRequestedEvent
+        ) => void;
+        receive({
+          windowId: this.id,
+          url,
+          mainFrame,
+          allowedByProfile,
+          cancelled,
+        });
         return;
       }
 

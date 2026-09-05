@@ -315,6 +315,7 @@ function selectWindowMessageRouteWithCapabilities(
   const routed = routeWindowBridgeMessage(
     in message,
     in permissions,
+    in logicalWindowId,
     selectedCapabilities,
     inout windows
   );

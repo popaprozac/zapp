@@ -17,6 +17,7 @@ import {
   WindowClosedEvent as FrameworkWindowClosedEvent,
   WindowEvent as FrameworkWindowEvent,
   WindowFocusedEvent as FrameworkWindowFocusedEvent,
+  WindowNavigationRequestedEvent as FrameworkWindowNavigationRequestedEvent,
   WindowResizedEvent as FrameworkWindowResizedEvent,
   WindowSize as FrameworkWindowSize,
 } from "../../framework/events.zs";
@@ -35,3 +36,4 @@ export type WindowResizedEvent = FrameworkWindowResizedEvent;
 export type WindowSize = FrameworkWindowSize;
 export type WindowCloseRequestedEvent = FrameworkWindowCloseRequestedEvent;
 export type WindowClosedEvent = FrameworkWindowClosedEvent;
+export type WindowNavigationRequestedEvent = FrameworkWindowNavigationRequestedEvent;

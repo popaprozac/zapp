@@ -397,6 +397,60 @@ elevate itself by creating a child. Native dispatch checks the originating
 window before entering a service and reports a structured
 `PermissionDeniedError` such as `service:notes.create` when denied.
 
+## Window navigation profiles
+
+`security.navigation` is an immutable catalog of origins a trusted WebView may
+navigate to and URL schemes the future explicit shell manager may open:
+
+```ts
+security: {
+  navigation: {
+    default: { navigate: ["self"], openExternal: [] },
+    documentation: {
+      navigate: ["self", "https://docs.z-language.com"],
+      openExternal: ["https:", "mailto:"],
+    },
+  },
+},
+```
+
+`navigate` accepts `"self"` and canonical HTTP(S) origins, not URL paths.
+`openExternal` accepts explicit schemes ending in `:`. When the catalog is
+omitted, Zapp synthesizes a safe `default` profile containing only `"self"`;
+when supplied, it must explicitly contain `default`.
+
+Native application code selects one profile per window:
+
+```z
+const docs = try app.windows.create(WindowOptions({
+  title: "Documentation",
+  url: "/docs",
+  navigation: "documentation",
+}));
+```
+
+The selection is trusted policy: frontend `createWindow()` rejects a
+`navigation` member and every frontend-created child inherits its creator's
+profile. Unknown profile names fail window realization with a typed
+`WindowError`. Every main-frame and subframe navigation passes through the
+same native check.
+
+After the profile check, native Z may narrow the result synchronously:
+
+```z
+const subscription = try window.events.navigationRequested.subscribe(
+  move (in event: WindowNavigationRequestedEvent): void => {
+    if (event.url == "https://docs.z-language.com/private") event.cancel();
+  }
+);
+```
+
+The TypeScript `WindowHandle` exposes the same request as a read-only
+`WindowEvent.NAVIGATION_REQUESTED` payload containing `url`, `mainFrame`,
+`allowedByProfile`, and `cancelled`. JavaScript cannot authorize or cancel it.
+Navigation never interprets `openExternal` as an automatic handoff; that list
+is reserved for a deliberate future `app.shell.openExternal(...)` call.
+
 ## Frontend origin and window URLs
 
 `frontend.assets` names the built frontend directory embedded for production.
