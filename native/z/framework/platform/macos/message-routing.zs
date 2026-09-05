@@ -31,6 +31,10 @@ import {
   routeClipboardBridgeMessage,
 } from "../../clipboard-bridge.zs";
 import {
+  NotificationBridgeRoute,
+  routeNotificationBridgeMessage,
+} from "../../notifications-bridge.zs";
+import {
   FrontendMenuCommandDispatch,
   MenuBridgeRoute,
   routeMenuBridgeMessage,
@@ -41,6 +45,18 @@ enum WindowMessageRoute {
   framework BridgeResponse,
   handled,
   service BridgeMessage,
+}
+
+function deliverInvalidWindowResponse(
+  messageId: u64,
+  windowId: i32
+): void on thread.main {
+  const response = bridgeFailure(
+    messageId,
+    "INVALID_WINDOW",
+    "unknown originating window"
+  );
+  deliverResponse(in response, windowId);
 }
 
 export c function zapp_route_message_owned(
@@ -153,13 +169,58 @@ async function routeFrameworkOrServiceMessageAndDeliver(
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
-  let windows = current.windowManager;
-  const route = selectWindowMessageRoute(
+  const permissions = current.permissions;
+  const notifications = current.notifications;
+  const selected = current.capabilitiesForWindow(windowId);
+  const capabilities = match (selected) {
+    some(value) => value;
+    none => {
+      if (tracked) finishPendingRequest(windowId, requestId, generation);
+      deliverInvalidWindowResponse(message.id, windowId);
+      return true;
+    }
+  };
+  const notificationRoute = await routeNotificationBridgeMessage(
     move message,
+    in permissions,
+    capabilities,
+    notifications
+  );
+  const delivered = await routeAfterNotificationMessageAndDeliver(
+    move notificationRoute,
+    services,
+    windowId,
+    requestId,
+    generation,
+    tracked
+  );
+  return delivered;
+}
+
+async function routeAfterNotificationMessageAndDeliver(
+  route: NotificationBridgeRoute,
+  services: AsyncServices,
+  windowId: i32,
+  requestId: u64,
+  generation: u64,
+  tracked: boolean
+): boolean on thread.main {
+  const current = currentMacOSApplication();
+  const forwarded = match (route) {
+    response(value) => {
+      if (tracked) finishPendingRequest(windowId, requestId, generation);
+      deliverResponse(in value, windowId);
+      return true;
+    }
+    unhandled(value) => value;
+  };
+  let windows = current.windowManager;
+  const windowRoute = selectWindowMessageRoute(
+    move forwarded,
     windowId,
     inout windows
   );
-  match (route) {
+  match (windowRoute) {
     framework(response) => {
       if (tracked) finishPendingRequest(windowId, requestId, generation);
       deliverResponse(in response, windowId);

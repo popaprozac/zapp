@@ -188,6 +188,7 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("windowCreate: true");
     expect(output).toContain("clipboardRead: false");
     expect(output).toContain("clipboardWrite: false");
+    expect(output).toContain("notifications: false");
   });
 
   it("compiles an explicit window-create denial into native Z policy", () => {
@@ -211,6 +212,17 @@ describe("renderZApplicationMetadata", () => {
     });
     expect(output).toContain("clipboardRead: true");
     expect(output).toContain("clipboardWrite: false");
+  });
+
+  it("requires an explicit notification grant in generated native Z policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "Notifications",
+      identifier: "com.example.notifications",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: ["notifications"],
+    });
+    expect(output).toContain("notifications: true");
   });
 
   it("emits exact immutable capability grants into native Z", () => {

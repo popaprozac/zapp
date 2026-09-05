@@ -59,6 +59,10 @@ import {
   createClipboardManager,
 } from "../framework/clipboard.zs";
 import {
+  NotificationManager,
+  createNotificationManager,
+} from "../framework/notifications.zs";
+import {
   ApplicationMenu,
   createApplicationMenu,
 } from "../framework/application-menu.zs";
@@ -136,6 +140,7 @@ export readonly class Application {
   readonly windows: WindowManager;
   readonly dialogs: DialogManager;
   readonly clipboard: ClipboardManager;
+  readonly notifications: NotificationManager;
   readonly menu: ApplicationMenu;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
@@ -152,6 +157,7 @@ export readonly class Application {
     this.windows = createWindowManager();
     this.dialogs = createDialogManager();
     this.clipboard = createClipboardManager();
+    this.notifications = createNotificationManager();
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
@@ -236,6 +242,7 @@ function prepareApplication(
   const windows = app.windows;
   const dialogs = app.dialogs;
   const clipboard = app.clipboard;
+  const notifications = app.notifications;
   const menu = app.menu;
   const workers = app.workers;
   const services = app.services;
@@ -249,6 +256,7 @@ function prepareApplication(
     windows,
     dialogs,
     clipboard,
+    notifications,
     menu,
     services: new AsyncServices({
       synchronous: routes,

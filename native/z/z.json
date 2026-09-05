@@ -9,6 +9,7 @@
       "./window": "api/zapp/window.zs",
       "./dialog": "api/zapp/dialog.zs",
       "./clipboard": "api/zapp/clipboard.zs",
+      "./notifications": "api/zapp/notifications.zs",
       "./menu": "api/zapp/menu.zs",
       "./service": "api/zapp/service.zs",
       "./worker": "framework/worker/worker-manager.zs"
@@ -25,7 +26,8 @@
           "AppKit",
           "WebKit",
           "CoreFoundation",
-          "UniformTypeIdentifiers"
+          "UniformTypeIdentifiers",
+          "UserNotifications"
         ]
       }
     }

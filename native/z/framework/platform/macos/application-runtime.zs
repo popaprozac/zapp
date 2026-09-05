@@ -8,6 +8,7 @@ import {
 import { AsyncServices } from "../../async-services.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
 import { ClipboardManager } from "../../clipboard.zs";
+import { NotificationManager } from "../../notifications.zs";
 import { BridgeResponse, bridgeFailure } from "../../bridge.zs";
 import { Once, OnceLifetime } from "std/sync";
 import { TaskControl, TaskScope } from "std/async";
@@ -77,6 +78,7 @@ internal class MacOSApplicationRuntime {
   readonly updates: TaskScope;
   readonly windowManager: WindowManager on thread.main;
   readonly clipboard: ClipboardManager on thread.main;
+  readonly notifications: NotificationManager on thread.main;
   readonly menu: ApplicationMenu on thread.main;
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
@@ -562,6 +564,7 @@ internal function initializeMacOSApplicationRuntimeState(
   updates: TaskScope,
   windowManager: WindowManager,
   clipboard: ClipboardManager,
+  notifications: NotificationManager,
   menu: ApplicationMenu,
   routeMessage: DesktopRouteMessageOperation,
   deliverResponse: DesktopDeliverResponseOperation
@@ -599,6 +602,7 @@ internal function initializeMacOSApplicationRuntimeState(
     updates,
     windowManager,
     clipboard,
+    notifications,
     menu,
     routeMessage,
     deliverMessageResponse: deliverResponse,

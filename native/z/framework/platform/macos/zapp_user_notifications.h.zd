@@ -1,0 +1,44 @@
+declare module "zapp_user_notifications.h" {
+  export function UNNotificationRequest.requestWithIdentifier(
+    in identifier: _,
+    content: _,
+    trigger: _
+  ): _;
+
+  export function UNUserNotificationCenter.getNotificationSettingsWithCompletionHandler(
+    move completionHandler: _
+  ): _ {
+    callback completionHandler {
+      thread any;
+      invoked once;
+    }
+    async completionHandler;
+  }
+
+  export function UNUserNotificationCenter.requestAuthorizationWithOptions(
+    options: _,
+    move completionHandler: _
+  ): _ {
+    callback completionHandler {
+      thread any;
+      invoked once;
+    }
+    async completionHandler(granted, error) {
+      return granted;
+      throw error;
+    }
+  }
+
+  export function UNUserNotificationCenter.addNotificationRequest(
+    request: _,
+    move completionHandler: _
+  ): _ {
+    callback completionHandler {
+      thread any;
+      invoked once;
+    }
+    async completionHandler(error) {
+      throw error;
+    }
+  }
+}

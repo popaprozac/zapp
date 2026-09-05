@@ -238,6 +238,59 @@ permission boundary protects less-trusted WebView content. HTML, files, and
 images remain future typed clipboard tiers rather than untyped payloads on the
 text API.
 
+System notifications follow the same application-owned manager shape, but are
+async because operating-system authorization and delivery complete later. The
+first portable tier reads or requests permission and delivers one text
+notification. A denied request is an ordinary `NotificationPermission` value;
+native failures throw `NotificationError`.
+
+```zs
+import { Application } from "zapp";
+import {
+  NotificationOptions,
+  NotificationPermission,
+} from "zapp/notifications";
+
+const notifications = Application.current().notifications;
+let permission = try await notifications.permissionStatus();
+if (permission == NotificationPermission.notDetermined) {
+  permission = try await notifications.requestPermission();
+}
+if (permission == NotificationPermission.granted) {
+  const id = try await notifications.show(NotificationOptions({
+    title: "Z Notes",
+    body: Option.some("Your note was saved."),
+  }));
+}
+```
+
+The WebView facade has the same shape and uses promises across the bridge:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+import {
+  NotificationError,
+  NotificationPermission,
+} from "@zappdev/runtime/notifications";
+
+const notifications = Application.current().notifications;
+const permission = await notifications.requestPermission();
+if (permission === NotificationPermission.Granted) {
+  const id = await notifications.show({
+    title: "Z Notes",
+    body: "Your note was saved.",
+  });
+}
+```
+
+WebView calls require the app-wide `notifications` permission and the
+originating window's capability profile must also grant it. Trusted native Z
+code calls `app.notifications` directly. The macOS backend talks to
+`UNUserNotificationCenter` through checked async `.zd` completion contracts;
+there is no blocking semaphore, global response buffer, JSON hop, or handwritten
+Objective-C adapter between the manager and the framework call. Scheduling,
+actions, categories, and delivery events remain later typed tiers.
+
 The same application identity owns one logical application menu. Applications
 define commands independently from native menu-item allocations, so the same
 command identity can later power menus, shortcuts, and toolbars:

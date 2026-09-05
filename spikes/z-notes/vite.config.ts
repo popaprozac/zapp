@@ -15,6 +15,9 @@ export default {
       "@zappdev/runtime/clipboard": fileURLToPath(
         new URL("../../runtime/clipboard-public.ts", import.meta.url),
       ),
+      "@zappdev/runtime/notifications": fileURLToPath(
+        new URL("../../runtime/notifications-public.ts", import.meta.url),
+      ),
       "@zappdev/runtime/menu": fileURLToPath(
         new URL("../../runtime/menu-public.ts", import.meta.url),
       ),

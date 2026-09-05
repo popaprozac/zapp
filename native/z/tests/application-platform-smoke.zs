@@ -11,6 +11,7 @@ import { createServiceLifecycles } from "../framework/service-lifecycle.zs";
 import { createWindowManager } from "../framework/window.zs";
 import { createDialogManager } from "../framework/dialog.zs";
 import { createClipboardManager } from "../framework/clipboard.zs";
+import { createNotificationManager } from "../framework/notifications.zs";
 import { createApplicationMenu } from "../framework/application-menu.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { createWorkerManager } from "../framework/worker/worker-manager.zs";
@@ -56,6 +57,7 @@ async function main(): i32 on thread.main {
     windows: createWindowManager(),
     dialogs: createDialogManager(),
     clipboard: createClipboardManager(),
+    notifications: createNotificationManager(),
     menu: createApplicationMenu(),
     services: services.freeze(),
     lifecycles: lifecycles.freeze(),

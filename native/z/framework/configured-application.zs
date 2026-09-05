@@ -37,6 +37,7 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
     menu: true,
     clipboardRead: false,
     clipboardWrite: false,
+    notifications: false,
   });
 }
 

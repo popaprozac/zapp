@@ -247,6 +247,13 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
         resolvePermissions(config.permissions),
       )
     },
+    notifications: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "notifications",
+        resolvePermissions(config.permissions),
+      )
+    },
   });
 }
 

@@ -7,6 +7,7 @@ import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
 import { ClipboardManager } from "../../clipboard.zs";
+import { NotificationManager } from "../../notifications.zs";
 import {
   MacOSApplicationRuntime,
   initializeMacOSApplicationRuntimeState,
@@ -28,6 +29,7 @@ internal function initializeMacOSApplicationRuntime(
   updates: TaskScope,
   windowManager: WindowManager,
   clipboard: ClipboardManager,
+  notifications: NotificationManager,
   menu: ApplicationMenu
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const route: DesktopRouteMessageOperation = routeMessageOnMain;
@@ -40,6 +42,7 @@ internal function initializeMacOSApplicationRuntime(
     updates,
     windowManager,
     clipboard,
+    notifications,
     menu,
     route,
     deliver

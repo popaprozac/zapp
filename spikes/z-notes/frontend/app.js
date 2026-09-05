@@ -5,6 +5,10 @@ import {
 } from "@zappdev/runtime/window";
 import { Application } from "@zappdev/runtime/application";
 import { ClipboardError } from "@zappdev/runtime/clipboard";
+import {
+  NotificationError,
+  NotificationPermission,
+} from "@zappdev/runtime/notifications";
 import { Command, CommandState, MenuRole } from "@zappdev/runtime/menu";
 import {
   health,
@@ -24,6 +28,9 @@ const exportNotesButton = document.querySelector("#export-notes");
 const copyTitleButton = document.querySelector("#copy-title");
 const readClipboardButton = document.querySelector("#read-clipboard");
 const clearClipboardButton = document.querySelector("#clear-clipboard");
+const notificationStatusButton = document.querySelector("#notification-status");
+const notificationRequestButton = document.querySelector("#notification-request");
+const notificationShowButton = document.querySelector("#notification-show");
 const renameWindowButton = document.querySelector("#rename-window");
 const hideWindowButton = document.querySelector("#hide-window");
 const closeWindowButton = document.querySelector("#close-window");
@@ -33,6 +40,7 @@ const status = document.querySelector("#status");
 const windowEvents = document.querySelector("#window-events");
 const workerIndex = document.querySelector("#worker-index");
 const clipboardStatus = document.querySelector("#clipboard-status");
+const notificationResult = document.querySelector("#notification-result");
 
 const application = Application.current();
 
@@ -69,6 +77,54 @@ clearClipboardButton.addEventListener("click", async () => {
     clipboardStatus.textContent = "Clipboard cleared.";
   } catch (error) {
     clipboardStatus.textContent = describeClipboardError(error);
+  }
+});
+
+function describeNotificationError(error) {
+  if (error instanceof NotificationError) {
+    return `Notification ${error.operation ?? "operation"} failed\n${error.message}`;
+  }
+  return `Notification operation failed\n${String(error)}`;
+}
+
+notificationStatusButton.addEventListener("click", async () => {
+  try {
+    const permission = await application.notifications.permissionStatus();
+    notificationResult.textContent = `Notification permission: ${permission}`;
+  } catch (error) {
+    notificationResult.textContent = describeNotificationError(error);
+  }
+});
+
+notificationRequestButton.addEventListener("click", async () => {
+  try {
+    const permission = await application.notifications.requestPermission();
+    notificationResult.textContent = `Notification permission: ${permission}`;
+  } catch (error) {
+    notificationResult.textContent = describeNotificationError(error);
+  }
+});
+
+notificationShowButton.addEventListener("click", async () => {
+  try {
+    let permission = await application.notifications.permissionStatus();
+    if (permission === NotificationPermission.NotDetermined) {
+      permission = await application.notifications.requestPermission();
+    }
+    if (
+      permission !== NotificationPermission.Granted
+      && permission !== NotificationPermission.Provisional
+    ) {
+      notificationResult.textContent = `Notification permission: ${permission}`;
+      return;
+    }
+    const identifier = await application.notifications.show({
+      title: "Z Notes",
+      body: noteTitle.value.trim() || "Your note is ready.",
+    });
+    notificationResult.textContent = `Delivered notification\n${identifier}`;
+  } catch (error) {
+    notificationResult.textContent = describeNotificationError(error);
   }
 });
 
