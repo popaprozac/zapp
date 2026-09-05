@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
+import { createDevBundle } from "../../cli/src/bundle";
 import { compileNative } from "../../cli/src/native";
 import { prepareZFrontendServices } from "../../cli/src/native-z";
 import {
@@ -288,6 +289,7 @@ const originalLanguage = process.env.ZAPP_NATIVE_LANG;
 const originalHost = process.env.ZAPP_Z_HOST;
 const originalSmokeSupport = process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT;
 let compiled = false;
+let executable = output;
 process.env.ZAPP_NATIVE_LANG = "z";
 process.env.ZAPP_Z_HOST = "desktop";
 if (smoke) process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT = "1";
@@ -313,6 +315,15 @@ try {
     config,
     preparedZServices,
   });
+  if (process.platform === "darwin") {
+    const appBundle = await createDevBundle(spike, output, config);
+    executable = resolve(
+      appBundle,
+      "Contents",
+      "MacOS",
+      basename(output),
+    );
+  }
   compiled = true;
 } finally {
   if (originalLanguage === undefined) delete process.env.ZAPP_NATIVE_LANG;
@@ -347,8 +358,8 @@ try {
   }
 }
 
-if (persistenceSmoke) await runPersistenceSmoke([output]);
-else if (workerBenchmark) await runWorkerBenchmark([output]);
-else if (workerRestartSmoke) await runWorkerRestartSmoke([output]);
-else if (workerSmoke) await runWorkerSmoke([output]);
-else await run([output], process.env);
+if (persistenceSmoke) await runPersistenceSmoke([executable]);
+else if (workerBenchmark) await runWorkerBenchmark([executable]);
+else if (workerRestartSmoke) await runWorkerRestartSmoke([executable]);
+else if (workerSmoke) await runWorkerSmoke([executable]);
+else await run([executable], process.env);

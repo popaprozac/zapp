@@ -539,13 +539,17 @@ for the real build seam rather than a parallel script that can drift from it.
 
 The ordinary Z Notes command builds the default host, injects the production
 bootstrap and generated service facade at document start, and dynamically opens
-a second diagnostics window through `createWindow()`. The process stops only after the last native
+a second diagnostics window through `createWindow()`. The local runner launches
+the result from an ad-hoc-signed development `.app`, giving bundle-sensitive
+native frameworks the same process identity shape as a packaged application.
+The process stops only after the last native
 window closes. Clicking either window's visible button calls
 `notes.create(...)`; native delivery resolves it through `_onInvokeResult()`
 and the binding restores the exact `u64` identifier as `bigint` before updating
 the DOM. `spike:z-notes:smoke` opts into bounded automation: it verifies
 independent window identities, frontend-safe injection isolation,
-cancellation/request routing, and both DOMs before closing every window. Both
+cancellation/request routing, non-prompting native notification status, and
+both DOMs before closing every window. Both
 use the same staged native inputs and generated Z asset catalog as an ordinary
 `ZAPP_NATIVE_LANG=z` build.
 

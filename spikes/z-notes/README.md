@@ -520,6 +520,11 @@ From the repository root:
 bun run spike:z-notes
 ```
 
+The runner places the executable inside a minimal ad-hoc-signed development
+`.app` before launching it. That bundle identity is required by native services
+such as `UNUserNotificationCenter`; invoking the same binary directly from the
+build directory is not an equivalent application environment.
+
 The visible macOS app dynamically opens a second diagnostics window and stays
 open until both windows are closed. Click **Create a note in Z** to call the
 generated `notes.create` TypeScript binding. Each path first verifies the
@@ -547,7 +552,8 @@ used by the staged Zapp build. The Zapp CLI still owns final host-library
 generation and linkage.
 
 For a bounded automated round trip that aborts request 1, proves any raced
-native response cannot publish stale state, completes request 2, and then
+native response cannot publish stale state, completes request 2, checks the
+non-prompting notification-permission status path in both windows, and then
 closes on success:
 
 ```sh

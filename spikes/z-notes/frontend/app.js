@@ -91,8 +91,10 @@ notificationStatusButton.addEventListener("click", async () => {
   try {
     const permission = await application.notifications.permissionStatus();
     notificationResult.textContent = `Notification permission: ${permission}`;
+    document.body.dataset.notificationStatus = "ok";
   } catch (error) {
     notificationResult.textContent = describeNotificationError(error);
+    document.body.dataset.notificationStatus = "error";
   }
 });
 
