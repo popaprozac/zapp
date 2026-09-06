@@ -20,6 +20,7 @@ import { createApplicationMenu } from "../framework/application-menu.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { createWorkerManager } from "../framework/worker/worker-manager.zs";
 import { createApplicationEvents } from "../framework/application-events.zs";
+import { createFileManager } from "../framework/files.zs";
 import {
   ApplicationContext,
   ApplicationPaths,
@@ -41,6 +42,7 @@ async function main(): i32 on thread.main {
   });
   const filesystemAuthority = createFilesystemAuthority(in filesystemPaths);
   const shell = createShellManager(filesystemAuthority);
+  const files = createFileManager(filesystemAuthority);
   const config = new PreparedApplication({
     metadata: ApplicationMetadata({
       name: "Headless",
@@ -73,6 +75,7 @@ async function main(): i32 on thread.main {
     notifications: createNotificationManager(),
     filesystemAuthority,
     shell,
+    files,
     menu: createApplicationMenu(),
     services: services.freeze(),
     lifecycles: lifecycles.freeze(),

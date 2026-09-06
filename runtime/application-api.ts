@@ -20,12 +20,17 @@ import {
   applicationDialogs,
   type DialogManager,
 } from "./dialog-api";
+import {
+  applicationFiles,
+  type FileManager,
+} from "./files-api";
 
 export interface ApplicationHandle {
   readonly clipboard: ClipboardManager;
   readonly notifications: NotificationManager;
   readonly shell: ShellManager;
   readonly dialogs: DialogManager;
+  readonly files: FileManager;
   readonly menu: ApplicationMenu;
 }
 
@@ -34,6 +39,7 @@ const current: ApplicationHandle = Object.freeze({
   notifications: applicationNotifications,
   shell: applicationShell,
   dialogs: applicationDialogs,
+  files: applicationFiles,
   menu: applicationMenu,
 });
 

@@ -361,6 +361,21 @@ manager applies the same filesystem resource authority. Smoke mode exercises
 the routes without launching another application, opening Finder, or moving a
 file.
 
+Text-file access is likewise focused rather than a duplicate filesystem
+library:
+
+```zs
+const app = Application.current();
+const source = try await app.files.readText(in path);
+try await app.files.writeText(in path, in source);
+```
+
+`FileManager` composes Z's portable `std/fs` operations with Zapp's application
+path authority and `FileError` context. Blocking reads and writes run on native
+workers; awaiting them suspends the Z task instead of blocking `thread.main`.
+WebView routes additionally require `fs:read` or `fs:write` in both the global
+manifest and the originating window's selected capability profiles.
+
 `Application` owns a single internal filesystem-authority identity shared with
 its managers. The authority turns authored path aliases and absolute paths into
 nominal `AuthorizedPath` evidence only after platform canonicalization and

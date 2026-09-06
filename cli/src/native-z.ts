@@ -237,6 +237,20 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
       "menu",
       resolvePermissions(config.permissions),
     )},
+    fsRead: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "fs:read",
+        resolvePermissions(config.permissions),
+      )
+    },
+    fsWrite: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "fs:write",
+        resolvePermissions(config.permissions),
+      )
+    },
     clipboardRead: ${
       config.permissions !== undefined
       && isPermissionAllowed(

@@ -13,6 +13,8 @@ export default defineConfig({
     permissions: [
       "window:create",
       "menu",
+      "fs:read",
+      "fs:write",
       "clipboard:read",
       "clipboard:write",
       "notifications",
@@ -24,6 +26,8 @@ export default defineConfig({
         permissions: [
           "window:create",
           "menu",
+          "fs:read",
+          "fs:write",
           "clipboard:read",
           "clipboard:write",
           "notifications",

@@ -11,6 +11,7 @@
       "./clipboard": "api/zapp/clipboard.zs",
       "./notifications": "api/zapp/notifications.zs",
       "./shell": "api/zapp/shell.zs",
+      "./files": "api/zapp/files.zs",
       "./menu": "api/zapp/menu.zs",
       "./service": "api/zapp/service.zs",
       "./worker": "framework/worker/worker-manager.zs"

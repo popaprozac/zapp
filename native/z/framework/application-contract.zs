@@ -9,6 +9,7 @@ import { DialogManager } from "./dialog.zs";
 import { ClipboardManager } from "./clipboard.zs";
 import { NotificationManager } from "./notifications.zs";
 import { ShellManager } from "./shell.zs";
+import { FileManager } from "./files.zs";
 import { FilesystemAuthority } from "./filesystem-authority.zs";
 import { ApplicationMenu } from "./application-menu.zs";
 import { WorkerManager } from "./worker/worker-manager.zs";
@@ -32,6 +33,7 @@ export readonly class PreparedApplication on thread.main {
   readonly notifications: NotificationManager;
   readonly filesystemAuthority: FilesystemAuthority;
   readonly shell: ShellManager;
+  readonly files: FileManager;
   readonly menu: ApplicationMenu;
   readonly services: AsyncServices;
   readonly lifecycles: ServiceLifecycles;

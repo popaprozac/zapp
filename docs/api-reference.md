@@ -128,6 +128,42 @@ path remains an ordinary string: there is no public grant token or `grant()`
 call. Operation permissions remain independent, so selecting a path does not
 by itself authorize opening, revealing, reading, writing, or trashing it.
 
+### `Application.current().files`
+
+The focused files manager provides asynchronous UTF-8 text operations without
+blocking the UI thread:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+import { FileError } from "@zappdev/runtime/files";
+
+const files = Application.current().files;
+try {
+  const source = await files.readText("$resources/default-note.txt");
+  await files.writeText("$userData/note.txt", source);
+} catch (error) {
+  if (error instanceof FileError) {
+    console.error(error.operation, error.path, error.message);
+  }
+}
+```
+
+The native Z surface has the same manager shape:
+
+```zs
+const app = Application.current();
+const source = try await app.files.readText(in path);
+try await app.files.writeText(in path, in source);
+```
+
+WebView calls require `fs:read` or `fs:write` globally and in the originating
+window's selected capability profiles. Both native and WebView calls must also
+target a root declared by `security.filesystem.allow` or a path authorized by
+a trusted file dialog. `FileError` preserves the operation, authored path, and
+native failure message. Binary I/O, metadata, directories, and removal remain
+future focused operations; portable mechanics continue to live in Z's
+`std/fs`.
+
 ### `Application.current().shell`
 
 The focused shell manager makes every operating-system handoff explicit and

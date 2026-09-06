@@ -41,6 +41,10 @@ import {
   routeNotificationBridgeMessage,
 } from "../../notifications-bridge.zs";
 import {
+  isFileBridgeMessage,
+  routeFileBridgeMessage,
+} from "../../files-bridge.zs";
+import {
   FrontendMenuCommandDispatch,
   MenuBridgeRoute,
   routeMenuBridgeMessage,
@@ -221,9 +225,67 @@ async function routeAfterNotificationMessageAndDeliver(
     }
     unhandled(value) => value;
   };
+  if (isFileBridgeMessage(in forwarded)) {
+    return await routeFileMessageAndDeliver(
+      move forwarded,
+      windowId,
+      requestId,
+      generation,
+      tracked
+    );
+  }
+  return await routeWindowOrServiceMessageAndDeliver(
+    move forwarded,
+    services,
+    windowId,
+    requestId,
+    generation,
+    tracked
+  );
+}
+
+async function routeFileMessageAndDeliver(
+  message: BridgeMessage,
+  windowId: i32,
+  requestId: u64,
+  generation: u64,
+  tracked: boolean
+): boolean on thread.main {
+  const current = currentMacOSApplication();
+  const selected = current.capabilitiesForWindow(windowId);
+  const capabilities = match (selected) {
+    some(value) => value;
+    none => {
+      if (tracked) finishPendingRequest(windowId, requestId, generation);
+      deliverInvalidWindowResponse(message.id, windowId);
+      return true;
+    }
+  };
+  const permissions = current.permissions;
+  const files = current.files;
+  const response = await routeFileBridgeMessage(
+    move message,
+    in permissions,
+    capabilities,
+    files
+  );
+  if (tracked) finishPendingRequest(windowId, requestId, generation);
+  deliverResponse(in response, windowId);
+  return true;
+}
+
+async function routeWindowOrServiceMessageAndDeliver(
+  message: BridgeMessage,
+  services: AsyncServices,
+  windowId: i32,
+  requestId: u64,
+  generation: u64,
+  tracked: boolean
+): boolean on thread.main {
+  const current = currentMacOSApplication();
   let windows = current.windowManager;
   const windowRoute = selectWindowMessageRoute(
-    move forwarded,
+    move message,
     windowId,
     inout windows
   );

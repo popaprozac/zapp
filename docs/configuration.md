@@ -503,6 +503,25 @@ await shell.reveal("$userData/report.pdf");
 await shell.trash("$userData/old-report.pdf");
 ```
 
+Direct file reads and writes add an operation permission while reusing the same
+path authority:
+
+```ts
+security: {
+  permissions: ["fs:read", "fs:write"],
+  filesystem: { allow: ["$userData/**", "$resources"] },
+  capabilities: {
+    default: { permissions: ["fs:read", "fs:write"] },
+  },
+}
+```
+
+```ts
+const files = Application.current().files;
+const source = await files.readText("$resources/default-note.txt");
+await files.writeText("$userData/note.txt", source);
+```
+
 Path-based manager calls require a configured filesystem root. A bare
 `shell:*` permission never grants authority over every path, and `trash` moves
 an item to the operating system Trash rather than permanently deleting it.

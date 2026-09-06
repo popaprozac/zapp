@@ -67,6 +67,10 @@ import {
   createShellManager,
 } from "../framework/shell.zs";
 import {
+  FileManager,
+  createFileManager,
+} from "../framework/files.zs";
+import {
   FilesystemAuthority,
   createFilesystemAuthority,
 } from "../framework/filesystem-authority.zs";
@@ -150,6 +154,7 @@ export readonly class Application {
   readonly clipboard: ClipboardManager;
   readonly notifications: NotificationManager;
   readonly shell: ShellManager;
+  readonly files: FileManager;
   readonly menu: ApplicationMenu;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
@@ -172,6 +177,7 @@ export readonly class Application {
     );
     this.dialogs = createDialogManager(this.filesystemAuthority);
     this.shell = createShellManager(this.filesystemAuthority);
+    this.files = createFileManager(this.filesystemAuthority);
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
@@ -259,6 +265,7 @@ function prepareApplication(
   const notifications = app.notifications;
   const filesystemAuthority = app.filesystemAuthority;
   const shell = app.shell;
+  const files = app.files;
   const menu = app.menu;
   const workers = app.workers;
   const services = app.services;
@@ -275,6 +282,7 @@ function prepareApplication(
     notifications,
     filesystemAuthority,
     shell,
+    files,
     menu,
     services: new AsyncServices({
       synchronous: routes,

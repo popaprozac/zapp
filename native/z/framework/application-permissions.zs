@@ -4,6 +4,8 @@
 export readonly struct ApplicationPermissions {
   windowCreate: boolean = true;
   menu: boolean = true;
+  fsRead: boolean = false;
+  fsWrite: boolean = false;
   clipboardRead: boolean = false;
   clipboardWrite: boolean = false;
   notifications: boolean = false;

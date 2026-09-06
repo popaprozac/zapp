@@ -174,7 +174,10 @@ test("package exports focused application and menu facades", async () => {
   ).json() as { exports: Record<string, string> };
   expect(manifest.exports["./application"]).toBe("./application-api.ts");
   expect(manifest.exports["./clipboard"]).toBe("./clipboard-public.ts");
+  expect(manifest.exports["./files"]).toBe("./files-public.ts");
   expect(manifest.exports["./menu"]).toBe("./menu-public.ts");
+  const publicFiles = await import("./files-public");
+  expect(Object.keys(publicFiles)).toEqual(["FileError"]);
   const publicMenu = await import("./menu-public");
   expect(Object.keys(publicMenu).sort()).toEqual([
     "Command",

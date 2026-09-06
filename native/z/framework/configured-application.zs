@@ -35,6 +35,8 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: true,
     menu: true,
+    fsRead: false,
+    fsWrite: false,
     clipboardRead: false,
     clipboardWrite: false,
     notifications: false,

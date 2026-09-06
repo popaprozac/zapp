@@ -111,7 +111,9 @@ its descendants under
 `security.filesystem.allow`. This applies to the focused manager in both Z and
 TypeScript. The permission answers *which operation* is allowed; the
 filesystem policy answers *which target* is allowed, so no duplicate
-`fs:read`/`fs:write` grant is required.
+`fs:read`/`fs:write` grant is required for a shell operation. Direct
+`Application.current().files` access does require `fs:read` or `fs:write`
+at application and originating-window scope in addition to this path proof.
 
 Trusted file dialogs can extend that target authority without weakening the
 operation permission. `openFile`, `openFiles`, and `saveFile` grant only the
@@ -128,7 +130,9 @@ backends cannot manufacture from an unchecked `String`. Shell code therefore
 receives checked path evidence instead of repeating policy. The same authority
 is shared by Z-owned dialogs and shell operations, so transparent
 dialog-selected session grants immediately extend the same runtime path
-authority. It is also the intended seam for the future focused file manager.
+authority. The focused file manager uses that seam now: native Z calls it
+directly, while WebView calls first pass app-wide and window-profile permission
+checks and then receive the same canonical path authorization.
 
 Navigation permission is not bridge permission. The native WebKit message
 entrypoint verifies provenance before it reads or decodes a message:

@@ -13,6 +13,7 @@ import {
   OpenDialogOptions,
   SaveDialogOptions,
 } from "zapp/dialog";
+import { FileError } from "zapp/files";
 import {
   CreateNoteInput,
   EditNoteInput,
@@ -180,12 +181,12 @@ export readonly class NotesService implements ServiceLifecycle {
       some(value) => value;
       none => return Option<NoteTransfer>.none;
     };
-    const loaded = attempt fs.readText(path);
+    const loaded = attempt await application.files.readText(in path);
     const source = match (loaded) {
       success(value) => value;
-      failure(error) => throw noteTransferError(
+      failure(error) => throw transferFileError(
         NoteTransferOperation.importFile,
-        `could not read ${path}: ${error}`
+        in error
       );
     };
     const decoded = attempt decodeNotesDocument(in source);
@@ -251,12 +252,15 @@ export readonly class NotesService implements ServiceLifecycle {
       some(value) => value;
       none => return Option<NoteTransfer>.none;
     };
-    const written = attempt fs.writeText(path, source);
+    const written = attempt await application.files.writeText(
+      in path,
+      in source
+    );
     match (written) {
       success => {}
-      failure(error) => throw noteTransferError(
+      failure(error) => throw transferFileError(
         NoteTransferOperation.exportFile,
-        `could not write ${path}: ${error}`
+        in error
       );
     }
     return Option.some(NoteTransfer({
@@ -487,4 +491,14 @@ function transferDialogError(
   in error: DialogError
 ): NoteTransferError {
   return noteTransferError(operation, copy error.message);
+}
+
+function transferFileError(
+  operation: NoteTransferOperation,
+  in error: FileError
+): NoteTransferError {
+  return noteTransferError(
+    operation,
+    `${error.path}: ${error.message}`
+  );
 }

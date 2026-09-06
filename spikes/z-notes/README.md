@@ -99,7 +99,9 @@ cancellation, and native-window controls remain visible as composition
 diagnostics.
 
 **Import JSON…** and **Export JSON…** exercise the application-owned
-`app.dialogs` manager through generated async service bindings. Cancellation
+`app.dialogs` and `app.files` managers through generated async service bindings.
+The dialog grants the selected path, then the files manager performs UTF-8 I/O
+on a native worker while the main-executor service task is suspended. Cancellation
 is ordinary absence (`null` in generated TypeScript, `Option.none` in Z), while
 native dialog, filesystem, and codec failures become a generated
 `NoteTransferError`. Export writes a versioned document containing portable

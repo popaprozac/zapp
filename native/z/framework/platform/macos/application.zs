@@ -56,6 +56,7 @@ export async function runMacOSApplication(
   let notifications = config.notifications;
   let filesystemAuthority = config.filesystemAuthority;
   let shell = config.shell;
+  const files = config.files;
   let menu = config.menu;
   const registeredWindows = windows.all();
   if (registeredWindows.length == 0) {
@@ -76,6 +77,7 @@ export async function runMacOSApplication(
     clipboard,
     notifications,
     shell,
+    files,
     menu
   );
   const workerManagerLifetime = installApplicationWorkerManager(

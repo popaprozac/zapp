@@ -187,6 +187,8 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("configuredApplicationMetadata");
     expect(output).toContain("configuredApplicationPermissions");
     expect(output).toContain("windowCreate: true");
+    expect(output).toContain("fsRead: false");
+    expect(output).toContain("fsWrite: false");
     expect(output).toContain("clipboardRead: false");
     expect(output).toContain("clipboardWrite: false");
     expect(output).toContain("notifications: false");
@@ -216,6 +218,18 @@ describe("renderZApplicationMetadata", () => {
     });
     expect(output).toContain("clipboardRead: true");
     expect(output).toContain("clipboardWrite: false");
+  });
+
+  it("requires explicit file grants in generated native Z policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "Files",
+      identifier: "com.example.files",
+      version: "1.0.0",
+      assetDir: "./dist",
+      permissions: ["fs:read"],
+    });
+    expect(output).toContain("fsRead: true");
+    expect(output).toContain("fsWrite: false");
   });
 
   it("requires an explicit notification grant in generated native Z policy", () => {
@@ -738,6 +752,10 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/shell.zs", import.meta.url),
       "utf8",
     );
+    const files = readFileSync(
+      new URL("../../native/z/framework/files.zs", import.meta.url),
+      "utf8",
+    );
     const filesystemAuthority = readFileSync(
       new URL(
         "../../native/z/framework/filesystem-authority.zs",
@@ -747,6 +765,17 @@ describe("Z native host inputs", () => {
     );
     const shellBridge = readFileSync(
       new URL("../../native/z/framework/shell-bridge.zs", import.meta.url),
+      "utf8",
+    );
+    const filesBridge = readFileSync(
+      new URL("../../native/z/framework/files-bridge.zs", import.meta.url),
+      "utf8",
+    );
+    const messageRouting = readFileSync(
+      new URL(
+        "../../native/z/framework/platform/macos/message-routing.zs",
+        import.meta.url,
+      ),
       "utf8",
     );
     const macOSDialogs = readFileSync(
@@ -880,6 +909,9 @@ describe("Z native host inputs", () => {
       "this.shell = createShellManager(this.filesystemAuthority);",
     );
     expect(application).toContain(
+      "this.files = createFileManager(this.filesystemAuthority);",
+    );
+    expect(application).toContain(
       "this.workers = createWorkerManager(configuredApplicationWorkers());",
     );
     expect(application).toContain(
@@ -902,6 +934,7 @@ describe("Z native host inputs", () => {
     expect(contract).toContain("readonly dialogs: DialogManager");
     expect(contract).toContain("readonly filesystemAuthority: FilesystemAuthority");
     expect(contract).toContain("readonly shell: ShellManager");
+    expect(contract).toContain("readonly files: FileManager");
     expect(filesystemAuthority).toContain(
       "internal readonly struct AuthorizedPath",
     );
@@ -935,6 +968,19 @@ describe("Z native host inputs", () => {
     expect(shellBridge).toContain("permissions.shellReveal");
     expect(shellBridge).toContain("permissions.shellTrash");
     expect(shellBridge).toContain("if (!policy(in navigationProfile, in input.url))");
+    expect(files).toContain("export readonly class FileManager on thread.main");
+    expect(files).toContain("async function readText(");
+    expect(files).toContain("async function writeText(");
+    expect(files).toContain("thread.spawn(move (): String throws String");
+    expect(files).toContain("thread.spawn(move (): void throws String");
+    expect(filesBridge).toContain('message.method == "__zapp:files:read-text"');
+    expect(filesBridge).toContain('|| method == "__zapp:files:write-text"');
+    expect(filesBridge).toContain("internal function isFileBridgeMessage");
+    expect(filesBridge).toContain("return await writeTextFile(move message, files);");
+    expect(messageRouting).toContain("if (isFileBridgeMessage(in forwarded))");
+    expect(messageRouting).toContain("routeFileMessageAndDeliver(");
+    expect(filesBridge).toContain("permissions.fsRead");
+    expect(filesBridge).toContain("permissions.fsWrite");
     expect(platform).toContain("export async function runApplicationPlatform(");
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");

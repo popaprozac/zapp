@@ -10,6 +10,7 @@ export interface ZappErrorPayload {
 export interface BridgeErrorPayload extends ZappErrorPayload {
   operation?: string;
   target?: string;
+  path?: string;
   windowId?: string;
   workerId?: string;
   service?: string;
@@ -110,6 +111,9 @@ export function errorFromBridgePayload(payload: string): Error {
           : {}),
         ...(typeof parsed.target === "string" && parsed.target.length > 0
           ? { target: parsed.target }
+          : {}),
+        ...(typeof parsed.path === "string" && parsed.path.length > 0
+          ? { path: parsed.path }
           : {}),
         ...(typeof parsed.windowId === "string" && parsed.windowId.length > 0
           ? { windowId: parsed.windowId }
