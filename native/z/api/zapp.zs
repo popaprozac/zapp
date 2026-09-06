@@ -67,6 +67,10 @@ import {
   createShellManager,
 } from "../framework/shell.zs";
 import {
+  FilesystemAuthority,
+  createFilesystemAuthority,
+} from "../framework/filesystem-authority.zs";
+import {
   ApplicationMenu,
   createApplicationMenu,
 } from "../framework/application-menu.zs";
@@ -149,6 +153,7 @@ export readonly class Application {
   readonly menu: ApplicationMenu;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
+  internal readonly filesystemAuthority: FilesystemAuthority;
   internal readonly runState: ApplicationRunState;
   internal readonly lifecycleMarker: i32 on thread.main;
 
@@ -163,7 +168,10 @@ export readonly class Application {
     this.dialogs = createDialogManager();
     this.clipboard = createClipboardManager();
     this.notifications = createNotificationManager();
-    this.shell = createShellManager(in this.context.paths);
+    this.filesystemAuthority = createFilesystemAuthority(
+      in this.context.paths
+    );
+    this.shell = createShellManager(this.filesystemAuthority);
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
@@ -249,6 +257,7 @@ function prepareApplication(
   const dialogs = app.dialogs;
   const clipboard = app.clipboard;
   const notifications = app.notifications;
+  const filesystemAuthority = app.filesystemAuthority;
   const shell = app.shell;
   const menu = app.menu;
   const workers = app.workers;
@@ -264,6 +273,7 @@ function prepareApplication(
     dialogs,
     clipboard,
     notifications,
+    filesystemAuthority,
     shell,
     menu,
     services: new AsyncServices({

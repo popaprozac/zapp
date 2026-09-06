@@ -29,6 +29,9 @@ import { macOSDialogBackend } from "./dialog-backend.zs";
 import { macOSClipboardBackend } from "./clipboard-backend.zs";
 import { macOSNotificationBackend } from "./notifications-backend.zs";
 import { macOSShellBackend } from "./shell-backend.zs";
+import {
+  macOSFilesystemAuthorityBackend,
+} from "./filesystem-authority-backend.zs";
 import { macOSApplicationMenuBackend } from "./menu-backend.zs";
 import {
   startConfiguredApplicationWorkers,
@@ -51,6 +54,7 @@ export async function runMacOSApplication(
   let dialogs = config.dialogs;
   let clipboard = config.clipboard;
   let notifications = config.notifications;
+  let filesystemAuthority = config.filesystemAuthority;
   let shell = config.shell;
   let menu = config.menu;
   const registeredWindows = windows.all();
@@ -98,12 +102,14 @@ export async function runMacOSApplication(
   dialogs.start(macOSDialogBackend());
   clipboard.start(macOSClipboardBackend());
   notifications.start(macOSNotificationBackend());
+  filesystemAuthority.start(macOSFilesystemAuthorityBackend());
   shell.start(macOSShellBackend());
   const started = attempt config.lifecycles.start(in context);
   match (started) {
     success => {}
     failure(startError) => {
       shell.stop();
+      filesystemAuthority.stop();
       notifications.stop();
       clipboard.stop();
       dialogs.stop();
@@ -152,6 +158,7 @@ export async function runMacOSApplication(
   workers.join();
   workerManager.finish();
   shell.stop();
+  filesystemAuthority.stop();
   notifications.stop();
   clipboard.stop();
   dialogs.stop();

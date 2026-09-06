@@ -342,6 +342,15 @@ manager applies the same filesystem resource authority. Smoke mode exercises
 the routes without launching another application, opening Finder, or moving a
 file.
 
+`Application` owns a single internal filesystem-authority identity shared with
+its managers. The authority turns authored path aliases and absolute paths into
+nominal `AuthorizedPath` evidence only after platform canonicalization and
+compiled-root containment. The macOS backend currently supplies those low-level
+mechanics through Foundation. As Z's portable filesystem standard library
+matures, canonicalization, path operations, and other generally useful native
+calls should move into `std/fs`; Zapp should retain only application policy,
+configured roots, session grants, and focused framework errors.
+
 The same application identity owns one logical application menu. Applications
 define commands independently from native menu-item allocations, so the same
 command identity can later power menus, shortcuts, and toolbars:

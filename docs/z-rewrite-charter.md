@@ -485,6 +485,12 @@ Grow from executable application needs rather than porting directory breadth:
 - packaging and resources; and
 - optional worker engines behind the common engine contract.
 
+Keep the filesystem boundary layered: Zapp owns application permissions,
+configured roots, and dialog-derived authority, while portable path and file
+mechanics should move to Z's standard library as its cross-platform surface
+matures. Framework platform backends are replaceable bootstrap implementations,
+not a second general-purpose filesystem library.
+
 ### Phase 5: additional platforms
 
 - Share the typed application core across macOS and iOS first.

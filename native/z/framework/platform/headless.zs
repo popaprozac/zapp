@@ -25,6 +25,9 @@ import { unsupportedDialogBackend } from "../dialog.zs";
 import { unsupportedClipboardBackend } from "../clipboard.zs";
 import { unsupportedNotificationBackend } from "../notifications.zs";
 import { unsupportedShellBackend } from "../shell.zs";
+import {
+  unsupportedFilesystemAuthorityBackend,
+} from "../filesystem-authority.zs";
 
 class HeadlessApplicationRuntime {
   readonly updates: TaskScope;
@@ -125,6 +128,8 @@ export async function runApplicationPlatform(
   clipboard.start(unsupportedClipboardBackend());
   let notifications = config.notifications;
   notifications.start(unsupportedNotificationBackend());
+  let filesystemAuthority = config.filesystemAuthority;
+  filesystemAuthority.start(unsupportedFilesystemAuthorityBackend());
   let shell = config.shell;
   shell.start(unsupportedShellBackend());
   const started = attempt config.lifecycles.start(in context);
@@ -132,6 +137,7 @@ export async function runApplicationPlatform(
     success => {}
     failure(startError) => {
       shell.stop();
+      filesystemAuthority.stop();
       notifications.stop();
       clipboard.stop();
       dialogs.stop();
@@ -174,6 +180,7 @@ export async function runApplicationPlatform(
   workers.join();
   workerManager.finish();
   shell.stop();
+  filesystemAuthority.stop();
   notifications.stop();
   clipboard.stop();
   dialogs.stop();

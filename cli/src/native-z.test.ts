@@ -9,6 +9,7 @@ import {
   preparedZServicesAreCurrent,
   renderZApplicationMetadata,
   renderZConfiguredDesktopSmoke,
+  renderZConfiguredFilesystem,
   renderZConfiguredWebView,
   renderZWebviewBootstrapConfig,
   renderZNativeManifest,
@@ -339,7 +340,6 @@ describe("renderZConfiguredWebView", () => {
         origins: ["https://docs.example.com"],
         externalSchemes: ["https:", "mailto:"],
       }],
-      ["$userData/**", "$resources"],
     );
     expect(output).toContain('return "zapp://app/";');
     expect(output).toContain("configuredFrontendIsDevelopment");
@@ -354,6 +354,15 @@ describe("renderZConfiguredWebView", () => {
     expect(output).toContain('Option.some("https://docs.example.com")');
     expect(output).toContain('Option.some("mailto:")');
     expect(output).toContain("configuredNavigationExternalSchemeAtIndex");
+  });
+});
+
+describe("renderZConfiguredFilesystem", () => {
+  it("emits canonical configured roots independently from WebView policy", () => {
+    const output = renderZConfiguredFilesystem([
+      "$userData/**",
+      "$resources",
+    ]);
     expect(output).toContain("configuredFilesystemAllowAtIndex");
     expect(output).toContain('Option.some("$userData")');
     expect(output).toContain('Option.some("$resources")');
@@ -729,6 +738,13 @@ describe("Z native host inputs", () => {
       new URL("../../native/z/framework/shell.zs", import.meta.url),
       "utf8",
     );
+    const filesystemAuthority = readFileSync(
+      new URL(
+        "../../native/z/framework/filesystem-authority.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const shellBridge = readFileSync(
       new URL("../../native/z/framework/shell-bridge.zs", import.meta.url),
       "utf8",
@@ -804,6 +820,13 @@ describe("Z native host inputs", () => {
       ),
       "utf8",
     );
+    const macOSFilesystemAuthority = readFileSync(
+      new URL(
+        "../../native/z/framework/platform/macos/filesystem-authority-backend.zs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     const workerSpike = readFileSync(
       new URL("../../native/z/smokes/zjs-worker-host/main.zs", import.meta.url),
       "utf8",
@@ -849,7 +872,10 @@ describe("Z native host inputs", () => {
     );
     expect(application).toContain("this.dialogs = createDialogManager();");
     expect(application).toContain(
-      "this.shell = createShellManager(in this.context.paths);",
+      "this.filesystemAuthority = createFilesystemAuthority(",
+    );
+    expect(application).toContain(
+      "this.shell = createShellManager(this.filesystemAuthority);",
     );
     expect(application).toContain(
       "this.workers = createWorkerManager(configuredApplicationWorkers());",
@@ -872,8 +898,23 @@ describe("Z native host inputs", () => {
     expect(contract).toContain("readonly capabilities: ApplicationCapabilities");
     expect(contract).toContain("readonly events: ApplicationEvents");
     expect(contract).toContain("readonly dialogs: DialogManager");
+    expect(contract).toContain("readonly filesystemAuthority: FilesystemAuthority");
     expect(contract).toContain("readonly shell: ShellManager");
+    expect(filesystemAuthority).toContain(
+      "internal readonly struct AuthorizedPath",
+    );
+    expect(filesystemAuthority).toContain(
+      "internal readonly class FilesystemAuthority on thread.main",
+    );
+    expect(filesystemAuthority).toContain(
+      "configuredFilesystemAllowAtIndex(index)",
+    );
+    expect(filesystemAuthority).toContain(
+      "this.backend.contains(in path, in root)",
+    );
     expect(shell).toContain("export readonly class ShellManager on thread.main");
+    expect(shell).toContain("readonly authority: FilesystemAuthority");
+    expect(shell).toContain("this.authority.authorize(in path)");
     expect(shell).toContain("function openExternal(");
     expect(shell).toContain("function openPath(");
     expect(shell).toContain("function reveal(");
@@ -890,6 +931,16 @@ describe("Z native host inputs", () => {
     expect(platform).toContain('from "./platform/macos/application.zs"');
     expect(platform).toContain("return try await runMacOSApplication(move config, updates);");
     expect(macOSApplication).toContain("events.start(quitApplication);");
+    expect(macOSApplication).toContain(
+      "filesystemAuthority.start(macOSFilesystemAuthorityBackend());",
+    );
+    expect(macOSApplication).toContain("filesystemAuthority.stop();");
+    expect(macOSFilesystemAuthority).toContain(
+      "normalizeMacOSFilesystemPath",
+    );
+    expect(macOSFilesystemAuthority).toContain(
+      "macOSFilesystemPathIsWithin",
+    );
     expect(macOSApplicationHost).toContain("implements AppKit.NSApplicationDelegate");
     expect(macOSApplicationHost).toContain('as "applicationShouldTerminate:"');
     expect(headless).toContain("class HeadlessApplicationRuntime");

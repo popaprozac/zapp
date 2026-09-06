@@ -1,5 +1,8 @@
 import { thread } from "std/thread";
-import { ApplicationPaths } from "../api/zapp/service.zs";
+import {
+  AuthorizedPath,
+  FilesystemAuthority,
+} from "./filesystem-authority.zs";
 
 export enum ShellOperation {
   openExternal,
@@ -21,19 +24,12 @@ internal type ShellOpenExternalOperation = (
 internal type ShellPathOperation = (
   operation: ShellOperation,
   in target: String,
-  in resolvedPath: String
+  in path: AuthorizedPath
 ) => void throws ShellError on thread.main;
-
-internal type ShellAuthorizePathOperation = (
-  operation: ShellOperation,
-  in path: String,
-  in paths: ApplicationPaths
-) => String throws ShellError on thread.main;
 
 internal struct ShellBackend {
   openExternal: ShellOpenExternalOperation;
   operateOnPath: ShellPathOperation;
-  authorizePath: ShellAuthorizePathOperation;
 }
 
 function shellUnavailable(
@@ -61,7 +57,7 @@ function rejectOpenExternal(
 function rejectPathOperation(
   operation: ShellOperation,
   in target: String,
-  in resolvedPath: String
+  in path: AuthorizedPath
 ): void throws ShellError on thread.main {
   throw shellUnavailable(
     operation,
@@ -70,23 +66,10 @@ function rejectPathOperation(
   );
 }
 
-function rejectPathAuthorization(
-  operation: ShellOperation,
-  in path: String,
-  in paths: ApplicationPaths
-): String throws ShellError on thread.main {
-  throw shellUnavailable(
-    operation,
-    in path,
-    "shell access is unavailable before Application.run()"
-  );
-}
-
 function inactiveShellBackend(): ShellBackend on thread.main {
   const openExternal: ShellOpenExternalOperation = rejectOpenExternal;
   const operateOnPath: ShellPathOperation = rejectPathOperation;
-  const authorizePath: ShellAuthorizePathOperation = rejectPathAuthorization;
-  return ShellBackend({ openExternal, operateOnPath, authorizePath });
+  return ShellBackend({ openExternal, operateOnPath });
 }
 
 function rejectUnsupportedOpenExternal(
@@ -102,7 +85,7 @@ function rejectUnsupportedOpenExternal(
 function rejectUnsupportedPathOperation(
   operation: ShellOperation,
   in target: String,
-  in resolvedPath: String
+  in path: AuthorizedPath
 ): void throws ShellError on thread.main {
   throw shellUnavailable(
     operation,
@@ -111,30 +94,16 @@ function rejectUnsupportedPathOperation(
   );
 }
 
-function rejectUnsupportedPathAuthorization(
-  operation: ShellOperation,
-  in path: String,
-  in paths: ApplicationPaths
-): String throws ShellError on thread.main {
-  throw shellUnavailable(
-    operation,
-    in path,
-    "filesystem-backed shell operations are unsupported by the active application platform"
-  );
-}
-
 internal function unsupportedShellBackend(): ShellBackend on thread.main {
   const openExternal: ShellOpenExternalOperation =
     rejectUnsupportedOpenExternal;
   const operateOnPath: ShellPathOperation = rejectUnsupportedPathOperation;
-  const authorizePath: ShellAuthorizePathOperation =
-    rejectUnsupportedPathAuthorization;
-  return ShellBackend({ openExternal, operateOnPath, authorizePath });
+  return ShellBackend({ openExternal, operateOnPath });
 }
 
 class ShellManagerState on thread.main {
   backend: ShellBackend;
-  readonly paths: ApplicationPaths;
+  readonly authority: FilesystemAuthority;
 
   function openExternal(
     in url: String
@@ -146,15 +115,19 @@ class ShellManagerState on thread.main {
     operation: ShellOperation,
     in path: String
   ): void throws ShellError {
-    const resolved = try this.backend.authorizePath(
-      operation,
-      in path,
-      in this.paths
-    );
+    const authorization = attempt this.authority.authorize(in path);
+    const authorized = match (authorization) {
+      success(value) => value;
+      failure(error) => throw ShellError({
+        operation,
+        target: copy error.target,
+        message: copy error.message,
+      });
+    };
     try this.backend.operateOnPath(
       operation,
       in path,
-      in resolved
+      in authorized
     );
   }
 
@@ -170,16 +143,10 @@ class ShellManagerState on thread.main {
 export readonly class ShellManager on thread.main {
   internal readonly state: ShellManagerState;
 
-  internal constructor(in paths: ApplicationPaths) {
+  internal constructor(authority: FilesystemAuthority) {
     this.state = new ShellManagerState({
       backend: inactiveShellBackend(),
-      paths: ApplicationPaths({
-        executable: copy paths.executable,
-        resources: copy paths.resources,
-        data: copy paths.data,
-        config: copy paths.config,
-        cache: copy paths.cache,
-      }),
+      authority,
     });
   }
 
@@ -220,7 +187,7 @@ export readonly class ShellManager on thread.main {
 }
 
 internal function createShellManager(
-  in paths: ApplicationPaths
+  authority: FilesystemAuthority
 ): ShellManager on thread.main {
-  return new ShellManager(in paths);
+  return new ShellManager(authority);
 }

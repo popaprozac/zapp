@@ -12,6 +12,10 @@ import { createWindowManager } from "../framework/window.zs";
 import { createDialogManager } from "../framework/dialog.zs";
 import { createClipboardManager } from "../framework/clipboard.zs";
 import { createNotificationManager } from "../framework/notifications.zs";
+import { createShellManager } from "../framework/shell.zs";
+import {
+  createFilesystemAuthority,
+} from "../framework/filesystem-authority.zs";
 import { createApplicationMenu } from "../framework/application-menu.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { createWorkerManager } from "../framework/worker/worker-manager.zs";
@@ -28,6 +32,15 @@ async function main(): i32 on thread.main {
   let arguments = Array<String>();
   let services = createAsyncServices();
   let lifecycles = createServiceLifecycles();
+  const filesystemPaths = ApplicationPaths({
+    executable: "/tmp/zapp-headless",
+    resources: "/tmp",
+    data: "/tmp/zapp-headless/data",
+    config: "/tmp/zapp-headless/config",
+    cache: "/tmp/zapp-headless/cache",
+  });
+  const filesystemAuthority = createFilesystemAuthority(in filesystemPaths);
+  const shell = createShellManager(filesystemAuthority);
   const config = new PreparedApplication({
     metadata: ApplicationMetadata({
       name: "Headless",
@@ -58,6 +71,8 @@ async function main(): i32 on thread.main {
     dialogs: createDialogManager(),
     clipboard: createClipboardManager(),
     notifications: createNotificationManager(),
+    filesystemAuthority,
+    shell,
     menu: createApplicationMenu(),
     services: services.freeze(),
     lifecycles: lifecycles.freeze(),
