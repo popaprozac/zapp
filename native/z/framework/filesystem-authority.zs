@@ -166,7 +166,7 @@ class FilesystemAuthorityState on thread.main {
 
   function stop(inout this): void {
     this.backend = inactiveFilesystemAuthorityBackend();
-    this.grants = Array<FilesystemSessionGrant>();
+    this.grants.clear();
   }
 }
 

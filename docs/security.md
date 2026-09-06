@@ -126,9 +126,9 @@ application-owned `FilesystemAuthority`. It expands and canonicalizes an input,
 checks the compiled roots, and returns a nominal `AuthorizedPath` that platform
 backends cannot manufacture from an unchecked `String`. Shell code therefore
 receives checked path evidence instead of repeating policy. The same authority
-is the intended seam for Z-owned dialogs and the future focused file manager;
-transparent dialog-selected session grants have not yet migrated to this new
-runtime tier.
+is shared by Z-owned dialogs and shell operations, so transparent
+dialog-selected session grants immediately extend the same runtime path
+authority. It is also the intended seam for the future focused file manager.
 
 Navigation permission is not bridge permission. The native WebKit message
 entrypoint verifies provenance before it reads or decodes a message:
