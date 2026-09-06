@@ -293,7 +293,25 @@ actions, categories, and delivery events remain later typed tiers.
 
 Operating-system handoff is a separate focused manager. URL handoff is
 intentionally not a navigation side effect, and filesystem handoff remains
-inside the path authority declared by `security.filesystem.allow`.
+inside configured or user-approved path authority.
+
+Trusted native dialogs add authority without exposing a separate grant API:
+
+```zs
+const selected = try await Application.current().dialogs.openFile(
+  OpenDialogOptions({ title: "Choose a report" })
+);
+match (selected) {
+  some(path) => try Application.current().shell.reveal(in path);
+  none => {}
+}
+```
+
+`openFile` and `saveFile` grant the exact selected path for the application
+session. `openFiles` grants every returned path, while `openDirectory` grants
+the directory and its descendants. All methods still return ordinary `String`
+values inside `Option`; the nominal authorization evidence stays internal to
+Zapp.
 
 ```zs
 import { Application } from "zapp";
@@ -335,8 +353,9 @@ Frontend calls require the corresponding app-wide `shell:open`,
 `shell:reveal`, or `shell:trash` grant and the same grant in the originating
 window's capability profile. External URLs additionally require a matching
 scheme in the selected navigation profile. Filesystem targets must resolve
-inside `security.filesystem.allow`; `shell:*` authorizes the operation while
-the filesystem policy constrains its target. Native Z does not serialize
+inside `security.filesystem.allow` or authority established by a trusted file
+dialog; `shell:*` authorizes the operation while the filesystem policy
+constrains its target. Native Z does not serialize
 through the WebView bridge or repeat its permission checks, but the focused
 manager applies the same filesystem resource authority. Smoke mode exercises
 the routes without launching another application, opening Finder, or moving a

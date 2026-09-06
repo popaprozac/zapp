@@ -68,7 +68,7 @@ async function main(): i32 on thread.main {
     }),
     events: createApplicationEvents(),
     windows: createWindowManager(),
-    dialogs: createDialogManager(),
+    dialogs: createDialogManager(filesystemAuthority),
     clipboard: createClipboardManager(),
     notifications: createNotificationManager(),
     filesystemAuthority,

@@ -113,6 +113,14 @@ TypeScript. The permission answers *which operation* is allowed; the
 filesystem policy answers *which target* is allowed, so no duplicate
 `fs:read`/`fs:write` grant is required.
 
+Trusted file dialogs can extend that target authority without weakening the
+operation permission. `openFile`, `openFiles`, and `saveFile` grant only the
+exact selected paths; `openDirectory` grants the selected directory and its
+descendants. These grants last for the application session by default. The
+public result remains an ordinary `String`/`string`; the internal nominal
+authorization evidence cannot be forged by WebView code. Persistent dialog
+grants are opt-in through `security.filesystem.persistDialogGrants`.
+
 The Z-owned runtime represents that resource proof internally as one
 application-owned `FilesystemAuthority`. It expands and canonicalizes an input,
 checks the compiled roots, and returns a nominal `AuthorizedPath` that platform

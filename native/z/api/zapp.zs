@@ -165,12 +165,12 @@ export readonly class Application {
     this.capabilities = configuredApplicationCapabilities();
     this.events = createApplicationEvents();
     this.windows = createWindowManager();
-    this.dialogs = createDialogManager();
     this.clipboard = createClipboardManager();
     this.notifications = createNotificationManager();
     this.filesystemAuthority = createFilesystemAuthority(
       in this.context.paths
     );
+    this.dialogs = createDialogManager(this.filesystemAuthority);
     this.shell = createShellManager(this.filesystemAuthority);
     this.menu = createApplicationMenu();
     this.workers = createWorkerManager(configuredApplicationWorkers());

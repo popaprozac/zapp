@@ -98,6 +98,36 @@ App.on(AppEvent.BEFORE_QUIT, async () => {
 See [`App.setQuitGuard`](#appsetquitguardenabled-boolean-void) for
 the full guard API.
 
+### `Application.current().dialogs`
+
+The focused dialog manager maps expected user cancellation to `null` and keeps
+dialog-derived filesystem authority internal:
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+
+const app = Application.current();
+const report = await app.dialogs.openFile({
+  title: "Choose a report",
+  filters: [{ name: "Reports", extensions: ["json", "csv"] }],
+});
+
+if (report !== null) {
+  await app.shell.reveal(report);
+}
+```
+
+`openFile`, `openDirectory`, and `saveFile` return `Promise<string | null>`.
+`openFiles` returns `Promise<readonly string[] | null>`. An operating-system or
+policy failure still rejects; only an ordinary user cancellation becomes
+`null`.
+
+A successful file or save selection grants that exact path for the application
+session. A directory selection grants the directory and its descendants. The
+path remains an ordinary string: there is no public grant token or `grant()`
+call. Operation permissions remain independent, so selecting a path does not
+by itself authorize opening, revealing, reading, writing, or trashing it.
+
 ### `Application.current().shell`
 
 The focused shell manager makes every operating-system handoff explicit and
@@ -117,7 +147,8 @@ await shell.trash("$userData/old-report.pdf");
 `openExternal` requires `shell:open` plus an allowed navigation-profile
 scheme. `openPath`, `reveal`, and `trash` require their corresponding
 `shell:open`, `shell:reveal`, or `shell:trash` permission and a target under
-`security.filesystem.allow`. `trash` moves the item to the operating system
+`security.filesystem.allow` or authority established by a trusted file dialog.
+`trash` moves the item to the operating system
 Trash; it does not permanently delete it. The promise resolves when the OS
 accepts the handoff, not when another application finishes handling it.
 
@@ -2947,7 +2978,9 @@ those). If your editor still can't resolve `import zapp`, run a build once to
 
 ## `Dialog`
 
-Native file + message dialogs.
+Legacy native file + message dialog facade. New application code should use
+`Application.current().dialogs` for file dialogs; `Dialog.message` remains the
+current message-dialog surface while that manager tier is completed.
 
 ### `Dialog.openFile(opts?): Promise<{ cancelled, paths? }>`
 

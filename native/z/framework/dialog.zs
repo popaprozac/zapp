@@ -1,4 +1,7 @@
 import { thread } from "std/thread";
+import {
+  FilesystemAuthority,
+} from "./filesystem-authority.zs";
 
 export struct FileFilter {
   name: String;
@@ -149,29 +152,93 @@ internal function unsupportedDialogBackend(): DialogBackend on thread.main {
 
 class DialogManagerState on thread.main {
   backend: DialogBackend;
+  authority: FilesystemAuthority;
+
+  function grantFile(
+    inout this,
+    in path: String,
+    operation: DialogOperation
+  ): void throws DialogError {
+    const granted = attempt this.authority.grantFile(in path);
+    match (granted) {
+      success => {}
+      failure(error) => throw DialogError({
+        operation,
+        message: copy error.message,
+      });
+    }
+  }
+
+  function grantDirectory(
+    inout this,
+    in path: String
+  ): void throws DialogError {
+    const granted = attempt this.authority.grantDirectory(in path);
+    match (granted) {
+      success => {}
+      failure(error) => throw DialogError({
+        operation: DialogOperation.openDirectory,
+        message: copy error.message,
+      });
+    }
+  }
 
   function openFile(
+    inout this,
     in options: OpenDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.backend.openFile(in options);
+    const selected = try this.backend.openFile(in options);
+    return match (selected) {
+      some(path) => {
+        try this.grantFile(in path, DialogOperation.openFile);
+        select Option.some(move path);
+      }
+      none => Option.none;
+    };
   }
 
   function openFiles(
+    inout this,
     in options: OpenDialogOptions
   ): Option<Array<String>> throws DialogError on thread.main {
-    return try this.backend.openFiles(in options);
+    const selected = try this.backend.openFiles(in options);
+    return match (selected) {
+      some(paths) => {
+        for (const path of paths) {
+          try this.grantFile(in path, DialogOperation.openFiles);
+        }
+        select Option.some(move paths);
+      }
+      none => Option.none;
+    };
   }
 
   function openDirectory(
+    inout this,
     in options: OpenDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.backend.openDirectory(in options);
+    const selected = try this.backend.openDirectory(in options);
+    return match (selected) {
+      some(path) => {
+        try this.grantDirectory(in path);
+        select Option.some(move path);
+      }
+      none => Option.none;
+    };
   }
 
   function saveFile(
+    inout this,
     in options: SaveDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.backend.saveFile(in options);
+    const selected = try this.backend.saveFile(in options);
+    return match (selected) {
+      some(path) => {
+        try this.grantFile(in path, DialogOperation.saveFile);
+        select Option.some(move path);
+      }
+      none => Option.none;
+    };
   }
 
   function start(inout this, backend: DialogBackend): void {
@@ -186,32 +253,39 @@ class DialogManagerState on thread.main {
 export readonly class DialogManager on thread.main {
   internal readonly state: DialogManagerState;
 
-  internal constructor() {
-    this.state = new DialogManagerState({ backend: inactiveDialogBackend() });
+  internal constructor(authority: FilesystemAuthority) {
+    this.state = new DialogManagerState({
+      backend: inactiveDialogBackend(),
+      authority,
+    });
   }
 
   async function openFile(
     in options: OpenDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.state.openFile(in options);
+    let state = this.state;
+    return try state.openFile(in options);
   }
 
   async function openFiles(
     in options: OpenDialogOptions
   ): Option<Array<String>> throws DialogError on thread.main {
-    return try this.state.openFiles(in options);
+    let state = this.state;
+    return try state.openFiles(in options);
   }
 
   async function openDirectory(
     in options: OpenDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.state.openDirectory(in options);
+    let state = this.state;
+    return try state.openDirectory(in options);
   }
 
   async function saveFile(
     in options: SaveDialogOptions
   ): Option<String> throws DialogError on thread.main {
-    return try this.state.saveFile(in options);
+    let state = this.state;
+    return try state.saveFile(in options);
   }
 
   internal function start(
@@ -226,6 +300,8 @@ export readonly class DialogManager on thread.main {
   }
 }
 
-internal function createDialogManager(): DialogManager on thread.main {
-  return new DialogManager();
+internal function createDialogManager(
+  authority: FilesystemAuthority
+): DialogManager on thread.main {
+  return new DialogManager(authority);
 }

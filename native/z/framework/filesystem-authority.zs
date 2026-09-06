@@ -11,6 +11,11 @@ internal readonly struct AuthorizedPath {
   resolved: String;
 }
 
+internal readonly struct FilesystemSessionGrant {
+  root: String;
+  descendants: boolean;
+}
+
 internal struct FilesystemAuthorityError {
   target: String;
   message: String;
@@ -79,45 +84,76 @@ internal function unsupportedFilesystemAuthorityBackend(
 class FilesystemAuthorityState on thread.main {
   backend: FilesystemAuthorityBackend;
   readonly paths: ApplicationPaths;
+  grants: Array<FilesystemSessionGrant>;
 
-  function authorize(
+  function resolve(
     in source: String
-  ): AuthorizedPath throws FilesystemAuthorityError {
+  ): String throws FilesystemAuthorityError {
     const resolved = try this.backend.canonicalize(in source, in this.paths);
-    const path = match (resolved) {
+    return match (resolved) {
       some(value) => value;
       none => throw FilesystemAuthorityError({
         target: copy source,
         message: `invalid filesystem path "${source}"`,
       });
     };
+  }
+
+  function grant(
+    inout this,
+    in source: String,
+    descendants: boolean
+  ): void throws FilesystemAuthorityError {
+    const path = try this.resolve(in source);
+    this.grants.push(FilesystemSessionGrant({
+      root: move path,
+      descendants,
+    }));
+  }
+
+  function authorize(
+    in source: String
+  ): AuthorizedPath throws FilesystemAuthorityError {
+    const path = try this.resolve(in source);
     let index: usize = 0;
-    while (true) {
+    let searchingConfiguredRoots = true;
+    while (searchingConfiguredRoots) {
       const configured = configuredFilesystemAllowAtIndex(index);
-      const rootSource = match (configured) {
-        some(value) => value;
-        none => throw FilesystemAuthorityError({
-          target: copy source,
-          message: `filesystem path "${source}" is outside the authority declared by security.filesystem.allow`,
-        });
-      };
-      const resolvedRoot = try this.backend.canonicalize(
-        in rootSource,
-        in this.paths
-      );
-      match (resolvedRoot) {
-        some(root) => {
-          if (this.backend.contains(in path, in root)) {
-            return AuthorizedPath({ resolved: path });
+      match (configured) {
+        some(rootSource) => {
+          const resolvedRoot = try this.backend.canonicalize(
+            in rootSource,
+            in this.paths
+          );
+          match (resolvedRoot) {
+            some(root) => {
+              if (this.backend.contains(in path, in root)) {
+                return AuthorizedPath({ resolved: path });
+              }
+            }
+            none => {}
           }
+          index = index + 1;
         }
-        none => {}
+        none => {
+          searchingConfiguredRoots = false;
+        }
       }
-      index = index + 1;
     }
+
+    for (const grant of this.grants) {
+      if (grant.descendants) {
+        if (this.backend.contains(in path, in grant.root)) {
+          return AuthorizedPath({ resolved: path });
+        }
+      } else if (path == grant.root) {
+        return AuthorizedPath({ resolved: path });
+      }
+    }
+
     throw FilesystemAuthorityError({
       target: copy source,
-      message: `filesystem path "${source}" is outside the authority declared by security.filesystem.allow`,
+      message: `filesystem path "${source}" is outside configured or user-approved authority`,
     });
   }
 
@@ -130,6 +166,7 @@ class FilesystemAuthorityState on thread.main {
 
   function stop(inout this): void {
     this.backend = inactiveFilesystemAuthorityBackend();
+    this.grants = Array<FilesystemSessionGrant>();
   }
 }
 
@@ -146,6 +183,7 @@ internal readonly class FilesystemAuthority on thread.main {
         config: copy paths.config,
         cache: copy paths.cache,
       }),
+      grants: Array<FilesystemSessionGrant>(),
     });
   }
 
@@ -153,6 +191,20 @@ internal readonly class FilesystemAuthority on thread.main {
     in path: String
   ): AuthorizedPath throws FilesystemAuthorityError on thread.main {
     return try this.state.authorize(in path);
+  }
+
+  internal function grantFile(
+    inout this,
+    in path: String
+  ): void throws FilesystemAuthorityError on thread.main {
+    try this.state.grant(in path, false);
+  }
+
+  internal function grantDirectory(
+    inout this,
+    in path: String
+  ): void throws FilesystemAuthorityError on thread.main {
+    try this.state.grant(in path, true);
   }
 
   internal function start(

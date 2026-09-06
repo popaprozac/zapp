@@ -870,7 +870,9 @@ describe("Z native host inputs", () => {
     expect(application).toContain(
       "this.windows = createWindowManager();",
     );
-    expect(application).toContain("this.dialogs = createDialogManager();");
+    expect(application).toContain(
+      "this.dialogs = createDialogManager(this.filesystemAuthority);",
+    );
     expect(application).toContain(
       "this.filesystemAuthority = createFilesystemAuthority(",
     );
@@ -909,6 +911,12 @@ describe("Z native host inputs", () => {
     expect(filesystemAuthority).toContain(
       "configuredFilesystemAllowAtIndex(index)",
     );
+    expect(filesystemAuthority).toContain(
+      "internal readonly struct FilesystemSessionGrant",
+    );
+    expect(filesystemAuthority).toContain("internal function grantFile(");
+    expect(filesystemAuthority).toContain("internal function grantDirectory(");
+    expect(filesystemAuthority).toContain("for (const grant of this.grants)");
     expect(filesystemAuthority).toContain(
       "this.backend.contains(in path, in root)",
     );
@@ -969,6 +977,8 @@ describe("Z native host inputs", () => {
     expect(dialogs).toContain("async function saveFile(");
     expect(dialogs).toContain("Option<String> throws DialogError on thread.main");
     expect(dialogs).toContain("Option<Array<String>> throws DialogError on thread.main");
+    expect(dialogs).toContain("try this.grantFile(in path, DialogOperation.openFile)");
+    expect(dialogs).toContain("try this.grantDirectory(in path)");
     expect(macOSDialogs).toContain("AppKit.NSOpenPanel.openPanel()");
     expect(macOSDialogs).toContain("AppKit.NSSavePanel.savePanel()");
     expect(macOSDialogs).toContain("panel.allowedContentTypes = contentTypes");
