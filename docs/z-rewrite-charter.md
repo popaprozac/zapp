@@ -340,15 +340,22 @@ specific request is in flight. Native macOS quit requests use the same path;
 once accepted, shutdown remains deterministic and is observed by awaiting
 `app.run()`.
 
-This does not make `Application` a universal manager container:
+This does not make `Application` a universal namespace. A capability belongs
+on the application when it has stable application identity, compiled policy,
+shared authority, platform lifetime, or deterministic shutdown work. That is
+why the current native root owns windows, services, workers, dialogs, files,
+shell handoff, clipboard, notifications, menus, and lifecycle events. The
+frontend exposes its landed application-owned subset through
+`Application.current()` rather than manufacturing unrelated global state.
 
-- application-owned registries and authority-granting lifecycles belong on
-  `app`, initially `windows`, `services`, and `dialogs`;
-- resource behavior belongs on its handle, such as `window.show()` and
+- resource behavior still belongs on its handle, such as `window.show()` and
   `window.close()`;
-- types and options come from focused modules such as `zapp/window`; and
-- stateless operating-system capabilities should prefer focused imports rather
-  than automatically becoming `app.clipboard`, `app.shell`, or another manager.
+- types, errors, and options come from focused modules such as `zapp/window`,
+  `zapp/files`, and `@zappdev/runtime/files`;
+- focused imports remain appropriate for genuinely stateless operations; and
+- the frontend window API keeps `createWindow()` and `currentWindow()` because
+  asynchronous native realization and the current WebView identity are more
+  honest in that environment than mechanically mirroring the native manager.
 
 The WebView TypeScript API follows its own asynchronous boundary instead of
 mirroring native Z mechanically. A frontend may import named functions and
