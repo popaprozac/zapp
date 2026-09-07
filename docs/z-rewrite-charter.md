@@ -348,6 +348,16 @@ save/teardown guarantee. Async renderer vetoes and worker lifecycle delivery
 remain separate future contracts. AppKit termination is intercepted so accepted
 quit uses Z's run-loop stop and ordinary lifetime cleanup, not process exit.
 
+Native `reopenRequested` and `openURLRequested` now deliver OS activation intent
+through the same application-owned event model. Configured custom schemes are
+checked natively, setup requests use a bounded FIFO, and delivery starts only
+after native managers and synchronous service startup are ready. There is no
+automatic navigation, frontend broadcast, late replay, or cancellation API for
+these notifications. Z Notes validates a note route and explicitly creates the
+destination window. See [the activation contract](application-activation.md).
+Cross-process single-instance forwarding and file/universal-link delivery remain
+separate follow-ups.
+
 This does not make `Application` a universal namespace. A capability belongs
 on the application when it has stable application identity, compiled policy,
 shared authority, platform lifetime, or deterministic shutdown work. That is

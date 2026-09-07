@@ -8,6 +8,10 @@ This directory is Zapp's internal macOS backend. It is not part of the public
   deterministic host lifetime.
 - `application.zs` owns application startup, lifecycle ordering, and
   deterministic shutdown around that host lifetime.
+- The host's application delegate copies incoming custom URLs into owned Z
+  values and forwards reopen intent. The cross-platform
+  `../../application-activation.zs` module owns scheme checks, the bounded
+  startup FIFO, and lifecycle-safe event delivery; it has no native imports.
 - `runtime.zs` is the small composition facade that initializes and shuts down
   the split application, message-routing, and native-window runtime modules.
 - `application-runtime.zs` owns shared application state, response delivery,

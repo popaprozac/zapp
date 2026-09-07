@@ -1,4 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
+import { observeNoteActivation } from "./notes-activation.zs";
 import { createHealthService } from "./health-service.zs";
 import {
   IndexNotes,
@@ -197,6 +198,7 @@ function observeTypedNoteIndexerMessages(
 async function main(): i32 on thread.main {
   const app = new Application();
   const notesService = createNotesService();
+  const activationNotesService = notesService;
   const menuNotesService = notesService;
   const notesRegistered = attempt app.services.register(
     "notes",
@@ -311,6 +313,13 @@ async function main(): i32 on thread.main {
     failure(error) => {
       console.log(`could not observe window navigation: ${error.message}`);
       return 74;
+    }
+  };
+  const activation = match (attempt observeNoteActivation(app, activationNotesService, window)) {
+    success(subscriptions) => subscriptions;
+    failure(error) => {
+      console.error(`could not observe application activation: ${error.message}`);
+      return 81;
     }
   };
   const result = attempt await app.run();

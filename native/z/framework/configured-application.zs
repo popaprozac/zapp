@@ -31,6 +31,10 @@ export function configuredApplicationMetadata(): ApplicationMetadata {
   });
 }
 
+export function configuredApplicationDeepLinkSchemes(): Array<String> {
+  return Array<String>();
+}
+
 export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: true,

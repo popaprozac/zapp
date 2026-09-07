@@ -1,5 +1,10 @@
 import { thread } from "std/thread";
 import {
+  ApplicationActivation,
+  ApplicationReopenRequestedEvent,
+  ApplicationOpenURLRequestedEvent,
+} from "./application-activation.zs";
+import {
   Event,
   EventSubscription,
   EventSubscriptionError,
@@ -72,10 +77,16 @@ class ApplicationEventsState on thread.main {
 
 export readonly class ApplicationEvents on thread.main {
   readonly quitRequested: Event<ApplicationQuitRequestedEvent>;
+  readonly reopenRequested: Event<ApplicationReopenRequestedEvent>;
+  readonly openURLRequested: Event<ApplicationOpenURLRequestedEvent>;
+  internal readonly activation: ApplicationActivation;
   internal readonly state: ApplicationEventsState;
 
   internal constructor() {
     this.quitRequested = new Event<ApplicationQuitRequestedEvent>();
+    this.activation = new ApplicationActivation();
+    this.reopenRequested = this.activation.reopenRequested;
+    this.openURLRequested = this.activation.openURLRequested;
     this.state = new ApplicationEventsState();
   }
 
@@ -96,10 +107,34 @@ export readonly class ApplicationEvents on thread.main {
     }
   }
 
+  internal function isRunning(): boolean {
+    return this.state.active;
+  }
+
   // Platform-only observation after all trusted synchronous listeners finish.
   internal function observeQuit(observer: ApplicationQuitObserver): void {
     let state = this.state;
     state.quitObserver = Option.some(observer);
+  }
+
+  internal function configureActivation(schemes: Array<String>): void {
+    let activation = this.activation;
+    activation.configure(move schemes);
+  }
+
+  internal function startActivation(): void {
+    let activation = this.activation;
+    activation.start();
+  }
+
+  internal function requestReopen(): boolean {
+    let activation = this.activation;
+    return activation.requestReopen();
+  }
+
+  internal function requestOpenURL(url: String): boolean {
+    let activation = this.activation;
+    return activation.requestOpenURL(move url);
   }
 
   // One native decision for programmatic and OS requests alike.
@@ -113,7 +148,11 @@ export readonly class ApplicationEvents on thread.main {
     let quitRequested = this.quitRequested;
     quitRequested.publish(in event);
     const cancelled = event.finish() || !state.active;
-    if (!cancelled) state.active = false;
+    if (!cancelled) {
+      state.active = false;
+      let activation = this.activation;
+      activation.finish();
+    }
     // Keep the reentrancy guard held while reporting the final decision.
     match (in state.quitObserver) {
       some(observer) => observer(cancelled);
@@ -124,6 +163,8 @@ export readonly class ApplicationEvents on thread.main {
   }
 
   internal function finish(): void {
+    let activation = this.activation;
+    activation.finish();
     let state = this.state;
     state.active = false;
     state.requestingQuit = false;

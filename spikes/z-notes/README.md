@@ -157,6 +157,45 @@ finishes, and fails on a bounded watchdog if the request does not reach Z.
 Use `ZAPP_APPLICATION_QUIT_SMOKE=1 bun run spike:z-notes:dev-smoke` for the
 same route through Vite; it also verifies that port 5173 is released on exit.
 
+### Application activation
+
+Z Notes registers the custom `znotes` scheme. While the app is running, open a
+known note using the exact bundle produced by your chosen mode:
+
+```sh
+# After bun run spike:z-notes:dev, from the repository root:
+open -a "$PWD/spikes/z-notes/bin/Z Notes.app" "znotes://notes/1"
+```
+
+Use an existing note ID from the UI. Z validates the route, looks up the note
+after service startup, opens a note-specific window, and the frontend highlights
+that note. Unsupported routes and unknown note IDs do not create a window.
+Clicking the Dock icon while the app is running asks the app-authored reopen
+listener to show the main window. This does not add cross-process forwarding.
+
+The generic contract and explicit limits are in
+[Application activation](../../docs/application-activation.md).
+`zapp/notes-route.zs` is the pure app route parser; `zapp/notes-activation.zs`
+owns the subscriptions and explicit routing decisions.
+
+```sh
+z run native/z/tests/application-activation-smoke.zs
+z run native/z/tests/application-native-activation-smoke.zs
+z test spikes/z-notes/zapp/notes-route.test.zs
+ZAPP_APPLICATION_ACTIVATION_SMOKE=1 \
+  ZAPP_Z_NOTES_IDENTIFIER=com.zapp.z-notes.activation-smoke \
+  bun run spike:z-notes:smoke
+```
+
+The packaged smoke uses an isolated notes database identity and queues its
+request during initial window construction, before the notes service starts.
+It must report `deep link opened note 1`, `activation WebView selected note 1`,
+and normal service shutdown. Use `spike:z-notes:dev-smoke` with the same flags
+to test the Vite path and port cleanup. The direct delegate probe does not
+register its test executable as the system URL handler.
+
+### Menus and windows
+
 Z Notes installs an application menu from both sides of Zapp's command model.
 Before `run()`, native Z supplies the initial standard roles plus a
 project-owned **Notes → Log Note Count** command that calls the registered Z

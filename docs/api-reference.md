@@ -55,6 +55,11 @@ Z decision source. On acceptance Z stops the platform loop, joins workers,
 stops services, and returns from `app.run()`; AppKit does not exit the process
 instead of running Z cleanup.
 
+Native application activation is documented separately in
+[Application activation](application-activation.md). Reopen and incoming URL
+events are native-first; the focused TypeScript facade does not expose or
+automatically receive those URLs in this tier.
+
 ## Imports (legacy surface)
 
 ```ts

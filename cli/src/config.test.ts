@@ -7,11 +7,23 @@ import {
   resolveNative, validateNative, validateWebEngine, resolveWebEngine,
   platformSupportsChromium, resolveWebEngineForBuild, validateWebviewInject,
   validateCapabilityProfiles, validateNavigationProfiles, validateWorkers,
+  validateDeepLinkSchemes,
 } from "./config";
 
 test("defaultApplicationIdentifier produces a stable reverse-DNS-safe identifier", () => {
   expect(defaultApplicationIdentifier("  Z Notes!  ")).toBe("com.zapp.z-notes");
   expect(defaultApplicationIdentifier("世界")).toBe("com.zapp.app");
+});
+
+test("deep links accept custom scheme names and reject ambiguous registration", () => {
+  expect(() => validateDeepLinkSchemes()).not.toThrow();
+  expect(() => validateDeepLinkSchemes([])).not.toThrow();
+  expect(() => validateDeepLinkSchemes(["ZNotes", "com.example.notes+dev"])).not.toThrow();
+  for (const scheme of ["", "notes://", "1notes", "note space", "x\n", "<string>", "https", "FILE"]) {
+    expect(() => validateDeepLinkSchemes([scheme])).toThrow();
+  }
+  expect(() => validateDeepLinkSchemes(["notes", "NOTES"])).toThrow(/duplicate/);
+  expect(() => validateDeepLinkSchemes("notes" as unknown as string[])).toThrow(/array/);
 });
 
 test("defineConfig preserves object and contextual factory definitions", () => {

@@ -157,8 +157,14 @@ notificationShowButton.addEventListener("click", async () => {
 });
 
 function renderNotes(items) {
+  const selected = new URLSearchParams(window.location.search).get("note");
   noteList.replaceChildren(...items.map((note) => {
     const item = document.createElement("li");
+    if (selected !== null && String(note.id) === selected) {
+      item.dataset.selectedNote = selected;
+      item.setAttribute("aria-current", "true");
+      item.style.outline = "2px solid Highlight";
+    }
     const title = document.createElement("strong");
     const details = document.createElement("small");
     title.textContent = note.title;
@@ -217,6 +223,11 @@ function renderNotes(items) {
     return item;
   }));
   document.body.dataset.notesLoaded = "ok";
+  const selectedNote = noteList.querySelector("[data-selected-note]");
+  if (selectedNote) {
+    selectedNote.scrollIntoView({ block: "center" });
+    document.body.dataset.deepLinkNote = selected;
+  }
 }
 
 async function refreshNotes() {
@@ -542,7 +553,7 @@ if (currentWindowId === "win-1") {
     width: 480,
     height: 320,
   }).then((created) => {
-    document.body.dataset.dynamicWindow = created.id === "win-2"
+    document.body.dataset.dynamicWindow = created.id !== currentWindowId && /^win-\d+$/.test(created.id)
       ? "ready"
       : "error";
   }).catch((error) => {
@@ -561,7 +572,7 @@ setTimeout(() => {
   const style = getComputedStyle(document.documentElement)
     .getPropertyValue("--zapp-inject-base")
     .trim();
-  const expectsBase = windowId === "win-1";
+  const expectsBase = windowId === "win-1" || new URLSearchParams(window.location.search).has("note");
   const isolated = expectsBase
     ? start === "ready"
       && end === "ready"

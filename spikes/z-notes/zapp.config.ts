@@ -5,6 +5,7 @@ export default defineConfig({
     name: "Z Notes",
     identifier: process.env.ZAPP_Z_NOTES_IDENTIFIER ?? "com.zapp.z-notes",
     version: "0.1.0",
+    deepLinks: ["znotes"],
   },
   frontend: {
     assets: "./dist",

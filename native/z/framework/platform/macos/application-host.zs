@@ -1,4 +1,6 @@
 import AppKit from "AppKit/AppKit.h";
+import Foundation from "Foundation/Foundation.h";
+import console from "std/console";
 import objc from "std/objc";
 import { Mutex, Once, OnceLifetime } from "std/sync";
 import { thread } from "std/thread";
@@ -32,6 +34,41 @@ internal class MacOSApplicationHost {
 class MacOSApplicationDelegate on thread.main
   implements AppKit.NSApplicationDelegate {
   readonly events: ApplicationEvents;
+
+  function shouldHandleReopen(
+    in application: AppKit.NSApplication,
+    hasVisibleWindows: boolean
+  ): boolean as "applicationShouldHandleReopen:hasVisibleWindows:" {
+    if (!this.events.requestReopen()) {
+      console.error("application reopen request was rejected by lifecycle or queue limits");
+    }
+    // Application code owns window policy; suppress AppKit's default action.
+    return false;
+  }
+
+  function openURLs(
+    in application: AppKit.NSApplication,
+    in urls: Foundation.NSArray
+  ): void as "application:openURLs:" {
+    let index: usize = 0;
+    const count = usize(urls.count);
+    while (index < count && index < 64) {
+      const value = urls.objectAtIndex(index);
+      if (value instanceof Foundation.NSURL) {
+        const absolute = value.absoluteString;
+        if (absolute != null && usize(absolute.length) <= 16384) {
+          const url: String = absolute;
+          if (!this.events.requestOpenURL(move url)) {
+            console.error("application URL request was rejected by scheme, lifecycle, or queue limits");
+          }
+        } else {
+          console.error("application URL exceeds the activation size limit");
+        }
+      }
+      index = index + 1;
+    }
+    if (count > 64) console.error("application URL batch exceeds the activation count limit");
+  }
 
   function shouldTerminate(
     in application: AppKit.NSApplication
@@ -105,10 +142,12 @@ internal function stopMacOSRunLoop(): void on thread.main {
 internal function runMacOSApplicationLoop(): i32 on thread.main {
   const host = applicationHost.get();
   const application = host.application;
+  if (!host.events.isRunning()) return host.result();
   application.setActivationPolicy(
     AppKit.NSApplicationActivationPolicyRegular
   );
   application.activate();
+  if (!host.events.isRunning()) return host.result();
   application.run();
   return host.result();
 }

@@ -36,6 +36,7 @@ import {
 import { macOSApplicationMenuBackend } from "./menu-backend.zs";
 import {
   startConfiguredApplicationWorkers,
+  configuredApplicationDeepLinkSchemes,
 } from "../../configured-application.zs";
 import {
   ApplicationWorkerAsyncServiceHandler,
@@ -66,6 +67,7 @@ export async function runMacOSApplication(
       message: "a macOS desktop application requires a registered window in this tier",
     }));
   }
+  config.events.configureActivation(configuredApplicationDeepLinkSchemes());
   const hostLifetime = initializeMacOSApplicationHost(config.events);
   let workerManager = config.workers;
   const lifetime = initializeMacOSApplicationRuntime(
@@ -155,6 +157,7 @@ export async function runMacOSApplication(
   ): void => requestMacOSApplicationQuit();
   events.start(quitApplication);
   events.observeQuit(publishMacOSApplicationQuitRequested);
+  events.startActivation();
   const status = runMacOSApplicationLoop();
   events.finish();
   workers.requestCancellation();

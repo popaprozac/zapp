@@ -34,6 +34,15 @@ void zapp_desktop_smoke_start_window(
   int32_t native_id
 ) {
   if (native_id == 1) zapp_lifecycle_webview = web_view;
+  const char *activation_smoke = getenv("ZAPP_APPLICATION_ACTIVATION_SMOKE");
+  if (native_id == 1 && activation_smoke != NULL && strcmp(activation_smoke, "1") == 0) {
+    // Window construction precedes service startup. The Z activation queue
+    // must defer this intent until the notes service has loaded its catalog.
+    [NSApp.delegate application:NSApp openURLs:@[[NSURL URLWithString:@"znotes://notes/1"]]];
+    (void)[NSApp.delegate applicationShouldHandleReopen:NSApp hasVisibleWindows:NO];
+    printf("queued startup application activation smoke\n");
+    fflush(stdout);
+  }
   WKUserScript *smoke = [[WKUserScript alloc]
     initWithSource:
       @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
@@ -123,6 +132,8 @@ void zapp_desktop_smoke_observe_response(
           @"navigationPolicy:document.body?.dataset?.navigationPolicy??null,"
           @"shellOpen:document.body?.dataset?.shellOpen??null,"
           @"shellReveal:document.body?.dataset?.shellReveal??null,"
+          @"deepLinkNote:document.body?.dataset?.deepLinkNote??null,"
+          @"requestedNote:new URLSearchParams(location.search).get('note'),"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
@@ -153,6 +164,11 @@ void zapp_desktop_smoke_observe_response(
               || [(NSString *)state containsString:@"\"navigationPolicy\":\"error\""]
               || [(NSString *)state containsString:@"\"shellOpen\":\"error\""]
             );
+          if ([state isKindOfClass:[NSString class]]
+              && [(NSString *)state containsString:@"\"requestedNote\":\"1\""]
+              && ![(NSString *)state containsString:@"\"deepLinkNote\":\"1\""]) {
+            updated = NO;
+          }
           // Several legitimate requests may complete while the scripted
           // scenario is still in flight (notably frontend window creation).
           // Leave incomplete state to the per-window watchdog; only a
@@ -176,6 +192,9 @@ void zapp_desktop_smoke_observe_response(
             return;
           }
           [zapp_desktop_smoke_responses() addObject:@(native_id)];
+          if ([(NSString *)state containsString:@"\"deepLinkNote\":\"1\""]) {
+            printf("activation WebView selected note 1\n");
+          }
           printf(
             "visible WebView round trip window=%d request=%llu ok=%s hmr=%s inject=ready payload=%s\n",
             native_id,

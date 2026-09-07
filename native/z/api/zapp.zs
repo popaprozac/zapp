@@ -1,5 +1,9 @@
 import { PreparedApplication } from "../framework/application-contract.zs";
 import {
+  ApplicationReopenRequestedEvent as FrameworkApplicationReopenRequestedEvent,
+  ApplicationOpenURLRequestedEvent as FrameworkApplicationOpenURLRequestedEvent,
+} from "../framework/application-activation.zs";
+import {
   ApplicationError as FrameworkApplicationError,
   ApplicationState as FrameworkApplicationState,
   ApplicationStateError as FrameworkApplicationStateError,
@@ -91,6 +95,8 @@ export type ApplicationEvents = FrameworkApplicationEvents;
 export type ApplicationEventSubscription = FrameworkApplicationEventSubscription;
 export type ApplicationEventSubscriptionError = FrameworkApplicationEventSubscriptionError;
 export type ApplicationQuitRequestedEvent = FrameworkApplicationQuitRequestedEvent;
+export type ApplicationReopenRequestedEvent = FrameworkApplicationReopenRequestedEvent;
+export type ApplicationOpenURLRequestedEvent = FrameworkApplicationOpenURLRequestedEvent;
 
 class ApplicationRunState on thread.main {
   value: ApplicationState;

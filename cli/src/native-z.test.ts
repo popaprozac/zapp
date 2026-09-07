@@ -174,6 +174,18 @@ describe("renderZConfiguredDesktopSmoke", () => {
 });
 
 describe("renderZApplicationMetadata", () => {
+  it("compiles custom scheme registration into the native allowlist", () => {
+    const output = renderZApplicationMetadata({
+      name: "Links", identifier: "com.example.links", version: "1.0.0",
+      assetDir: "./dist", deepLinkSchemes: ["ZNotes", "other.notes"],
+    });
+    expect(output).toContain("configuredApplicationDeepLinkSchemes(): Array<String>");
+    expect(output).toContain('Array<String>("znotes", "other.notes")');
+    const empty = renderZApplicationMetadata({
+      name: "Links", identifier: "com.example.links", version: "1.0.0", assetDir: "./dist",
+    });
+    expect(empty).toContain("return Array<String>();");
+  });
   it("emits resolved immutable application metadata as valid Z literals", () => {
     const output = renderZApplicationMetadata({
       name: 'Notes "Preview"',

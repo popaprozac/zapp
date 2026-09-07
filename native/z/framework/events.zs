@@ -238,7 +238,7 @@ export class Event<T> on thread.main {
   internal function publish(inout this, in value: T): void {
     const limit = this.order.length;
     let index: usize = 0;
-    while (index < limit) {
+    while (this.accepting && index < limit && index < this.order.length) {
       const handlerId: u64 = this.order[index];
       const selected: Option<(
         in value: T

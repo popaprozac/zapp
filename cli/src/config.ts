@@ -523,7 +523,7 @@ export interface ApplicationConfig {
   version?: string;
   /** Prevent multiple application instances where the platform supports it. */
   singleInstance?: boolean;
-  /** System-visible URL schemes, without `://`. */
+  /** Custom OS URL schemes, without `://`; delivered to native openURLRequested. */
   deepLinks?: string[];
 }
 
@@ -755,6 +755,28 @@ export function createConfigContext(
     },
     root: path.resolve(root),
   };
+}
+
+// Only custom, case-insensitively unique schemes enter the activation allowlist.
+export function validateDeepLinkSchemes(schemes?: string[]): void {
+  if (schemes === undefined) return;
+  if (!Array.isArray(schemes)) {
+    throw new Error("[zapp] application.deepLinks must be an array of custom URL schemes");
+  }
+  const seen = new Set<string>();
+  for (const scheme of schemes) {
+    if (typeof scheme !== "string" || !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme)) {
+      throw new Error("[zapp] application.deepLinks entries must be URL schemes without ://");
+    }
+    const normalized = scheme.toLowerCase();
+    if (["http", "https", "file", "data", "javascript"].includes(normalized)) {
+      throw new Error(`[zapp] application.deepLinks only supports custom schemes; ${scheme} is not a custom scheme`);
+    }
+    if (seen.has(normalized)) {
+      throw new Error(`[zapp] application.deepLinks contains duplicate scheme ${scheme}`);
+    }
+    seen.add(normalized);
+  }
 }
 
 // Validate the native: block — each of frameworks/linkFlags/sources must be a
@@ -1541,6 +1563,7 @@ export async function loadConfig(
       throw new Error("[zapp] zapp.config.ts must resolve to a configuration object");
     }
     const config = serializableConfigClone(authored);
+    validateDeepLinkSchemes(config.application?.deepLinks);
     validateWebEngine(config.webview?.engine);
     validateWebviewInject(config.webview?.inject);
     validateCapabilityProfiles(
