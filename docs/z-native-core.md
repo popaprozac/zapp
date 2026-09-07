@@ -774,9 +774,14 @@ smoke bundles have separate paths and identities and advertise no URL schemes.
 A native regression checks cached launches after changing both executable name
 and bundle identity, including after a smoke build.
 
-The next proposed design checkpoint is cold-launch and single-instance
-activation: primary-instance ownership, bounded forwarding, simultaneous
-launches, and shutdown races. The existing `singleInstance` bundle hint does
+The approved secondary-instance event and versioned payload codec now preserve
+readonly argument snapshots and an optional working directory without a
+framework-specific JSON workaround. Stage 0 and native payload/event tests
+cover UTF-8, bounds, malformed input, FIFO delivery, and shutdown.
+
+The next runtime slice is cold-launch and single-instance activation:
+primary-instance ownership, bounded forwarding, simultaneous launches, and
+shutdown races. The existing `singleInstance` bundle hint does
 not yet supply a cross-process forwarding protocol. Broader platform coverage,
 file/universal-link handling, additional worker engines, and sanitizer evidence
 on a compatible host remain separate work; they are not implied by the current

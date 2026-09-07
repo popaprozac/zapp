@@ -1,6 +1,10 @@
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { Event } from "./events.zs";
+import {
+  ApplicationSecondInstanceLaunchedEvent,
+  validApplicationLaunch,
+} from "./application-launch.zs";
 
 export readonly struct ApplicationReopenRequestedEvent {}
 
@@ -11,6 +15,7 @@ export readonly struct ApplicationOpenURLRequestedEvent {
 enum ActivationRequest {
   reopen,
   openURL String,
+  secondInstance ApplicationSecondInstanceLaunchedEvent,
 }
 
 // Deliberately bounded, process-local startup buffering, not a durable inbox.
@@ -18,6 +23,7 @@ enum ActivationRequest {
 internal class ApplicationActivation on thread.main {
   readonly reopenRequested: Event<ApplicationReopenRequestedEvent>;
   readonly openURLRequested: Event<ApplicationOpenURLRequestedEvent>;
+  readonly secondInstanceLaunched: Event<ApplicationSecondInstanceLaunchedEvent>;
   schemes: Array<String>;
   pending: Map<usize, ActivationRequest>;
   head: usize;
@@ -30,6 +36,7 @@ internal class ApplicationActivation on thread.main {
   internal constructor() {
     this.reopenRequested = new Event<ApplicationReopenRequestedEvent>();
     this.openURLRequested = new Event<ApplicationOpenURLRequestedEvent>();
+    this.secondInstanceLaunched = new Event<ApplicationSecondInstanceLaunchedEvent>();
     this.schemes = Array<String>();
     this.pending = Map<usize, ActivationRequest>();
     this.head = 0;
@@ -96,6 +103,14 @@ internal class ApplicationActivation on thread.main {
     this.drain();
   }
 
+  function requestSecondInstance(
+    inout this,
+    launch: ApplicationSecondInstanceLaunchedEvent
+  ): boolean {
+    if (!validApplicationLaunch(in launch)) return false;
+    return this.enqueue(ActivationRequest.secondInstance(move launch));
+  }
+
   function drain(inout this): void {
     if (!this.ready || this.closed || this.draining) return;
     this.draining = true;
@@ -115,6 +130,10 @@ internal class ApplicationActivation on thread.main {
             let source = this.openURLRequested;
             source.publish(in event);
           }
+          secondInstance(event) => {
+            let source = this.secondInstanceLaunched;
+            source.publish(in event);
+          }
         }
         none => {}
       }
@@ -129,7 +148,9 @@ internal class ApplicationActivation on thread.main {
     this.count = 0;
     let reopen = this.reopenRequested;
     let urls = this.openURLRequested;
+    let launches = this.secondInstanceLaunched;
     reopen.finish();
     urls.finish();
+    launches.finish();
   }
 }

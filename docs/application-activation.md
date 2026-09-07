@@ -97,6 +97,43 @@ Z Notes demonstrates that separation in `notes-route.zs` and
 exist in the started service, and native code constructs its own relative
 `/notes?note=<validated-id>` window URL. The frontend highlights that note.
 
+## Secondary-instance payload foundation
+
+The event source and checked payload codec are implemented:
+
+```zs
+export readonly struct ApplicationSecondInstanceLaunchedEvent {
+  arguments: readonly Array<String>;
+  workingDirectory: Option<String>;
+}
+```
+
+`app.events.secondInstanceLaunched` uses the same synchronous main-executor
+subscription and shutdown rules as the other activation events. Arguments
+exclude the executable name and preserve empty strings, whitespace, and UTF-8;
+they are not shell-parsed. The working directory is an optional owned snapshot,
+not a directory change for the primary process. Treat both as untrusted input.
+A URL-looking argument does not also emit `openURLRequested` or
+`reopenRequested`.
+
+The private version-1 envelope nests this snapshot directly. Z's derived JSON
+codec handles the readonly array and `Option<String>`; `null` means no working
+directory, while a missing key is malformed. No flattened duplicate record or
+array-copy adapter is needed. Limits are 256 arguments, 16 KiB per argument or
+working-directory string, and 64 KiB for both aggregate input text and the
+encoded envelope. Embedded NULs, an empty present working directory, duplicate
+fields, malformed JSON, and unsupported versions are rejected. Error messages
+do not include argument contents. Launches share the existing 64-request FIFO.
+
+This is the **payload and event foundation**, not automatic cross-process
+delivery yet. Primary-instance arbitration, admission acknowledgements,
+forwarding, simultaneous launches, and shutdown races are the next runtime
+slice. The existing bundle hint alone does not provide those guarantees.
+
+`native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
+independent event delivery, reentrancy, unsubscribe, and shutdown behavior
+through Stage 0 and native Z.
+
 Current platform implementation: macOS `NSApplicationDelegate` reopen and
 `application:openURLs:` callbacks. File associations, universal links, frontend
 event delivery, and cross-process single-instance forwarding remain future

@@ -1,4 +1,5 @@
 import { thread } from "std/thread";
+import { ApplicationSecondInstanceLaunchedEvent } from "./application-launch.zs";
 import {
   ApplicationActivation,
   ApplicationReopenRequestedEvent,
@@ -79,6 +80,7 @@ export readonly class ApplicationEvents on thread.main {
   readonly quitRequested: Event<ApplicationQuitRequestedEvent>;
   readonly reopenRequested: Event<ApplicationReopenRequestedEvent>;
   readonly openURLRequested: Event<ApplicationOpenURLRequestedEvent>;
+  readonly secondInstanceLaunched: Event<ApplicationSecondInstanceLaunchedEvent>;
   internal readonly activation: ApplicationActivation;
   internal readonly state: ApplicationEventsState;
 
@@ -87,6 +89,7 @@ export readonly class ApplicationEvents on thread.main {
     this.activation = new ApplicationActivation();
     this.reopenRequested = this.activation.reopenRequested;
     this.openURLRequested = this.activation.openURLRequested;
+    this.secondInstanceLaunched = this.activation.secondInstanceLaunched;
     this.state = new ApplicationEventsState();
   }
 
@@ -135,6 +138,13 @@ export readonly class ApplicationEvents on thread.main {
   internal function requestOpenURL(url: String): boolean {
     let activation = this.activation;
     return activation.requestOpenURL(move url);
+  }
+
+  internal function requestSecondInstance(
+    launch: ApplicationSecondInstanceLaunchedEvent
+  ): boolean {
+    let activation = this.activation;
+    return activation.requestSecondInstance(move launch);
   }
 
   // One native decision for programmatic and OS requests alike.
