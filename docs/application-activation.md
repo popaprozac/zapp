@@ -131,6 +131,20 @@ below; wiring it into startup, admission acknowledgements, forwarding, and
 shutdown races are the next runtime slice. The existing bundle hint alone does
 not provide those guarantees.
 
+The next transport must admit into the **same 64-request inbox** used by OS
+activation. An acknowledgement means bounded admission, not that a listener
+ran or that delivery is durable. Native callback threads must not invoke app
+listeners while holding the inbox mutex. Shutdown closes admission before
+transport teardown; a cancelled quit keeps it open.
+
+This exposed an upstream Z prerequisite: independently owned lock-callback
+results now execute in both compilers, including Options and typed failures.
+Transferring an owned outer capture into a known-once `Mutex.withLock` callback
+still needs a language check-in and compiler implementation. The synchronized
+inbox refactor is therefore not wired into the application yet. After that
+prerequisite: implement bounded forwarding/acknowledgements, integrate startup
+and shutdown ownership, and test competing launches and teardown races.
+
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
 independent event delivery, reentrancy, unsubscribe, and shutdown behavior
 through Stage 0 and native Z.
