@@ -51,6 +51,12 @@ import {
 } from "../../menu-bridge.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
 import { navigationProfileAllowsExternalURL } from "./navigation.zs";
+import { requestMacOSHostQuit } from "./application-host.zs";
+import { ApplicationQuitOperation } from "../../application-events.zs";
+import {
+  ApplicationBridgeRoute,
+  routeApplicationBridgeMessage,
+} from "../../application-bridge.zs";
 
 enum WindowMessageRoute {
   framework BridgeResponse,
@@ -360,6 +366,18 @@ function selectWindowMessageRouteWithCapabilities(
   menu: ApplicationMenu,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
+  const quit: ApplicationQuitOperation = requestMacOSHostQuit;
+  const applicationRoute = routeApplicationBridgeMessage(
+    in message,
+    in permissions,
+    selectedCapabilities,
+    quit
+  );
+  match (applicationRoute) {
+    response(value) => return WindowMessageRoute.framework(value);
+    handled => return WindowMessageRoute.handled;
+    unhandled => {}
+  }
   const clipboardRoute = routeClipboardBridgeMessage(
     in message,
     in permissions,

@@ -9,16 +9,24 @@ export type ApplicationEventSubscription = EventSubscription;
 export type ApplicationEventSubscriptionError = EventSubscriptionError;
 
 internal type ApplicationQuitOperation = () => void on thread.main;
+internal type ApplicationQuitObserver = (cancelled: boolean) => void on thread.main;
 
 class ApplicationQuitDecision on thread.main {
   cancelled: boolean;
+  active: boolean;
 
   internal constructor() {
     this.cancelled = false;
+    this.active = true;
   }
 
   function cancel(inout this): void {
-    this.cancelled = true;
+    if (this.active) this.cancelled = true;
+  }
+
+  function finish(inout this): boolean {
+    this.active = false;
+    return this.cancelled;
   }
 
   function wasCancelled(): boolean {
@@ -41,17 +49,24 @@ export readonly class ApplicationQuitRequestedEvent on thread.main {
   internal function wasCancelled(): boolean {
     return this.decision.wasCancelled();
   }
+
+  internal function finish(): boolean {
+    let decision = this.decision;
+    return decision.finish();
+  }
 }
 
 class ApplicationEventsState on thread.main {
   active: boolean;
   requestingQuit: boolean;
   quitOperation: Option<ApplicationQuitOperation>;
+  quitObserver: Option<ApplicationQuitObserver>;
 
   internal constructor() {
     this.active = false;
     this.requestingQuit = false;
     this.quitOperation = Option<ApplicationQuitOperation>.none;
+    this.quitObserver = Option<ApplicationQuitObserver>.none;
   }
 }
 
@@ -81,9 +96,13 @@ export readonly class ApplicationEvents on thread.main {
     }
   }
 
-  // Native lifecycle requests (Cmd-Q, Dock Quit, and system termination)
-  // ask the same Z event source for a decision without recursively invoking
-  // the programmatic quit operation.
+  // Platform-only observation after all trusted synchronous listeners finish.
+  internal function observeQuit(observer: ApplicationQuitObserver): void {
+    let state = this.state;
+    state.quitObserver = Option.some(observer);
+  }
+
+  // One native decision for programmatic and OS requests alike.
   internal function approveQuit(): boolean {
     let state = this.state;
     if (!state.active) return true;
@@ -93,17 +112,23 @@ export readonly class ApplicationEvents on thread.main {
     const event = new ApplicationQuitRequestedEvent();
     let quitRequested = this.quitRequested;
     quitRequested.publish(in event);
+    const cancelled = event.finish() || !state.active;
+    if (!cancelled) state.active = false;
+    // Keep the reentrancy guard held while reporting the final decision.
+    match (in state.quitObserver) {
+      some(observer) => observer(cancelled);
+      none => {}
+    }
     state.requestingQuit = false;
-
-    if (event.wasCancelled()) return false;
-    state.active = false;
-    return true;
+    return !cancelled;
   }
 
   internal function finish(): void {
     let state = this.state;
     state.active = false;
     state.requestingQuit = false;
+    state.quitOperation = Option.none;
+    state.quitObserver = Option.none;
     let quitRequested = this.quitRequested;
     quitRequested.finish();
   }

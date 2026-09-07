@@ -18,7 +18,7 @@
  */
 
 export { App, type PowerState } from "./app";
-export { Application, type ApplicationHandle } from "./application-api";
+export { Application, type ApplicationHandle, type ApplicationEvents, type ApplicationQuitRequestedEvent, type ApplicationEventSubscription } from "./application-api";
 export type { DialogManager, OpenDialogOptions, SaveDialogOptions } from "./dialog-api";
 export { ShellError, type ShellErrorPayload, type ShellManager, type ShellOperation } from "./shell-api";
 export { FileError, type FileErrorPayload, type FileManager, type FileOperation } from "./files-api";

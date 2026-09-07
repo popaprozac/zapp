@@ -340,6 +340,14 @@ specific request is in flight. Native macOS quit requests use the same path;
 once accepted, shutdown remains deterministic and is observed by awaiting
 `app.run()`.
 
+The focused WebView facade exposes one-way `Application.current().quit()` with
+an explicit `application:quit` global-and-profile grant. Its
+`events.quitRequested.subscribe(...)` reports a read-only final native decision;
+it cannot cancel, force, or delay shutdown. Delivery is best effort, never a
+save/teardown guarantee. Async renderer vetoes and worker lifecycle delivery
+remain separate future contracts. AppKit termination is intercepted so accepted
+quit uses Z's run-loop stop and ordinary lifetime cleanup, not process exit.
+
 This does not make `Application` a universal namespace. A capability belongs
 on the application when it has stable application identity, compiled policy,
 shared authority, platform lifetime, or deterministic shutdown work. That is

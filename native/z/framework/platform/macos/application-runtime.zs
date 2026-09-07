@@ -29,6 +29,7 @@ import { createMacOSWindowRuntime } from "./window-construction.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import {
   deliverWebViewApplicationWorkerMessage,
+  deliverWebViewApplicationQuitRequested,
   deliverWebViewMenuCommand,
   deliverWebViewResponse,
 } from "./response-delivery.zs";
@@ -341,6 +342,12 @@ internal class MacOSApplicationRuntime {
     }
   }
 
+  function deliverQuitRequested(cancelled: boolean): void on thread.main {
+    for (const entry of this.nativeWindows) {
+      deliverWebViewApplicationQuitRequested(entry.value.webView, cancelled);
+    }
+  }
+
   function installApplicationWorkers(
     inout this,
     workers: ApplicationWorkers
@@ -418,6 +425,13 @@ internal function requestMacOSApplicationQuit(): void on thread.main {
   const current = application.get();
   current.closeAllNativeWindows();
   stopMacOSRunLoop();
+}
+
+internal function publishMacOSApplicationQuitRequested(
+  cancelled: boolean
+): void on thread.main {
+  const current = application.get();
+  current.deliverQuitRequested(cancelled);
 }
 
 internal function installMacOSApplicationWorkers(

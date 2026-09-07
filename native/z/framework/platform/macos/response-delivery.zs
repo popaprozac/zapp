@@ -136,6 +136,18 @@ internal function deliverWebViewMenuCommand(
   );
 }
 
+internal function deliverWebViewApplicationQuitRequested(
+  in webView: WebKit.WKWebView,
+  cancelled: boolean
+): void on thread.main {
+  // The interpolated value is a compiler-formatted boolean, not source.
+  const script = `(()=>{const b=globalThis[Symbol.for('zapp.bridge')];if(b&&typeof b._onEvent==='function')b._onEvent('application:quit-requested','{"cancelled":${cancelled}}')})()`;
+  webView.evaluateJavaScript(
+    move script,
+    completionHandler: move (value, error): void => {}
+  );
+}
+
 internal function deliverWebViewWindowEvent(
   in webView: WebKit.WKWebView,
   in windowId: String,

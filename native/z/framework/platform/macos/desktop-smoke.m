@@ -2,6 +2,11 @@
 
 #include <dispatch/dispatch.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Test-only route probe; production builds do not link this harness.
+static __weak WKWebView *zapp_lifecycle_webview = nil;
 
 static NSMutableSet<NSNumber *> *zapp_desktop_smoke_responses(void) {
   static NSMutableSet<NSNumber *> *responses = nil;
@@ -28,6 +33,7 @@ void zapp_desktop_smoke_start_window(
   NSString *window_id,
   int32_t native_id
 ) {
+  if (native_id == 1) zapp_lifecycle_webview = web_view;
   WKUserScript *smoke = [[WKUserScript alloc]
     initWithSource:
       @"setTimeout(()=>document.querySelector('#cancel')?.click(),350);"
@@ -185,6 +191,34 @@ void zapp_desktop_smoke_observe_response(
             dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC),
             dispatch_get_main_queue(),
             ^{
+              const char *quit_smoke = getenv("ZAPP_APPLICATION_QUIT_SMOKE");
+              if (quit_smoke != NULL && strcmp(quit_smoke, "1") == 0) {
+                WKWebView *primary = zapp_lifecycle_webview;
+                if (primary == nil) {
+                  zapp_macos_application_set_result(51);
+                  zapp_desktop_smoke_close_all_windows();
+                  return;
+                }
+                printf("requesting frontend application quit\n");
+                fflush(stdout);
+                [primary evaluateJavaScript:
+                  @"(()=>{const button=document.querySelector('#quit-application');"
+                  @"if(!button)throw new Error('missing quit button');button.click()})()"
+                  completionHandler:^(id value, NSError *error) {
+                    (void)value;
+                    if (error == nil) return;
+                    fprintf(stderr, "frontend quit failed: %s\n", error.description.UTF8String);
+                    zapp_macos_application_set_result(51);
+                    zapp_desktop_smoke_close_all_windows();
+                  }];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                  dispatch_get_main_queue(), ^{
+                    fprintf(stderr, "frontend quit did not stop the native run loop\n");
+                    zapp_macos_application_set_result(51);
+                    zapp_desktop_smoke_close_all_windows();
+                  });
+                return;
+              }
               zapp_desktop_smoke_close_all_windows();
             }
           );

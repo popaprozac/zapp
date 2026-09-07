@@ -8,6 +8,7 @@
 import { clogError } from "./log";
 
 export type ZappPermission =
+  | "application:quit"
   | "clipboard" | "clipboard:read" | "clipboard:write"
   | "fs" | "fs:read" | "fs:write"
   | "dialog"
@@ -22,6 +23,7 @@ export type ZappPermission =
   | "shell" | "shell:open" | "shell:reveal" | "shell:trash";
 
 export const PERMISSION_IDS: readonly ZappPermission[] = [
+  "application:quit",
   "clipboard", "clipboard:read", "clipboard:write",
   "fs", "fs:read", "fs:write",
   "dialog", "notifications", "shortcuts", "tray", "dock", "menu",

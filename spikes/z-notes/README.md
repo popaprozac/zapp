@@ -123,7 +123,8 @@ const subscription = try app.events.quitRequested.subscribe(
   }
 );
 
-app.quit();
+// From a callback/service while app.run() is active:
+// Application.current().quit();
 const status = try await app.run();
 ```
 
@@ -131,6 +132,30 @@ On macOS the same event is consulted for programmatic quit, Cmd-Q, Dock Quit,
 and system termination. Cancellation affects only that request; accepted
 shutdown resolves `run()` after windows, workers, and services have completed
 their normal teardown.
+
+The **Quit Z Notes** frontend button calls `Application.current().quit()` through
+the checked `application:quit` global and default-profile grants. The diagnostics
+profile does not have this grant. Frontend `app.events.quitRequested` observes the
+final `{ cancelled }` decision but cannot cancel it. Accepted shutdown may close
+the WebView before that observation appears; service stop and the return from
+native `app.run()` are the cleanup guarantees. Cmd-Q and Dock Quit use that same
+Z-owned shutdown path rather than exiting through AppKit.
+
+Native regression probes (run from the repository root with your Z binary):
+
+```sh
+z run native/z/tests/application-bridge-smoke.zs
+z run native/z/tests/application-native-quit-smoke.zs
+```
+
+The second must print `native quit returned to Z after cancellation and acceptance`;
+status zero alone would not detect an unintended AppKit process exit.
+
+`ZAPP_APPLICATION_QUIT_SMOKE=1 bun run spike:z-notes:smoke` also clicks the
+frontend quit button after the regular smoke succeeds, checks that shutdown
+finishes, and fails on a bounded watchdog if the request does not reach Z.
+Use `ZAPP_APPLICATION_QUIT_SMOKE=1 bun run spike:z-notes:dev-smoke` for the
+same route through Vite; it also verifies that port 5173 is released on exit.
 
 Z Notes installs an application menu from both sides of Zapp's command model.
 Before `run()`, native Z supplies the initial standard roles plus a

@@ -2,6 +2,7 @@
 // separate from descriptive ApplicationMetadata and is never supplied by
 // WebView content.
 export readonly struct ApplicationPermissions {
+  applicationQuit: boolean = false;
   windowCreate: boolean = true;
   menu: boolean = true;
   fsRead: boolean = false;

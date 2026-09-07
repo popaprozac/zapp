@@ -82,7 +82,8 @@ const quitSubscription = try app.events.quitRequested.subscribe(
   }
 );
 
-app.quit();
+// From a callback/service while app.run() is active:
+// Application.current().quit();
 const status = try await app.run();
 ```
 
@@ -97,6 +98,11 @@ workers and services in their ordinary order, and lets `run()` resolve. The
 resolved status together with `app.state() == ApplicationState.stopped` is the
 authoritative terminal signal; Zapp does not duplicate it with a `stopped`
 event in this tier.
+
+The focused TypeScript `Application.current().quit()` is a permission-gated
+one-way request. Its `events.quitRequested` reports `{ cancelled }` after the
+native listeners decide, without exposing `cancel()`. Delivery is best effort;
+keep guaranteed teardown in Z. See the [frontend lifecycle contract](api-reference.md#application-lifecycle-z-rewrite).
 
 The current pre-alpha runtime supports one application run per process. Before
 publication, Zapp observes the synchronized `Once<Application>` lifecycle on

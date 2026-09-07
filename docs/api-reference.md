@@ -4,7 +4,58 @@ Comprehensive, prose-style reference for `@zappdev/runtime`. For a
 compact agent-ready version of the same surface, see
 [`llms.txt`](../llms.txt).
 
-## Imports
+The focused Z rewrite APIs below are implemented independently from the legacy
+`App`, `Window`, and other pre-rewrite APIs retained later in this reference.
+Their lifecycle and permission contracts are not interchangeable.
+
+## Application lifecycle (Z rewrite)
+
+```ts
+import { Application } from "@zappdev/runtime/application";
+
+const app = Application.current();
+const subscription = app.events.quitRequested.subscribe(event => {
+  console.log("Native quit decision cancelled:", event.cancelled);
+});
+
+app.quit(); // One-way request, not a Promise or forced process exit.
+// When the observation is no longer needed:
+subscription.unsubscribe();
+```
+
+`quit(): void` requires `application:quit` in the compiled application-wide
+permission ceiling **and** the originating WebView's selected capability
+profiles. Omitted global permission is denied. Frontend preflight can throw
+`PermissionDeniedError`; native checks remain authoritative even for handcrafted
+messages. Because this is one-way, return does not acknowledge native permission,
+acceptance, or shutdown completion. There is no `force` option.
+
+Native Z `quitRequested` subscribers may synchronously call `event.cancel()`.
+The frontend receives only a frozen `{ cancelled: boolean }` snapshot after all
+native listeners finish. Independent subscriptions work in multiple places;
+`unsubscribe()` is idempotent. These are best-effort observations for WebViews,
+not worker lifecycle support or JavaScript vetoes. Accepted shutdown may destroy
+the WebView before its callback executes. Do not use this event or `pagehide`
+for guaranteed saves or cleanup: keep those in native service shutdown hooks and
+the lifetime of `app.run()`. Async frontend vetoes require a separate future
+protocol, including deadlines and renderer-loss policy.
+
+```ts
+security: {
+  permissions: ["application:quit"],
+  capabilities: {
+    default: { permissions: ["application:quit"] },
+    diagnostics: {}, // Can observe; cannot request application quit.
+  },
+}
+```
+
+AppKit Cmd-Q, Dock Quit, and programmatic requests now all ask the same native
+Z decision source. On acceptance Z stops the platform loop, joins workers,
+stops services, and returns from `app.run()`; AppKit does not exit the process
+instead of running Z cleanup.
+
+## Imports (legacy surface)
 
 ```ts
 import {

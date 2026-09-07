@@ -14,6 +14,7 @@ import {
   publishMacOSApplicationWorkerLifecycle,
   publishMacOSApplicationWorkerMessage,
   publishMacOSApplicationWorkerService,
+  publishMacOSApplicationQuitRequested,
   requestMacOSApplicationQuit,
 } from "./application-runtime.zs";
 import {
@@ -153,6 +154,7 @@ export async function runMacOSApplication(
   const quitApplication: ApplicationQuitOperation = move (
   ): void => requestMacOSApplicationQuit();
   events.start(quitApplication);
+  events.observeQuit(publishMacOSApplicationQuitRequested);
   const status = runMacOSApplicationLoop();
   events.finish();
   workers.requestCancellation();

@@ -43,6 +43,7 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
     shellOpen: false,
     shellReveal: false,
     shellTrash: false,
+    applicationQuit: false,
   });
 }
 

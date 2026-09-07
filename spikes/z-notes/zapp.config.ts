@@ -11,6 +11,7 @@ export default defineConfig({
   },
   security: {
     permissions: [
+      "application:quit",
       "window:create",
       "menu",
       "fs:read",
@@ -24,6 +25,7 @@ export default defineConfig({
     capabilities: {
       default: {
         permissions: [
+          "application:quit",
           "window:create",
           "menu",
           "fs:read",

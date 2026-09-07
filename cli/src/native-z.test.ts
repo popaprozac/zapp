@@ -195,6 +195,7 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("shellOpen: false");
     expect(output).toContain("shellReveal: false");
     expect(output).toContain("shellTrash: false");
+    expect(output).toContain("applicationQuit: false");
   });
 
   it("compiles an explicit window-create denial into native Z policy", () => {
@@ -254,6 +255,14 @@ describe("renderZApplicationMetadata", () => {
     expect(output).toContain("shellOpen: true");
     expect(output).toContain("shellReveal: true");
     expect(output).toContain("shellTrash: true");
+  });
+
+  it("requires an explicit application quit grant in native policy", () => {
+    const output = renderZApplicationMetadata({
+      name: "Lifecycle", identifier: "com.example.lifecycle", version: "1.0.0",
+      assetDir: "./dist", permissions: ["application:quit"],
+    });
+    expect(output).toContain("applicationQuit: true");
   });
 
   it("emits exact immutable capability grants into native Z", () => {

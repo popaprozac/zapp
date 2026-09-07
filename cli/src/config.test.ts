@@ -304,6 +304,12 @@ test("validateWebviewInject rejects ambiguous or escaping profile inputs", () =>
 });
 
 test("validateCapabilityProfiles requires explicit default and bounded grants", () => {
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["application:quit"] },
+  }, ["application:quit"])).not.toThrow();
+  expect(() => validateCapabilityProfiles({
+    default: { permissions: ["application:quit"] },
+  }, [])).toThrow(/security.permissions does not include it/);
   expect(() => validateCapabilityProfiles({ diagnostics: {} }))
     .toThrow(/must declare a "default" profile/);
   expect(() => validateCapabilityProfiles({

@@ -13,6 +13,7 @@ internal struct MacOSApplicationHostState {
 
 internal class MacOSApplicationHost {
   readonly smokeMode: boolean;
+  readonly events: ApplicationEvents on thread.main;
   readonly state: Mutex<MacOSApplicationHostState>;
   readonly application: AppKit.NSApplication on thread.main;
   readonly delegate: objc.Adapter<AppKit.NSApplicationDelegate> on thread.main;
@@ -36,9 +37,10 @@ class MacOSApplicationDelegate on thread.main
     in application: AppKit.NSApplication
   ): AppKit.NSApplicationTerminateReply as "applicationShouldTerminate:" {
     let events = this.events;
-    return events.approveQuit()
-      ? AppKit.NSTerminateNow
-      : AppKit.NSTerminateCancel;
+    // Z owns teardown. Even an accepted request stops app.run() through the
+    // installed operation; AppKit must not exit the process behind its back.
+    events.requestQuit();
+    return AppKit.NSTerminateCancel;
   }
 }
 
@@ -56,6 +58,7 @@ internal function initializeMacOSApplicationHost(
   application.delegate = delegate;
   return applicationHost.initialize(new MacOSApplicationHost({
     smokeMode,
+    events,
     state: Mutex(MacOSApplicationHostState({
       result: smokeMode ? 41 : 0,
     })),
@@ -67,6 +70,11 @@ internal function initializeMacOSApplicationHost(
 internal function macOSApplicationSmokeMode(): boolean {
   const host = applicationHost.get();
   return host.smokeMode;
+}
+
+internal function requestMacOSHostQuit(): void on thread.main {
+  const host = applicationHost.get();
+  host.events.requestQuit();
 }
 
 internal function setMacOSApplicationResult(

@@ -52,6 +52,24 @@ const shellResult = document.querySelector("#shell-result");
 
 const application = Application.current();
 
+const applicationEvents = document.querySelector("#application-events");
+const quitSubscription = application.events.quitRequested.subscribe(event => {
+  applicationEvents.textContent = event.cancelled
+    ? "A native listener cancelled the quit request."
+    : "Native Z accepted the quit request.";
+});
+document.querySelector("#quit-application").addEventListener("click", () => {
+  try {
+    applicationEvents.textContent = "Quit requested; native listeners decide.";
+    application.quit();
+  } catch (error) {
+    applicationEvents.textContent = `Quit request failed: ${String(error)}`;
+  }
+});
+// Local listener cleanup, not application teardown. Accepted shutdown may
+// destroy this WebView before any JavaScript observation callback runs.
+window.addEventListener("pagehide", () => quitSubscription.unsubscribe(), { once: true });
+
 function describeClipboardError(error) {
   if (error instanceof ClipboardError) {
     return `Clipboard ${error.operation ?? "operation"} failed\n${error.message}`;

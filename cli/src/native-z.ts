@@ -286,6 +286,13 @@ export function configuredApplicationPermissions(): ApplicationPermissions {
         resolvePermissions(config.permissions),
       )
     },
+    applicationQuit: ${
+      config.permissions !== undefined
+      && isPermissionAllowed(
+        "application:quit",
+        resolvePermissions(config.permissions),
+      )
+    },
     shellTrash: ${
       config.permissions !== undefined
       && isPermissionAllowed(
