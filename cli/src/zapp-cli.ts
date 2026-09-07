@@ -523,7 +523,15 @@ async function runDev(root: string) {
   if (process.platform === "darwin") {
     // 5. Create .app bundle for dev mode (enables notifications, dock icon, app name)
     clog(1, "creating dev bundle...");
-    const appDir = await createDevBundle(root, nativeOut, config);
+    let appDir: string;
+    try {
+      appDir = await createDevBundle(root, nativeOut, config, {
+        smoke: process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1",
+      });
+    } catch (error) {
+      await cleanup();
+      throw error;
+    }
     const execName = path.basename(nativeOut);
     execPath = path.join(appDir, "Contents", "MacOS", execName);
     clog(0, `launching ${appDir}`);

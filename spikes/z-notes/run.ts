@@ -265,6 +265,9 @@ const originalWorkerRestartSmoke =
   process.env.ZAPP_APPLICATION_WORKER_RESTART_SMOKE;
 const originalWorkerBenchmark = process.env.ZAPP_APPLICATION_WORKER_BENCHMARK;
 const originalApplicationIdentifier = process.env.ZAPP_Z_NOTES_IDENTIFIER;
+if (smoke || process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1") {
+  process.env.ZAPP_Z_NOTES_IDENTIFIER ??= "com.zapp.z-notes.smoke";
+}
 if (persistenceSmoke) {
   const identifier = "com.zapp.z-notes.persistence-smoke";
   process.env.ZAPP_Z_NOTES_IDENTIFIER = identifier;
@@ -316,7 +319,9 @@ try {
     preparedZServices,
   });
   if (process.platform === "darwin") {
-    const appBundle = await createDevBundle(spike, output, config);
+    const appBundle = await createDevBundle(spike, output, config, {
+      smoke: process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1",
+    });
     executable = resolve(
       appBundle,
       "Contents",

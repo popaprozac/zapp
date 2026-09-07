@@ -768,7 +768,11 @@ permission checks, structured cancellation, and deterministic shutdown.
 The [activation contract](application-activation.md) now includes bounded
 startup buffering, native reopen/custom-URL events, and app-authored routing.
 Packaged and development smokes verify startup delivery; a real macOS
-`open -a` URL request verifies delivery to a running app.
+`open -a` URL request verifies delivery to a running app. Bundle publication now
+replaces complete signed directories and refreshes their LaunchServices entries;
+smoke bundles have separate paths and identities and advertise no URL schemes.
+A native regression checks cached launches after changing both executable name
+and bundle identity, including after a smoke build.
 
 The next proposed design checkpoint is cold-launch and single-instance
 activation: primary-instance ownership, bounded forwarding, simultaneous

@@ -173,6 +173,11 @@ that note. Unsupported routes and unknown note IDs do not create a window.
 Clicking the Dock icon while the app is running asks the app-authored reopen
 listener to show the main window. This does not add cross-process forwarding.
 
+For a launch while the app is closed, first build the packaged interactive app
+with `bun run spike:z-notes` and close it normally. The same `open -a` command
+then starts that bundle with its embedded frontend. A development build instead
+needs its Vite session; use `spike:z-notes:dev` before delivering URLs to it.
+
 The generic contract and explicit limits are in
 [Application activation](../../docs/application-activation.md).
 `zapp/notes-route.zs` is the pure app route parser; `zapp/notes-activation.zs`
@@ -612,6 +617,21 @@ The runner places the executable inside a minimal ad-hoc-signed development
 `.app` before launching it. That bundle identity is required by native services
 such as `UNUserNotificationCenter`; invoking the same binary directly from the
 build directory is not an equivalent application environment.
+
+Interactive builds publish to `bin/Z Notes.app`. Each build signs and verifies
+a fresh bundle before replacing the old one, removing stale executables and
+resources, then refreshes only that bundle's LaunchServices registration.
+Signing or registration failures are reported and preserve the previous bundle.
+Smoke builds use `.zapp/smoke/bin/Z Notes.app`, a separate bundle identity, and
+no OS URL-scheme registration. They do not replace the interactive app. By
+default their notes database uses the separate `com.zapp.z-notes.smoke` identity;
+an explicit `ZAPP_Z_NOTES_IDENTIFIER` still takes precedence.
+
+The real macOS bundle replacement regression can be run independently:
+
+```sh
+bun run cli/src/test-bundle-macos.ts
+```
 
 The visible macOS app dynamically opens a second diagnostics window and stays
 open until both windows are closed. Click **Create a note in Z** to call the

@@ -23,6 +23,12 @@ and the native allowlist; omitting it accepts no URL schemes. Registration does
 not guarantee OS-wide exclusivity: another application may register the same
 scheme. Target a particular app bundle when testing.
 
+The CLI publishes a complete signed bundle and refreshes its macOS registration
+after replacement. This matters when a rebuild changes the executable name or
+bundle identity: launching by bundle path must not reuse a stale executable.
+Smoke-test bundles are isolated from the interactive bundle and do not advertise
+the application's custom URL schemes.
+
 The subscription pattern inside application setup is:
 
 ```zs
