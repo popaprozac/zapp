@@ -779,9 +779,13 @@ readonly argument snapshots and an optional working directory without a
 framework-specific JSON workaround. Stage 0 and native payload/event tests
 cover UTF-8, bounds, malformed input, FIFO delivery, and shutdown.
 
-The next runtime slice is cold-launch and single-instance activation:
-primary-instance ownership, bounded forwarding, simultaneous launches, and
-shutdown races. The existing `singleInstance` bundle hint does
+The private macOS primary lease now has independent multi-process evidence:
+scope cleanup, nonblocking contention, crash recovery, and simultaneous launches
+through both compilers. It adds no polling thread and is not yet wired into
+`app.run()`; see [the activation contract](application-activation.md#private-primary-ownership-checkpoint).
+The next runtime slice connects that lease to a bounded launch endpoint,
+admission acknowledgements, startup buffering, and shutdown races.
+The existing `singleInstance` bundle hint does
 not yet supply a cross-process forwarding protocol. Broader platform coverage,
 file/universal-link handling, additional worker engines, and sanitizer evidence
 on a compatible host remain separate work; they are not implied by the current

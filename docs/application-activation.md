@@ -126,13 +126,51 @@ fields, malformed JSON, and unsupported versions are rejected. Error messages
 do not include argument contents. Launches share the existing 64-request FIFO.
 
 This is the **payload and event foundation**, not automatic cross-process
-delivery yet. Primary-instance arbitration, admission acknowledgements,
-forwarding, simultaneous launches, and shutdown races are the next runtime
-slice. The existing bundle hint alone does not provide those guarantees.
+delivery yet. The private primary-ownership primitive is tested independently
+below; wiring it into startup, admission acknowledgements, forwarding, and
+shutdown races are the next runtime slice. The existing bundle hint alone does
+not provide those guarantees.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
 independent event delivery, reentrancy, unsubscribe, and shutdown behavior
 through Stage 0 and native Z.
+
+### Private primary-ownership checkpoint
+
+The macOS backend now has an internal move-only instance lease, not yet called
+by `app.run()`. It uses a nonblocking exclusive OS file lock per effective user
+and exact application identifier. Stable SHA-256 filename encoding avoids path
+interpretation and filesystem-name length restrictions; it is not an
+authentication mechanism. The lock lives beneath the OS-reported private user
+temporary directory, not an environment-supplied `TMPDIR`. Directory and file
+ownership, permissions, type, link count, and symlink traversal are checked.
+This follows Apple's [private temporary-directory guidance](https://developer.apple.com/library/archive/documentation/Security/Conceptual/SecureCodingGuide/Articles/RaceConditions.html).
+
+The Z owner's `deinit` closes the descriptor. The kernel also releases the lease
+after process death; close-on-exec prevents an executed child program from
+retaining it. Lock files are deliberately **not deleted** during normal use:
+replacing the inode could let two processes lock different files under one
+name. Empty files are harmless, not evidence of a live or stale primary. There
+is no PID guessing, stale-file takeover timeout, polling, or background thread.
+
+Contention is distinct from setup failure. A future startup integration must
+forward to the owner or report failure; it must not treat an I/O failure as
+permission to start a second application. This is cooperative same-user
+coordination, not a security boundary against other code running as that user.
+It does not yet prove that the owner has a ready endpoint or accepted a launch.
+
+Run the bounded native regression with:
+
+```sh
+bun run cli/src/test-instance-lease-macos.ts
+```
+
+It builds the same isolated fixture through Stage 0 and the native Z driver,
+then checks scope cleanup, competing processes, independent identities, crash
+recovery without removing the lock, simultaneous launches, and hostile file
+shapes. Every child has a deadline and teardown; interactive bundles and their
+instance identifiers are not used. `Z_SOURCE_ROOT` can select the compiler
+checkout (the default is the sibling `z-lang` directory).
 
 Current platform implementation: macOS `NSApplicationDelegate` reopen and
 `application:openURLs:` callbacks. File associations, universal links, frontend
