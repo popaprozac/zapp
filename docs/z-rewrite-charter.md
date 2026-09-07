@@ -1,4 +1,4 @@
-# Z Native Core Rewrite Charter
+# Zapp Architecture Charter
 
 Status: accepted direction, August 2026.
 
@@ -18,8 +18,8 @@ headless async-service graph also compiles
 through the fixed-point Z emitter: one reusable function sequences synchronous
 and suspended service routes through two child-task suspension states. One
 generated Notes binding runs through WebKit, and a narrow exported C entry
-reaches the same handler directly for future zjs attachment. The AppKit
-process/run-loop host remains a small Objective-C boundary. Phase 3 now has a
+reaches the same handler directly for embedded-host attachment. The AppKit
+process/run-loop host and application delegate are now Z-owned. Phase 3 has a
 functional vertical slice in the ordinary configured application path: one
 bundled ZJS source module starts after services, runs on its own native thread,
 calls the same generated service API as a WebView through direct in-process Z
@@ -29,22 +29,25 @@ releases its engine through deterministic Z-owned control lifetime.
 
 ## Decision
 
-Zapp's native core will be rewritten in Z.
+Zapp's native core is written in Z. Documentation describes that implementation
+as Zapp, without a "Z rewrite" qualifier. Only historical implementations and
+future or unsupported capabilities need explicit qualification. Keep implemented
+behavior, current platform coverage, and measured results distinct from plans.
 
 Zapp is pre-production and has no compatibility obligation to existing users.
 That makes this the right time to change architecture, APIs, and internal
 representation where the result is clearer, safer, or more coherent. The
-current Nim and Zen-C implementations are executable research and behavioral
+earlier Nim and Zen-C implementations are executable research and behavioral
 references, not designs that the Z implementation must translate line by line.
 
-The rewrite starts now, before Z implements every planned language feature.
-Zapp is an intended real-world consumer of Z and should expose composition gaps
+Framework development does not wait for Z to implement every planned feature.
+Zapp is a real-world consumer of Z and should expose composition gaps
 while those gaps remain inexpensive to fix.
 
-## What "from scratch in Z" means
+## Native-core ownership
 
-The rewrite creates a new Z-owned application core rather than transliterating
-the existing native files. Z should ultimately own:
+The application core is designed around Z rather than transliterating the
+historical native files. Z should ultimately own:
 
 - application and shutdown lifecycle;
 - window and webview identity;
@@ -127,7 +130,7 @@ and tracked rather than becoming the new architecture.
 
 ## Product principles to preserve
 
-The rewrite must retain the strongest ideas already proven by Zapp:
+Zapp must retain its strongest proven ideas:
 
 - system WebViews instead of a bundled browser;
 - unusually small binaries and low idle memory;
@@ -142,7 +145,7 @@ The rewrite must retain the strongest ideas already proven by Zapp:
 
 ## What the Z architecture should improve
 
-| Concern | Z rewrite direction |
+| Concern | Architectural direction |
 |---|---|
 | Application root | A stable readonly ARC `Application` publishes `Application.current()` for one guarded `run()` interval; synchronized `Once` lifecycle observation turns duplicate or post-shutdown publication into typed state errors while platform-private `Once` runtimes retain explicit initialization and shutdown. |
 | Application quit | `app.quit()` and native OS termination converge on cancellable `app.events.quitRequested`; accepted requests unwind the ordinary run lifetime, while `run()` completion and `app.state()` remain the terminal signal. |
@@ -237,7 +240,7 @@ export contract for macOS, Windows, and Linux without changing the public
    document-start scripts, document-end scripts, and styles, preserve ordering,
    avoid `eval`, and behave consistently across engines.
 
-## Rewrite sequence
+## Implementation milestones
 
 ### Phase 0: establish the replacement track
 
@@ -529,7 +532,7 @@ not a second general-purpose filesystem library.
 Zapp must pressure-test Z without accumulating framework-local compiler
 workarounds.
 
-When the rewrite exposes a language or interop gap:
+When framework development exposes a language or interop gap:
 
 1. reduce it to the smallest representative fixture in the Z repository;
 2. decide whether the gap is language semantics, `.zd` vocabulary, standard
@@ -539,12 +542,12 @@ When the rewrite exposes a language or interop gap:
 5. resume the application slice using the normal language surface.
 
 A permanent shim is justified only when the native ABI is inherently outside
-Z's intended safe surface. The rewrite should not quietly design new Z syntax
+Z's intended safe surface. Framework work should not quietly design new Z syntax
 inside Zapp.
 
 ## Known pressure points
 
-| Area | Current evidence | Rewrite question |
+| Area | Current evidence | Open question |
 |---|---|---|
 | AppKit and main-thread work | The main-executor Z application creates and owns the window, WebView, configuration, content controller, and script handler; the visible round trip proves teardown. | Do navigation delegates, multiple windows, and broader callbacks compose cleanly? |
 | ARC application state | `Application.run()` publishes the stable ARC application identity and owns a platform-private `Once<MacOSApplicationRuntime>` lifetime containing the native UI graph, protocol adapter, and registration guard while the Objective-C adapter holds weak references. | Can multiple application-owned native delegates avoid cycles and preserve deterministic shutdown? |
@@ -568,13 +571,13 @@ Measure the replacement against equivalent behavior in the current core:
 - ARC retain/release activity on hot paths; and
 - startup and deterministic shutdown time.
 
-The goal is not merely to avoid regression. The Z rewrite should make safety
+The goal is not merely to avoid regression. Zapp should make safety
 costs visible, allow the optimizer to remove language abstractions, and retain a
 performance ceiling in the C/Rust/Zig class when semantics are comparable.
 
-## First main-chat task
+## Historical starting checkpoint
 
-Start with Phase 0, not a broad port:
+The original Phase 0 task was intentionally narrow:
 
 > Add an in-tree `native/z/` core selected by `ZAPP_NATIVE_LANG=z`. Build and
 > link a Z static library through the normal Zapp CLI, initialize and shut down
@@ -582,5 +585,5 @@ Start with Phase 0, not a broad port:
 > framework-owned path. Preserve the current native core as the behavioral
 > oracle until the Phase 1 WebView round trip is complete.
 
-That checkpoint is intentionally narrow. Once it works, the next task is the
-single-window `NSApplication` + `WKWebView` vertical slice described in Phase 1.
+That checkpoint and the subsequent single-window `NSApplication` + `WKWebView`
+vertical slice are complete; the milestones above record the current evidence.

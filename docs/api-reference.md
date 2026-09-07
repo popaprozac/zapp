@@ -1,14 +1,15 @@
 # Runtime API Reference
 
-Comprehensive, prose-style reference for `@zappdev/runtime`. For a
-compact agent-ready version of the same surface, see
-[`llms.txt`](../llms.txt).
+The current application lifecycle API is documented below. See the
+[documentation index](README.md) for native services, configuration, activation,
+and the complete application example.
 
-The focused Z rewrite APIs below are implemented independently from the legacy
-`App`, `Window`, and other pre-rewrite APIs retained later in this reference.
-Their lifecycle and permission contracts are not interchangeable.
+The later legacy API sections are retained as historical reference, not the
+current framework contract. Their `App` and `Window` APIs, and the older
+[`llms.txt`](../llms.txt) catalog, are not interchangeable with the focused
+package imports used by current applications.
 
-## Application lifecycle (Z rewrite)
+## Application lifecycle
 
 ```ts
 import { Application } from "@zappdev/runtime/application";

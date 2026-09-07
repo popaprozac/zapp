@@ -1,11 +1,11 @@
 <div align="center">
   <img src="assets/zapp-hero.png" alt="Zapp" width="160" height="160">
   <h1>Zapp</h1>
-  <h3>Desktop and mobile apps. 445 KB on macOS.</h3>
+  <h3>Native applications built with Z and the system WebView.</h3>
   <p>
-    <img src="https://img.shields.io/badge/macOS-supported-brightgreen" alt="macOS">
-    <img src="https://img.shields.io/badge/iOS-supported-brightgreen" alt="iOS">
-    <img src="https://img.shields.io/badge/Windows-in_progress-yellow" alt="Windows">
+    <img src="https://img.shields.io/badge/macOS-pre--alpha-yellow" alt="macOS pre-alpha">
+    <img src="https://img.shields.io/badge/iOS-planned-lightgrey" alt="iOS planned">
+    <img src="https://img.shields.io/badge/Windows-planned-lightgrey" alt="Windows planned">
     <img src="https://img.shields.io/badge/Linux-planned-lightgrey" alt="Linux">
     <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
   </p>
@@ -13,23 +13,32 @@
 
 ---
 
-Zapp is an application framework that produces **extraordinarily small binaries** by compiling to native code (Nim by default; [Zen-C](https://github.com/zenc-lang/zenc) available as `ZAPP_NATIVE_LANG=zc`) and rendering UI in the system WebView. No bundled browser. No runtime overhead. Your frontend is your choice — React, Svelte, Vue, Solid, or vanilla; `zapp init -t <template>` scaffolds any of them.
+Zapp is a pre-alpha application framework written in
+[Z](https://github.com/popaprozac/z), with TypeScript tooling and your choice of
+web frontend. It uses the system WebView instead of bundling a browser, with
+small binaries, fast native calls, and explicit capability boundaries as core
+design goals.
 
-The next native core is being written from scratch in [Z](https://github.com/popaprozac/z) and is
-available as an explicitly experimental `ZAPP_NATIVE_LANG=z` build track. The
-Phase 0 embedding path and the first Phase 1 application slice are complete:
-Z now owns a visible AppKit/WebKit window, typed JSON ingress, generated service
-round trips, and structured suspending service delivery through the real
-WebView. The small Objective-C process/run-loop host remains a boundary while
-the Z core expands. See the [rewrite charter](docs/z-rewrite-charter.md) and
-[checkpoint guide](docs/z-native-core.md).
+The runnable macOS application combines native windows, generated typed
+services, application workers, menus, dialogs, filesystem authority, and
+deterministic shutdown. Native application logic lives in Z; the CLI and
+frontend integration use Bun and Vite. Additional platforms remain planned for
+this framework; their earlier implementations are research, not current parity.
 
-The same Zapp codebase ships to **macOS and iOS** today (Windows next). Desktop apps get the full multi-window / menu-bar / tray surface; iOS apps get UIKit-native modal sheets, file pickers, notifications, and clipboard — without any "this looks like a web app on a phone" feel.
+Start with [Z Notes](spikes/z-notes/README.md), the complete runnable application,
+then the [documentation index](docs/README.md),
+[architecture charter](docs/z-rewrite-charter.md), and
+[native core guide](docs/z-native-core.md). The example selects the current
+native build path; older general-purpose CLI defaults and repository layouts
+are still being consolidated.
 
-Building with an AI agent? Point it at [`llms.txt`](llms.txt) for a
-comprehensive single-file reference covering concepts, config shapes, the
-full runtime API, and common patterns. See [`docs/`](docs/) for longer-form
-guides.
+## Historical implementation reference
+
+The material below records the earlier Nim/Zen-C implementations, including
+their API, platform coverage, commands, and measured benchmarks. It is retained
+for comparison and does **not** describe current framework support or current
+performance. New applications should follow the guides above. The older
+[`llms.txt`](llms.txt) catalog likewise remains historical reference.
 
 ## Benchmarks
 

@@ -102,7 +102,7 @@ event in this tier.
 The focused TypeScript `Application.current().quit()` is a permission-gated
 one-way request. Its `events.quitRequested` reports `{ cancelled }` after the
 native listeners decide, without exposing `cancel()`. Delivery is best effort;
-keep guaranteed teardown in Z. See the [frontend lifecycle contract](api-reference.md#application-lifecycle-z-rewrite).
+keep guaranteed teardown in Z. See the [frontend lifecycle contract](api-reference.md#application-lifecycle).
 
 The current pre-alpha runtime supports one application run per process. Before
 publication, Zapp observes the synchronized `Once<Application>` lifecycle on

@@ -1,4 +1,4 @@
-# Application activation (Z rewrite)
+# Application activation
 
 Zapp delivers OS reopen requests and registered custom URLs to application-owned
 Z events. Application code decides what those requests mean. This is distinct

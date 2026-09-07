@@ -1,15 +1,14 @@
-# Z native core
+# Native core
 
-Status: Phase 0 complete; Phase 1 typed ingress, dynamically created Z-owned
-AppKit/WebKit windows, generated typed service round trips, structured
-suspending service delivery through real WebViews, and the first direct ZJS
-worker-to-Z service route complete, August 2026.
+Zapp's reusable native core lives under `native/z/framework/`; the reference
+application source lives under `spikes/z-notes/zapp/`. Z owns application and
+window lifetime, AppKit/WebKit delegates, generated service dispatch, worker
+coordination, and capability enforcement. The runnable macOS application also
+exercises menus, dialogs, filesystem authority, and activation events.
 
-Zapp's reusable native core lives under `native/z/framework/`; the first
-application-owned source graph lives under `spikes/z-notes/zapp/`. It is a
-from-scratch Z implementation, not a translation of the current Nim or Zen-C trees. Those
-implementations remain the behavioral and performance oracle until the Z core
-reaches equivalent application behavior and measurement coverage.
+The Nim and Zen-C trees are historical behavioral and performance references,
+not the architecture or public API contract for new applications. See the
+[architecture charter](z-rewrite-charter.md) for milestones and future scope.
 
 ## What works now
 
@@ -743,8 +742,8 @@ measurement boundary.
 
 ## CLI and package design are open
 
-The existing command and npm layout are not compatibility constraints. Phase 0
-keeps `zapp build` as a stable measurement harness, but the rewrite may improve:
+The existing command and npm layout are not compatibility constraints.
+Keep `zapp build` as a repeatable measurement harness while improving:
 
 - package boundaries between CLI, runtime, Vite integration, native sources,
   and compiler/toolchain metadata (the repository now declares those existing
@@ -761,21 +760,20 @@ Changes should reduce concepts and generated glue, preserve Bun-friendly
 frontend ergonomics, and remain measurable. We do not need to imitate the old
 CLI merely because it exists.
 
-## Next exit criterion
+## Current checkpoint and follow-ups
 
-Phase 0's exit criterion is satisfied. Phase 1 now has a visible generated
-service call through WebView -> Z -> WebView, a generated-runtime-owned Z
-`Application`, Z-owned UI identities and retained protocol registration, typed
-JSON ingress and dispatch, an embedded-engine direct-service seam, and
-deterministic window/run-loop/runtime shutdown. The framework and application
-are now separate source graphs, and one Notes project drives dynamic
-multi-window WebViews and the strict-C embedding host. The first compiled
-permission slice also gates frontend window creation inside Z and returns
-structured invocation errors that the TypeScript runtime restores as
-descriptive error subclasses. Generated services now preserve owned decoded
-request values and typed failures through suspension and explicit main-executor
-placement. Synchronous main-isolated service methods are adapted through a
-private generated async wrapper, keeping the public method synchronous while
-making cross-executor dispatch explicit in generated Z. Remaining work includes
-zjs host attachment, broader wire-type coverage, and ASan or equivalent leak
-evidence on a compatible host.
+The application, generated-service, and direct ZJS-worker vertical slices are
+implemented. Z Notes exercises them together with application-owned managers,
+permission checks, structured cancellation, and deterministic shutdown.
+The [activation contract](application-activation.md) now includes bounded
+startup buffering, native reopen/custom-URL events, and app-authored routing.
+Packaged and development smokes verify startup delivery; a real macOS
+`open -a` URL request verifies delivery to a running app.
+
+The next proposed design checkpoint is cold-launch and single-instance
+activation: primary-instance ownership, bounded forwarding, simultaneous
+launches, and shutdown races. The existing `singleInstance` bundle hint does
+not yet supply a cross-process forwarding protocol. Broader platform coverage,
+file/universal-link handling, additional worker engines, and sanitizer evidence
+on a compatible host remain separate work; they are not implied by the current
+macOS checks.
