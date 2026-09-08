@@ -802,8 +802,12 @@ cold invocation start, including cleanup when dropped or cancelled before entry.
 Foundation-backed endpoint and synchronized inbox storage now compile against
 the actual framework types, including nested readonly launch arguments. Reduced
 Z runtime regressions verify strong-slot release, exact-once resource cleanup,
-and no Mutex lock spanning a yield. Child-await/error composition remains the
-next prerequisite. The listener needs cancellation
+and no Mutex lock spanning a yield. The upstream loop frame now composes direct
+named child awaits with owned value arguments and typed errors, including
+`try`/`attempt`, repeated calls, owned results, and child-before-parent
+cancellation cleanup. Borrowed child arguments and method/placed awaits remain
+separate boundaries. The next check is the actual listener's receive-error and
+main-host wakeup composition. The listener needs cancellation
 observation between bounded receives and endpoint cleanup before lease release.
 These are recorded in the
 Z ownership-pressure log with reduced fixtures; no synchronous background-loop

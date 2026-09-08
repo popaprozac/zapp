@@ -296,11 +296,16 @@ bounded, unstarted `retainLaunchFrame` helper against those actual types through
 both compilers. Z's separate runtime tests check descriptor release, reverse
 endpoint/lease cleanup, and unlocked Mutex state on cold drop and cancellation.
 Clang strong slots in heap frames are explicitly cleared even for wrappers
-without a Z `deinit`. This remains a non-throwing `void`/`i32` tier without
-declaration affinity, not yet child-await/error composition or a running listener.
+without a Z `deinit`. The upstream `void`/`i32` frame now also supports typed
+errors, repeated direct named child awaits with owned arguments, root owned
+child results, and `try`/`attempt`. Cancellation joins an active child before
+destroying its parent; owned-error tests cover unclaimed results and Foundation
+strong fields. Borrowed child arguments, method/placed awaits, and nested
+awaited expressions remain outside this loop tier. This is not a running listener.
 
-The next sequence is to extend that native frame to the listener's
-child-await/error requirements, then restore the integration probe.
+The next step is to pressure-test the actual listener's receive-error handling
+and main-host wakeup against those remaining boundaries, then restore the
+integration probe. Do not infer integration from the reduced compiler tests.
 The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
