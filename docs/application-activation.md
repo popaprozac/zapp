@@ -283,12 +283,16 @@ Stage 0 now executes the first shape, with cleanup verified on success, error,
 and cancellation, including awaited initializers and joined scoped borrows.
 Owned branch/loop bindings still require explicit lexical async scopes. The
 reduced cases are recorded in Z's ownership-pressure log and
-`async-launch-owned-destructure.zs` / `async-launch-listener.zs` fixtures.
-The first also demonstrates that native `check` acceptance alone does not yet
-guarantee C emission for that combined frame shape.
+`async-launch-owned-destructure.zs` / `async-launch-listener.zs` fixtures. Both
+now execute through the fixed-point native compiler too. Its new yield frame
+retains root Z-owned locals and selected fields across `if`/`while` yields,
+with cancellation-before-entry and post-initialization cleanup tests. This is
+a parameterless, non-throwing `void`/`i32` tier without declaration affinity,
+not yet the real listener's native-resource/parameter/child-await composition.
 
-The next sequence is to close these compiler gaps, then restore the integration
-probe. The listener will construct/destroy the endpoint on its own worker,
+The next sequence is to extend that native frame to the actual listener's
+storage and child-await/error requirements, then restore the integration probe.
+The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
 and admission. Shutdown must close admission, cancel/join the listener, release

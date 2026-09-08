@@ -793,11 +793,13 @@ The shared inbox coalesces wake reservations across concurrent producers. These
 pieces pass both compiler paths; the transport also passes UBSan.
 
 Startup/shutdown integration, main-executor draining, and automatic secondary
-exit remain gated on native owned struct destructuring combined with suspension
-and general named native helpers with suspending loops. Stage 0 now executes
-the owned destructuring shape with initialization, scoped-borrow, error, and
-cancellation cleanup coverage; native parity is still pending. The listener
-needs cancellation observation between bounded
+exit remain gated on the actual listener's native frame composition. The
+reduced owned-destructuring and ordinary named yield-loop cases now execute in
+both compilers; native cancellation tests cover before-entry and initialized
+root-field cleanup. Stage 0 has broader initialization, scoped-borrow, error,
+and cancellation coverage. Native parameters, endpoint storage, and child-await/
+error composition are the next prerequisites. The listener needs cancellation
+observation between bounded
 receives and endpoint cleanup before lease release. These are recorded in the
 Z ownership-pressure log with reduced fixtures; no synchronous background-loop
 workaround or partial `app.run()` integration is enabled.
