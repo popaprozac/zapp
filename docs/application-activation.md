@@ -319,11 +319,22 @@ execution, exactly-once context cleanup, and scope reference counts pass.
 TaskScope and TaskControl handles also survive owned yield-frame parameters and
 root locals. See Z commit `e9a9608` and its ownership-pressure log.
 
-The next prerequisite is language-level native `thread.spawn` capture of the
-TaskScope plus cancellation propagation into the yielding child; that capture
-is still rejected. Then restore the integration probe. The manual pthread
-frame test is not proof of a running application listener, and relaxing only
-the capture allowlist would not prove cancellation.
+The language-level prerequisite now passes upstream: native
+`thread.spawn(async move ...)` retains a captured TaskScope, and a terminal
+await of a named nonthrowing yielding helper forwards cancellation into its
+child frame before publishing worker completion. The parent retains its scope
+handle and joins or cancels admitted main work separately. Bounded UBSan probes
+cover both closure body forms, pre-entry cancellation, nested child cleanup,
+closed-scope rejection, imported aliases, and exact final reference counts.
+Combining workers with TaskScope also exposed and fixed missing initialization
+of a scope-owned fallback executor's external-completion state.
+
+The next step is to restore the endpoint/inbox/main-wakeup integration probe.
+The native frame tier remains deliberately bounded: void/i32 nonthrowing worker
+wrappers around named yielding functions, root owned storage, and supported
+direct child awaits. Other scope-capturing worker await shapes fail closed;
+general worker-body normalization and cross-thread TaskControl capture remain
+separate. These runtime tests are not proof of a running application listener.
 The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
