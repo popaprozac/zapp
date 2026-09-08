@@ -42,13 +42,14 @@ UBSan. The compiler reaches a fixed point, and all eight production-shaped
 startup process cases pass again with Stage 0 and native output. No new syntax
 or additional task-frame allocation was needed.
 
-Upstream checkpoint: Z `d3f3367`. All 210 self-hosting-tier tests pass. After
+Previous upstream checkpoint: Z `d3f3367`. All 210 self-hosting-tier tests pass. After
 restoring the unapplied draft, the normal native Z Notes smoke and both Zapp
 TypeScript check projects pass as well.
 
-The full Application.run wrapper now stops on the following additional shape:
-joining a TaskScope after that awaited local. This reduced ordinary Z program
-runs with Stage 0 but receives Z0700 from the fixed-point native compiler:
+The reduced TaskScope-handle continuation below now executes through both
+Stage 0 and the native emitter. The awaited local remains owned through sequential
+close/cancel joins; checked TaskScope receiver identities (including renamed
+imports) distinguish these operations from arbitrary methods named `cancel`.
 
 ```zs
 import { thread } from "std/thread";
@@ -69,12 +70,31 @@ async function main(): i32 on thread.main {
 }
 ```
 
-The native diagnostic now identifies a broader continuation-frame requirement
-instead of reporting a timer-only lowering error. In the full graph it points
-at `const outcome = attempt await runMacOSReadyApplication(...)`; the subsequent
-native listener cancellation and TaskScope joins are the additional suspensions.
-Fix these upstream with checked receiver identities and cancellation/cleanup
-tests. Do not simply ignore every method named `cancel` in frame admission.
+Same-executor joins register waiters and preserve child-before-parent cleanup;
+separate-driver scopes retain the existing synchronous bridge. Bounded UBSan
+tests cover simultaneous waiters, cold/active destruction, exact scope reference
+counts, and the actual Z parent cancelled at 19 scheduler positions on both
+success/error paths. Latest upstream checkpoint: Z `3732b1c`, with all 212
+self-hosting-tier tests passing and the local compiler rebuilt to a fixed point.
+The ordinary native Z Notes auto-closing smoke and all eight Stage 0/native
+startup transport cases pass again under UBSan. This is a generic upstream
+capability, not a change to the application source or a claim that this wrapper
+now builds.
+
+Two gates remain in the full wrapper:
+
+- Native-listener cancellation/join after the owned outcome still needs a
+  continuation state. Do not confuse an explicit worker cancel (which completes
+  normally) with cancellation of the parent task itself.
+- `launchUpdates` is created inside the wrapper, not merely passed in. An
+  additional upstream probe showed that cancelling a native parent before such
+  a scope's explicit join can leave scheduled children/timers alive. The native
+  linear frame now rejects locally created TaskScope owners with `Z0700` until
+  implicit scope-unwind states join those children on every exit. Passing handle
+  tests do not establish local structural ownership.
+
+Fix both upstream with cancellation/cleanup tests. Do not simply ignore every
+method named `cancel` in frame admission.
 Do not rewrite the application around polling, a synchronous wrapper, or a
 different public API merely to satisfy a lowering classifier.
 
@@ -85,10 +105,11 @@ match destinations during this work.
 
 ## Resume sequence
 
-1. Compose the native post-await continuation with TaskScope cancellation/join,
-   then native-thread cancellation/join. Preserve the owned outcome and parent
-   storage until every admitted child has joined. Early return + awaited local
-   alone is now covered; avoid expanding unrelated nested-local/yield shapes.
+1. Implement implicit unwinding for continuation-owned TaskScopes, then
+   native-thread cancellation/join. Passed-in TaskScope joins are now covered.
+   Preserve the owned outcome and parent storage until every admitted child has
+   joined, even when cancellation skips a source-level explicit await. Avoid
+   expanding unrelated nested-local/yield shapes.
 2. Rebuild the fixed-point compiler, then rerun the complete process matrix:
 
    ```sh

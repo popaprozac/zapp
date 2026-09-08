@@ -1,7 +1,10 @@
 # Zapp Documentation
 
-These guides describe Zapp's current framework. Historical material is
-explicitly identified below and is not a compatibility promise.
+Start here to build applications with Zapp. These guides describe the current
+framework through runnable examples, common tasks, and API/configuration
+reference. Engineering plans and historical material are separated below.
+
+## Application development
 
 | File | What's in it |
 |---|---|
@@ -10,13 +13,22 @@ explicitly identified below and is not a compatibility promise.
 | [`z-services.md`](z-services.md) | Native service registration, generated TypeScript clients, errors, and lifecycle |
 | [`application-activation.md`](application-activation.md) | Reopen and custom URL events, startup buffering, and shutdown guarantees |
 | [`api-reference.md`](api-reference.md#application-lifecycle) | Current frontend application lifecycle; later sections contain explicitly labeled legacy APIs |
-| [`z-rewrite-charter.md`](z-rewrite-charter.md) | Architecture charter, product principles, milestones, and planned capabilities |
-| [`z-native-core.md`](z-native-core.md) | Running, validating, and measuring the native framework |
-| [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 Existing document filenames are retained so links remain stable. Future designs
 are labeled as such; platform support and measurements must name the implemented
 and tested scope rather than inherit claims from prior implementations.
+
+## Framework engineering and plans
+
+These documents are for contributors working on Zapp itself, not prerequisites
+for using its public APIs.
+
+| File | What's in it |
+|---|---|
+| [`z-rewrite-charter.md`](z-rewrite-charter.md) | Architecture charter, product principles, milestones, and documentation policy |
+| [`z-native-core.md`](z-native-core.md) | Running, validating, and measuring the native framework |
+| [`plans/application-startup-integration.md`](plans/application-startup-integration.md) | Startup integration checkpoint, upstream compiler gates, and resume sequence |
+| [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 ## Historical and contributor references
 

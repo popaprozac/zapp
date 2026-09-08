@@ -44,6 +44,22 @@ Framework development does not wait for Z to implement every planned feature.
 Zapp is a real-world consumer of Z and should expose composition gaps
 while those gaps remain inexpensive to fix.
 
+## Documentation audience and structure
+
+Zapp documentation primarily serves developers building applications, following
+the same direction as Z's language documentation. Lead with getting started,
+task-oriented guides, runnable examples, and API/configuration reference. Explain
+how native Z services and frontend TypeScript fit together, including errors,
+permissions, ownership, lifecycle, and platform differences where they affect
+application code.
+
+Document current supported behavior directly, without requiring readers to know
+the rewrite history or compiler implementation. Keep relevant limitations clear
+and close to the affected API; do not present planned capabilities as available.
+Implementation checkpoints, compiler blockers, migration history, and resume
+sequences belong in separately linked contributor and engineering notes. Update
+usage examples and reference pages alongside changes to supported behavior.
+
 ## Native-core ownership
 
 The application core is designed around Z rather than transliterating the
