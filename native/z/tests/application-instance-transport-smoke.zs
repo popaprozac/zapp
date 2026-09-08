@@ -11,17 +11,28 @@ import {
   forwardMacOSLaunchWhenReady,
 } from "../framework/platform/macos/instance-transport.zs";
 
-// Compile-only storage regression using the actual endpoint and inbox types.
+// Compile-only receive/error regression using the actual endpoint and inbox.
 // The transport suite emits this bounded helper through both compilers, but
-// does not start it: listener child-await/error composition is a later gate.
-async function retainLaunchFrame(endpoint: MacOSLaunchEndpoint, inbox: ActivationInbox): i32 {
+// does not start it: main-host wakeup and lifecycle joins are the next gate.
+async function retainLaunchFrame(input: MacOSLaunchEndpoint, inbox: ActivationInbox): i32 {
+  let endpoint = move input;
   let turns = 0;
+  let admitted = 0;
   while (turns < 2) {
     if (inbox.isClosed()) return 0;
+    match (attempt endpoint.receive(in inbox)) {
+      success(accepted) => {
+        if (accepted) admitted = admitted + 1;
+      }
+      failure(error) => {
+        // A lost acknowledgement must not make an admitted request disappear.
+        if (error.mayHaveBeenAdmitted) admitted = admitted + 1;
+      }
+    }
     await scheduler.yield();
     turns = turns + 1;
   }
-  return 0;
+  return admitted;
 }
 
 function serve(in identifier: String, in mode: String): i32 {

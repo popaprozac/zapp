@@ -68,7 +68,8 @@ function start(id: string, mode = "once") {
   return { child, ready, exited, stdout, stderr };
 }
 async function finish(server: ReturnType<typeof start>, expected: string) {
-  assert.equal(await server.exited, 0, await server.stderr);
+  assert.equal(await server.exited, 0,
+    `Transport receiver failed.\nExpected: ${expected}\nStdout: ${await server.stdout}\nStderr: ${await server.stderr}`);
   assert.equal(await server.stdout, `ready\n${expected}released\n`);
 }
 async function send(id: string, text = payload, status = 0, result = "accepted", waitForReady = false) {

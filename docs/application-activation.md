@@ -300,11 +300,17 @@ without a Z `deinit`. The upstream `void`/`i32` frame now also supports typed
 errors, repeated direct named child awaits with owned arguments, root owned
 child results, and `try`/`attempt`. Cancellation joins an active child before
 destroying its parent; owned-error tests cover unclaimed results and Foundation
-strong fields. Borrowed child arguments, method/placed awaits, and nested
-awaited expressions remain outside this loop tier. This is not a running listener.
+strong fields. The actual endpoint probe now also compiles a synchronous
+`match (attempt endpoint.receive(in inbox))` inside its yielding loop. It tracks
+both acknowledged admission and admission followed by an acknowledgement error.
+Upstream runtime probes cover payload cleanup on fallthrough, early return,
+throw/`try`, loop exits, and cancellation, including Foundation ARC payloads.
+Borrowed child arguments, method/placed awaits, and nested awaited expressions
+remain outside this loop tier. Match arms cannot suspend in this tier; their
+payloads finish before the next yield. This is not a running listener.
 
-The next step is to pressure-test the actual listener's receive-error handling
-and main-host wakeup against those remaining boundaries, then restore the
+The next step is to pressure-test main-host wakeup placement and joins against
+those remaining boundaries, then restore the
 integration probe. Do not infer integration from the reduced compiler tests.
 The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
