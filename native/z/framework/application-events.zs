@@ -1,4 +1,5 @@
 import { thread } from "std/thread";
+import { ActivationInbox } from "./activation-inbox.zs";
 import { ApplicationSecondInstanceLaunchedEvent } from "./application-launch.zs";
 import {
   ApplicationActivation,
@@ -128,6 +129,17 @@ export readonly class ApplicationEvents on thread.main {
   internal function startActivation(): void {
     let activation = this.activation;
     activation.start();
+  }
+
+  // Only the private platform transport receives this admission capability;
+  // subscriptions and delivery remain main-executor-bound.
+  internal function activationInbox(): ActivationInbox {
+    return this.activation.inbox;
+  }
+
+  internal function drainActivation(): void {
+    let activation = this.activation;
+    activation.drain();
   }
 
   internal function requestReopen(): boolean {

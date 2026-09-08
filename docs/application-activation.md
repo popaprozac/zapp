@@ -140,14 +140,31 @@ transport teardown; a cancelled quit keeps it open.
 This exposed an upstream Z prerequisite: independently owned lock-callback
 results now execute in both compilers, including Options and typed failures.
 Transferring an owned outer capture into a known-once `Mutex.withLock` callback
-still needs a language check-in and compiler implementation. The synchronized
-inbox refactor is therefore not wired into the application yet. After that
-prerequisite: implement bounded forwarding/acknowledgements, integrate startup
-and shutdown ownership, and test competing launches and teardown races.
+is now approved and implemented upstream. The private `ActivationInbox` owns
+the existing ring budget behind a `Mutex`; OS events and secondary-launch
+admission use the same queue. A readonly ARC handle may be retained by a
+producer thread, but it grants only admission, not main-bound event access.
+`take()` transfers one owned request out before listeners run. Early rejection
+destroys the unused incoming request, and closing the inbox discards pending
+requests while existing producer handles remain safely closed.
+
+No cross-process endpoint is installed yet. The next slice is bounded
+forwarding/acknowledgements, followed by startup/shutdown ownership integration
+and competing-launch/teardown race tests. Acknowledgement remains admission,
+not listener completion or durable delivery.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
 independent event delivery, reentrancy, unsubscribe, and shutdown behavior
 through Stage 0 and native Z.
+
+`native/z/tests/activation-inbox-producer-smoke.zs` checks three concurrent
+producers against the single 64-request capacity in both compilers.
+`native/z/tests/activation-inbox-smoke.zs` additionally checks main-executor
+listener delivery, FIFO reentry, capacity reuse, cancelled quit, and rejection
+after shutdown. Its combined async event setup currently executes through
+Stage 0; the native emitter's broader suspending-statement composition remains
+a tracked boundary, not a separate framework implementation. The synchronous
+activation/launch smokes retain native coverage of event delivery and teardown.
 
 ### Private primary-ownership checkpoint
 

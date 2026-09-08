@@ -1,21 +1,17 @@
-import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { Event } from "./events.zs";
 import {
   ApplicationSecondInstanceLaunchedEvent,
-  validApplicationLaunch,
 } from "./application-launch.zs";
+import {
+  ActivationRequest,
+  ActivationInbox,
+} from "./activation-inbox.zs";
 
 export readonly struct ApplicationReopenRequestedEvent {}
 
 export readonly struct ApplicationOpenURLRequestedEvent {
   url: String;
-}
-
-enum ActivationRequest {
-  reopen,
-  openURL String,
-  secondInstance ApplicationSecondInstanceLaunchedEvent,
 }
 
 // Deliberately bounded, process-local startup buffering, not a durable inbox.
@@ -25,12 +21,8 @@ internal class ApplicationActivation on thread.main {
   readonly openURLRequested: Event<ApplicationOpenURLRequestedEvent>;
   readonly secondInstanceLaunched: Event<ApplicationSecondInstanceLaunchedEvent>;
   schemes: Array<String>;
-  pending: Map<usize, ActivationRequest>;
-  head: usize;
-  tail: usize;
-  count: usize;
+  readonly inbox: ActivationInbox;
   ready: boolean;
-  closed: boolean;
   draining: boolean;
 
   internal constructor() {
@@ -38,17 +30,13 @@ internal class ApplicationActivation on thread.main {
     this.openURLRequested = new Event<ApplicationOpenURLRequestedEvent>();
     this.secondInstanceLaunched = new Event<ApplicationSecondInstanceLaunchedEvent>();
     this.schemes = Array<String>();
-    this.pending = Map<usize, ActivationRequest>();
-    this.head = 0;
-    this.tail = 0;
-    this.count = 0;
+    this.inbox = new ActivationInbox();
     this.ready = false;
-    this.closed = false;
     this.draining = false;
   }
 
   function configure(inout this, schemes: Array<String>): void {
-    if (!this.ready && !this.closed) this.schemes = move schemes;
+    if (!this.ready && !this.inbox.isClosed()) this.schemes = move schemes;
   }
 
   function acceptsURL(in url: String): boolean {
@@ -80,10 +68,7 @@ internal class ApplicationActivation on thread.main {
   }
 
   function enqueue(inout this, request: ActivationRequest): boolean {
-    if (this.closed || this.count == 64) return false;
-    this.pending.set(this.tail, move request);
-    this.tail = (this.tail + 1) % 64;
-    this.count = this.count + 1;
+    if (!this.inbox.enqueue(move request)) return false;
     this.drain();
     return true;
   }
@@ -98,7 +83,7 @@ internal class ApplicationActivation on thread.main {
   }
 
   function start(inout this): void {
-    if (this.closed) return;
+    if (this.inbox.isClosed()) return;
     this.ready = true;
     this.drain();
   }
@@ -107,17 +92,16 @@ internal class ApplicationActivation on thread.main {
     inout this,
     launch: ApplicationSecondInstanceLaunchedEvent
   ): boolean {
-    if (!validApplicationLaunch(in launch)) return false;
-    return this.enqueue(ActivationRequest.secondInstance(move launch));
+    if (!this.inbox.admit(move launch)) return false;
+    this.drain();
+    return true;
   }
 
   function drain(inout this): void {
-    if (!this.ready || this.closed || this.draining) return;
+    if (!this.ready || this.draining) return;
     this.draining = true;
-    while (!this.closed && this.count > 0) {
-      const selected = this.pending.remove(this.head);
-      this.head = (this.head + 1) % 64;
-      this.count = this.count - 1;
+    while (true) {
+      const selected = this.inbox.take();
       match (selected) {
         some(request) => match (request) {
           reopen => {
@@ -135,17 +119,15 @@ internal class ApplicationActivation on thread.main {
             source.publish(in event);
           }
         }
-        none => {}
+        none => break;
       }
     }
     this.draining = false;
   }
 
   function finish(inout this): void {
-    this.closed = true;
+    this.inbox.close();
     this.ready = false;
-    this.pending = Map<usize, ActivationRequest>();
-    this.count = 0;
     let reopen = this.reopenRequested;
     let urls = this.openURLRequested;
     let launches = this.secondInstanceLaunched;
