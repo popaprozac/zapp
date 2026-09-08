@@ -307,7 +307,8 @@ Upstream runtime probes cover payload cleanup on fallthrough, early return,
 throw/`try`, loop exits, and cancellation, including Foundation ARC payloads.
 Borrowed child arguments, method/placed awaits, and nested awaited expressions
 remain outside this loop tier. Match arms cannot suspend in this tier; their
-payloads finish before the next yield. This is not a running listener.
+payloads finish before the next yield. The running integration probe below
+builds on these reduced cases; automatic application forwarding is not enabled.
 
 The main-host wakeup probe found and fixed another upstream issue: native
 TaskScope scheduling could start a non-suspending async body on the submitting
@@ -329,13 +330,53 @@ closed-scope rejection, imported aliases, and exact final reference counts.
 Combining workers with TaskScope also exposed and fixed missing initialization
 of a scope-owned fallback executor's external-completion state.
 
-The next step is to restore the endpoint/inbox/main-wakeup integration probe.
+The endpoint/inbox/main-wakeup integration probe now runs successfully through
+Stage 0 and the fixed-point native compiler, including UBSan. It constructs and
+destroys the actual Foundation-backed endpoint on its Z worker, admits framed
+launch payloads through the real inbox, and schedules delivery to a main-isolated
+`Once<LaunchHost>`. The test host pumps the macOS CFRunLoop, matching AppKit's
+main-executor delivery without opening a window. Root owned match initialization
+and native symbol collisions exposed by these real headers were fixed upstream
+in Z; the probe does not rename natural user methods to avoid runtime helpers.
+
+The bounded matrix covers:
+
+- Normal delivery with empty, spaced, and Unicode arguments, plus a competing
+  secondary that leaves the primary's endpoint and lease intact.
+- An already-closed TaskScope: admission is recorded, wakeup is rejected, and
+  no host callback executes.
+- Idle cancellation and cancellation while a client sends an incomplete frame.
+- Endpoint startup failure at a hostile socket path: no readiness is published,
+  the lease is released, and the hostile path is not removed.
+
+Each successful primary shutdown closes admission, cancels/joins the listener,
+joins main work, confirms lease reacquisition, and only then releases the host.
+Existing lower-level tests inspect exact endpoint/lease and ARC cleanup too.
+Cancellation is observed between bounded receives, not in the middle of an
+unbounded native call. All subprocesses have watchdogs and process-tree teardown;
+the test uses random identities instead of the interactive application's lock.
+
+Run the integration matrix with:
+
+```sh
+bun run cli/src/test-launch-listener-macos.ts
+ZAPP_LAUNCH_UBSAN=1 bun run cli/src/test-launch-listener-macos.ts
+```
+
+The native compiler must already be bootstrapped. `Z_SOURCE_ROOT` selects its
+checkout. Direct `await delay(...)` inside native `main` remains a separate
+compiler entry-frame gap (now an explicit `Z0700`); the CFRunLoop test host is
+not a replacement Z timer implementation or a new framework API.
+
+Next is integrating this verified lifetime into application startup and shutdown,
+including fail-closed election/readiness/secondary handoff before automatic
+forwarding is enabled.
 The native frame tier remains deliberately bounded: void/i32 nonthrowing worker
 wrappers around named yielding functions, root owned storage, and supported
 direct child awaits. Other scope-capturing worker await shapes fail closed;
 general worker-body normalization and cross-thread TaskControl capture remain
-separate. These runtime tests are not proof of a running application listener.
-The listener will construct/destroy the endpoint on its own worker,
+separate. These runtime tests are not proof of a production application listener.
+The application listener must construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
 and admission. Shutdown must close admission, cancel/join the listener, release
@@ -344,9 +385,9 @@ host. Do not replace that with a synchronous endless worker whose exit depends
 on cleanup in the parent that is already waiting to join it.
 
 No new public application API, configuration field, or language syntax was
-introduced by this prerequisite work. The existing application path remains
-unchanged until cancellation, startup failure, competing launches, and teardown
-have executable integration coverage.
+introduced by this integration probe. The existing application path remains
+unchanged until these verified components are wired into its startup/lifetime
+owner and the application-level gate passes.
 
 Run the separate bounded primary-lease regression with:
 
