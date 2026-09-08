@@ -309,9 +309,21 @@ Borrowed child arguments, method/placed awaits, and nested awaited expressions
 remain outside this loop tier. Match arms cannot suspend in this tier; their
 payloads finish before the next yield. This is not a running listener.
 
-The next step is to pressure-test main-host wakeup placement and joins against
-those remaining boundaries, then restore the
-integration probe. Do not infer integration from the reduced compiler tests.
+The main-host wakeup probe found and fixed another upstream issue: native
+TaskScope scheduling could start a non-suspending async body on the submitting
+worker before dispatch. Z now transfers a cold callable into the existing job
+and starts it on the destination executor. A bounded pthread/UBSan probe drives
+the yielding listener frame off-main, joins that worker without pumping main,
+then joins or cancels admitted wakeups. Main-thread assertions, rejection without
+execution, exactly-once context cleanup, and scope reference counts pass.
+TaskScope and TaskControl handles also survive owned yield-frame parameters and
+root locals. See Z commit `e9a9608` and its ownership-pressure log.
+
+The next prerequisite is language-level native `thread.spawn` capture of the
+TaskScope plus cancellation propagation into the yielding child; that capture
+is still rejected. Then restore the integration probe. The manual pthread
+frame test is not proof of a running application listener, and relaxing only
+the capture allowlist would not prove cancellation.
 The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
