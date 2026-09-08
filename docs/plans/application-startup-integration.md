@@ -16,7 +16,7 @@ draft without importing it into the shipping macOS application graph.
   shutdown, and a hostile socket path during startup. They check one delivery,
   arguments/cwd snapshots, ordered joins, lease reacquisition, and socket cleanup.
 - The proposed full Z Notes graph checks with Stage 0, but the native application
-  build remains blocked on the separate frame-composition gap below. No app was
+  build remains blocked on the scope/thread-join composition gap below. No app was
   launched by the failed integration build; the patch was returned to this saved
   state. This is **not** an executable application integration result.
 - After restoring the unapplied state, the full native Z Notes auto-closing smoke
@@ -35,32 +35,46 @@ using checked target module/symbol evidence. Native-header builds, renamed
 imports, same-named internal functions, same-module calls, and generic
 specializations are covered. The production listener now executes natively.
 
-The full Application.run wrapper exposes a separate native frame-composition
-gap: an early awaited return followed by a later awaited local. The minimized
-ordinary Z reproducer is:
+Early awaited returns now compose with one later awaited local in native
+function and supported method frames. Both branches, owned results/failures,
+root-local cleanup, and 72 cold-drop/cancellation/destruction cases pass under
+UBSan. The compiler reaches a fixed point, and all eight production-shaped
+startup process cases pass again with Stage 0 and native output. No new syntax
+or additional task-frame allocation was needed.
+
+Upstream checkpoint: Z `d3f3367`. All 210 self-hosting-tier tests pass. After
+restoring the unapplied draft, the normal native Z Notes smoke and both Zapp
+TypeScript check projects pass as well.
+
+The full Application.run wrapper now stops on the following additional shape:
+joining a TaskScope after that awaited local. This reduced ordinary Z program
+runs with Stage 0 but receives Z0700 from the fixed-point native compiler:
 
 ```zs
 import { thread } from "std/thread";
+import { TaskScope } from "std/async";
 
-async function operation(): i32 on thread.main { return 42; }
+async function operation(): i32 on thread.main { return 0; }
 
-async function startup(enabled: boolean): i32 on thread.main {
-  if (!enabled) return await operation();
-  const result = await operation();
-  return result;
+async function startup(early: boolean, updates: TaskScope): i32 on thread.main {
+  if (early) return await operation();
+  const outcome = await operation();
+  await updates.cancel();
+  return outcome;
 }
 
 async function main(): i32 on thread.main {
-  const observed = await startup(true);
-  return observed - 42;
+  const updates = new TaskScope();
+  return await startup(false, updates);
 }
 ```
 
-Stage 0 runs this successfully. The native compiler reports the misleading
-timer-only lowering error (`requires every suspension ... await delay`). Its
-separate branched-tail and linear-awaited-local classifiers do not compose yet.
-Fix this upstream, including precise unsupported-shape diagnostics, then verify
-the full wrapper's owned outcome and listener/TaskScope cancellation joins.
+The native diagnostic now identifies a broader continuation-frame requirement
+instead of reporting a timer-only lowering error. In the full graph it points
+at `const outcome = attempt await runMacOSReadyApplication(...)`; the subsequent
+native listener cancellation and TaskScope joins are the additional suspensions.
+Fix these upstream with checked receiver identities and cancellation/cleanup
+tests. Do not simply ignore every method named `cancel` in frame admission.
 Do not rewrite the application around polling, a synchronous wrapper, or a
 different public API merely to satisfy a lowering classifier.
 
@@ -71,8 +85,10 @@ match destinations during this work.
 
 ## Resume sequence
 
-1. Compose early awaited returns with later awaited locals in native frames;
-   test both branches, owned locals/results, typed failures, and cancellation.
+1. Compose the native post-await continuation with TaskScope cancellation/join,
+   then native-thread cancellation/join. Preserve the owned outcome and parent
+   storage until every admitted child has joined. Early return + awaited local
+   alone is now covered; avoid expanding unrelated nested-local/yield shapes.
 2. Rebuild the fixed-point compiler, then rerun the complete process matrix:
 
    ```sh
