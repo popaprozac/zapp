@@ -286,9 +286,12 @@ reduced cases are recorded in Z's ownership-pressure log and
 `async-launch-owned-destructure.zs` / `async-launch-listener.zs` fixtures. Both
 now execute through the fixed-point native compiler too. Its new yield frame
 retains root Z-owned locals and selected fields across `if`/`while` yields,
-with cancellation-before-entry and post-initialization cleanup tests. This is
-a parameterless, non-throwing `void`/`i32` tier without declaration affinity,
-not yet the real listener's native-resource/parameter/child-await composition.
+with cancellation-before-entry and post-initialization cleanup tests. Ordinary
+owned Z-value parameters now enter that cold frame before the body runs, with
+drop-before-poll and cancellation cleanup. Implicit ARC arguments preserve the
+caller's alias; explicit `move` transfers it. This remains a non-throwing
+`void`/`i32` tier without declaration affinity, not yet the real listener's
+Foundation-backed endpoint, synchronized inbox, or child-await composition.
 
 The next sequence is to extend that native frame to the actual listener's
 storage and child-await/error requirements, then restore the integration probe.
