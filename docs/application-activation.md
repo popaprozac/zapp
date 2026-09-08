@@ -128,9 +128,10 @@ do not include argument contents. Launches share the existing 64-request FIFO.
 This is the **payload and event foundation**, not automatic cross-process
 delivery yet. The private primary lease and forwarding transport are tested
 independently and together with the worker/main host below. Wiring them into
-startup and shutdown currently awaits native synchronous-channel lowering for
-the one-shot readiness result. The existing bundle hint alone does
-not provide those guarantees.
+startup and shutdown is the next integration step. Native synchronous-channel
+lowering now verifies the one-shot readiness result upstream; that does not yet
+install the listener in `app.run()`. The existing bundle hint alone does not
+provide those guarantees.
 
 The transport admits into the **same 64-request inbox** used by OS
 activation. An acknowledgement means bounded admission, not that a listener
@@ -376,16 +377,18 @@ including fail-closed election/readiness/secondary handoff before automatic
 forwarding is enabled.
 
 That integration exposed an upstream prerequisite: a capacity-one Z channel is
-the intended one-shot startup handshake, but the fixed-point compiler currently
-has channel semantic checking without channel code generation, even for
-`SyncSender` / `SyncReceiver`. Stage 0 executes them. Z now reports the native
-emission boundary explicitly instead of an internal lowering failure, and its
-ownership-pressure log records the reproduction. Complete bounded synchronous
-channel lowering and worker-frame endpoint cleanup upstream before resuming
-this application gate; do not replace the handshake with polling or a framework
-native shim. Full async channel operations are not required for startup. The
-verified listener probe remains unchanged, and automatic forwarding remains
-disabled.
+the intended one-shot startup handshake. Both compiler paths now execute its
+bounded storage, synchronous endpoint operations, sender retention, receiver
+transfer, and queue cleanup. The same readiness fixture runs with a named
+yielding worker holding `SyncSender<i32>` and `TaskScope`, followed by worker
+cancellation/join and scope closure. Native tests use UBSan and instrument
+storage releases to verify balanced endpoint ownership.
+
+Return to this application gate with the existing channel API; no polling or
+framework-native synchronization shim is needed. Native async channel waiters
+remain outside the tier and are not required for startup. The verified listener
+probe remains unchanged, and automatic forwarding remains disabled until
+Application.run integration passes its startup and teardown cases.
 
 The native frame tier remains deliberately bounded: void/i32 nonthrowing worker
 wrappers around named yielding functions, root owned storage, and supported
