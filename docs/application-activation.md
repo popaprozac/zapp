@@ -127,8 +127,9 @@ do not include argument contents. Launches share the existing 64-request FIFO.
 
 This is the **payload and event foundation**, not automatic cross-process
 delivery yet. The private primary lease and forwarding transport are tested
-independently below; wiring them into startup and shutdown awaits the async
-composition prerequisites described below. The existing bundle hint alone does
+independently and together with the worker/main host below. Wiring them into
+startup and shutdown currently awaits native synchronous-channel lowering for
+the one-shot readiness result. The existing bundle hint alone does
 not provide those guarantees.
 
 The transport admits into the **same 64-request inbox** used by OS
@@ -150,8 +151,9 @@ requests while existing producer handles remain safely closed.
 
 The private macOS transport below now forwards and acknowledges admission in
 isolated processes. It is not installed by `app.run()` yet. Native owned async
-destructuring and the ordinary suspending-helper tier need upstream work before
-startup/shutdown integration and competing-launch/teardown race tests.
+destructuring and the ordinary suspending-helper prerequisites have landed, and
+the integrated listener probe now covers competing launches and teardown. The
+remaining application startup readiness prerequisite is documented below.
 Acknowledgement remains admission, not listener completion or durable delivery.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
@@ -163,7 +165,8 @@ producers against the single 64-request capacity in both compilers, including
 one mutex-protected wake reservation across all producers. Clearing the pending
 reservation before draining allows a concurrent producer to reserve a later
 wake without losing notification; closing admission clears it and prevents
-further reservations. This primitive is not yet connected to main dispatch.
+further reservations. The integrated listener probe below connects this
+primitive to main dispatch; production application wiring is still pending.
 `native/z/tests/activation-inbox-smoke.zs` additionally checks main-executor
 listener delivery, FIFO reentry, capacity reuse, cancelled quit, and rejection
 after shutdown. Its combined async event setup currently executes through
@@ -371,6 +374,19 @@ not a replacement Z timer implementation or a new framework API.
 Next is integrating this verified lifetime into application startup and shutdown,
 including fail-closed election/readiness/secondary handoff before automatic
 forwarding is enabled.
+
+That integration exposed an upstream prerequisite: a capacity-one Z channel is
+the intended one-shot startup handshake, but the fixed-point compiler currently
+has channel semantic checking without channel code generation, even for
+`SyncSender` / `SyncReceiver`. Stage 0 executes them. Z now reports the native
+emission boundary explicitly instead of an internal lowering failure, and its
+ownership-pressure log records the reproduction. Complete bounded synchronous
+channel lowering and worker-frame endpoint cleanup upstream before resuming
+this application gate; do not replace the handshake with polling or a framework
+native shim. Full async channel operations are not required for startup. The
+verified listener probe remains unchanged, and automatic forwarding remains
+disabled.
+
 The native frame tier remains deliberately bounded: void/i32 nonthrowing worker
 wrappers around named yielding functions, root owned storage, and supported
 direct child awaits. Other scope-capturing worker await shapes fail closed;
