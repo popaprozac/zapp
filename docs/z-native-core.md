@@ -740,6 +740,52 @@ call, including lookup, thunk invocation, synchronized read, JSON response, and
 C callback. See [Z-owned services](./z-services.md) for the architecture and
 measurement boundary.
 
+## Build latency checkpoint — 2026-09-08
+
+The Z Notes performance sweep found two avoidable unchanged-build costs: the
+worker archive changed its timestamp-bearing bytes on every build, invalidating
+Z's input cache, and a separate generated-dispatcher check repeated about
+16–17 seconds of graph loading/lowering before the final build.
+
+Native archives are now rebuilt deterministically and published only when their
+bytes change. The bridge object still compiles normally, preserving header and
+toolchain validation. Generated dispatch is checked by the final
+`z build --generated ...`, not a duplicate check. Compiler regressions verify
+that malformed generated code and stale overlays still fail after cache reuse.
+An upstream async-match cleanup-guard regression exposed by the full app is
+also fixed; no framework or generated-C workaround is needed.
+
+On the Apple M4 Pro / 24 GiB / macOS 26.4 host, with Bun 1.3.14 and Apple
+Clang 17, successful local observations were:
+
+| Workload | Wall time |
+| --- | ---: |
+| Release build requiring native recompilation, plus Vite/bundle/sign | 31.08–32.21 s |
+| Unchanged release build, plus Vite/bundle/sign | 2.02–2.90 s |
+| Dev build requiring native recompilation, plus bundle/sign | 25.03 s |
+| Unchanged dev build-and-bundle | 0.58–0.69 s |
+| Z compiler's unchanged input-cache hit alone | 0.19–0.30 s |
+| Direct native debug rebuild after generated source changed | 24.60 s |
+
+These are not clean-machine builds or medians: existing metadata/SDK caches were
+warm. Dev measurements exclude Vite server startup, worker bundling, and app
+launch; all measurements exclude interactive WebView startup. The source-change
+probe changed a generated dispatcher comment and correctly invalidated the
+cache; its unchanged repeat took 0.20 seconds. Failed earlier builds are not a
+speedup baseline, and no competitor comparison was run in this sweep.
+
+Repeat the build-only pipeline from the Z checkout with
+`bun benchmarks/profile-zapp-build.ts ../zapp release <label>` (or `dev`). It
+uses normal gitignored outputs and does not launch the app. Z's
+`docs/performance.md` records the complete evidence and exclusions.
+
+Remaining targets are independent dev/release artifact slots, foreign-adapter
+reuse, imported-type lowering costs, and eventually module-level native
+incrementality. Genuine source edits still pay the full lowering/Clang path.
+The functional continuation remains launch-listener main-host placement and
+cancellation/join integration, then startup/readiness; this sweep did not
+enable automatic secondary-instance forwarding.
+
 ## CLI and package design are open
 
 The existing command and npm layout are not compatibility constraints.

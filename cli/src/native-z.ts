@@ -2,6 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { publishNativeArchive } from "./native-archive";
 import type { BuildTarget } from "./build-target";
 import type { ResolvedConfig } from "./config";
 import type { ResolvedCapabilityProfile } from "./capabilities";
@@ -659,7 +660,7 @@ async function stageZApplicationWorkerRuntime(
     "-o",
     adapterObject,
   ], options.root);
-  await run(["ar", "rcs", adapterArchive, adapterObject], options.root);
+  await publishNativeArchive(adapterObject, adapterArchive, options.root);
   await cp(
     path.join(adapterDirectory, "zapp_worker_zjs.h"),
     path.join(stage, "zapp_worker_zjs.h"),
@@ -1486,8 +1487,9 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       ),
     },
   );
-  await run([...compiler, "check", dispatcher], options.root, true);
-  console.log(`[zapp] checked generated Z service dispatch ${dispatcher}`);
+  // The final build checks this module through its generated overlay. Running
+  // a separate `z check` here repeats graph loading and lowering on every build.
+  console.log(`[zapp] generated Z service dispatch ${dispatcher}`);
   const workerProtocolModule = path.join(
     stage,
     "generated",
@@ -1514,7 +1516,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
     undefined,
     workerContribution,
   );
-  console.log(`[zapp] generated checked Z service registration ${registrationOverlay}`);
+  console.log(`[zapp] generated Z service registration ${registrationOverlay}`);
   const generatedBinding = await generateZServiceBindings(
     serviceManifest,
     path.join(options.root, ".zapp", "generated"),
@@ -1575,13 +1577,7 @@ export async function buildNativeZ(options: BuildNativeZOptions): Promise<void> 
       "-o",
       desktopSmokeObject,
     ], options.root);
-    await rm(desktopArchive, { force: true });
-    await run([
-      "ar",
-      "rcs",
-      desktopArchive,
-      desktopSmokeObject,
-    ], options.root);
+    await publishNativeArchive(desktopSmokeObject, desktopArchive, options.root);
   }
 
   await run(

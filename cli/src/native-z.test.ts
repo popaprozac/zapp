@@ -710,7 +710,10 @@ describe("Z native host inputs", () => {
     expect(nativeBuilder).toContain('process.env.ZAPP_Z_DESKTOP_SMOKE_SUPPORT === "1"');
     expect(nativeBuilder).toContain('if (desktop && desktopSmokeSupport)');
     expect(nativeBuilder).toContain('libzapp_desktop_smoke.a');
-    expect(nativeBuilder).toContain('await rm(desktopArchive, { force: true });');
+    expect(nativeBuilder).toContain('await publishNativeArchive(desktopSmokeObject, desktopArchive, options.root);');
+    expect(nativeBuilder).toContain('await publishNativeArchive(adapterObject, adapterArchive, options.root);');
+    expect(nativeBuilder).not.toContain('await run([...compiler, "check", dispatcher]');
+    expect(nativeBuilder).toContain('"--generated",\n      registrationOverlay,');
     expect(nativeBuilder).not.toContain('renderWebviewInjectionsC(injectionEntries)');
     expect(nativeBuilder).not.toContain('renderZWebviewBootstrapC(bootstrapSource)');
     expect(cli).toContain("devUrl,");
