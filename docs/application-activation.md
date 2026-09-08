@@ -127,8 +127,9 @@ do not include argument contents. Launches share the existing 64-request FIFO.
 
 This is the **payload and event foundation**, not automatic cross-process
 delivery yet. The private primary lease and forwarding transport are tested
-independently below; wiring them into startup and shutdown is the next runtime
-slice. The existing bundle hint alone does not provide those guarantees.
+independently below; wiring them into startup and shutdown awaits the async
+composition prerequisites described below. The existing bundle hint alone does
+not provide those guarantees.
 
 The transport admits into the **same 64-request inbox** used by OS
 activation. An acknowledgement means bounded admission, not that a listener
@@ -148,8 +149,9 @@ destroys the unused incoming request, and closing the inbox discards pending
 requests while existing producer handles remain safely closed.
 
 The private macOS transport below now forwards and acknowledges admission in
-isolated processes. It is not installed by `app.run()` yet. The next slice is
-startup/shutdown ownership integration and competing-launch/teardown race tests.
+isolated processes. It is not installed by `app.run()` yet. Owned async
+destructuring and the ordinary suspending-helper tier need upstream work before
+startup/shutdown integration and competing-launch/teardown race tests.
 Acknowledgement remains admission, not listener completion or durable delivery.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
@@ -157,7 +159,11 @@ independent event delivery, reentrancy, unsubscribe, and shutdown behavior
 through Stage 0 and native Z.
 
 `native/z/tests/activation-inbox-producer-smoke.zs` checks three concurrent
-producers against the single 64-request capacity in both compilers.
+producers against the single 64-request capacity in both compilers, including
+one mutex-protected wake reservation across all producers. Clearing the pending
+reservation before draining allows a concurrent producer to reserve a later
+wake without losing notification; closing admission clears it and prevents
+further reservations. This primitive is not yet connected to main dispatch.
 `native/z/tests/activation-inbox-smoke.zs` additionally checks main-executor
 listener delivery, FIFO reentry, capacity reuse, cancelled quit, and rejection
 after shutdown. Its combined async event setup currently executes through
@@ -239,9 +245,15 @@ the application.
 | Error, `mayHaveBeenAdmitted: false` | Failure before a request could be sent. No secondary primary is started. |
 | Error, `mayHaveBeenAdmitted: true` | Sending began but no valid final acknowledgement arrived. Admission may already have happened. |
 
-The transport never retries automatically. In particular, a timeout or broken
-connection after sending does not prove non-delivery, and blindly resending
-could produce duplicate application events. Accepted input remains best effort:
+The transport never resends a request automatically. Its private readiness mode
+may retry only transient connection failures **before sending**, while a newly
+elected primary is publishing its endpoint. Each pause is at most ten
+milliseconds, with no busy spin, and consumes the same five-second exchange
+deadline. Invalid ownership, permissions, or path shape fail immediately.
+An elected primary that never becomes ready produces failure, not promotion of
+the secondary into another primary. A timeout or broken connection after
+sending does not prove non-delivery, and blindly resending could produce
+duplicate application events. Accepted input remains best effort:
 shutdown may discard it after acknowledgement. Future startup integration must
 distinguish election, endpoint readiness, admission, and teardown rather than
 turn every transport failure into another primary.
@@ -256,10 +268,35 @@ ZAPP_LAUNCH_UBSAN=1 bun run cli/src/test-instance-transport-macos.ts
 
 The suite verifies sequential/concurrent capacity, acceptance without a main
 loop or listener, closed admission, fragmented input, invalid lengths and UTF-8,
-absolute slow-client deadlines, missing/corrupt/oversized acknowledgements,
-scope cleanup, contention, crash recovery, and hostile endpoint paths. Children
+absolute slow-client deadlines, delayed/absent endpoint readiness while the
+primary retains its lease, missing/corrupt/oversized acknowledgements with no
+resend, scope cleanup, contention, crash recovery, and hostile endpoint paths. Children
 have watchdogs; only run-unique socket/lock names are removed after all children
 stop. Interactive application bundles are never launched by this regression.
+
+### Integration prerequisite and continuation
+
+The attempted lifecycle-owned listener exposed two upstream Z boundaries:
+ordinary owned struct destructuring inside async frames in Stage 0, and native
+execution of an ordinary named helper with `await scheduler.yield()` inside a
+loop. The reduced cases are recorded in Z's ownership-pressure log and
+`async-launch-owned-destructure.zs` / `async-launch-listener.zs` fixtures.
+The first also demonstrates that native `check` acceptance alone does not yet
+guarantee C emission for that combined frame shape.
+
+The next sequence is to close these compiler gaps, then restore the integration
+probe. The listener will construct/destroy the endpoint on its own worker,
+observe cancellation between bounded receives, and send only inbox wakeups to
+the main-owned host. Startup must distinguish election from endpoint readiness
+and admission. Shutdown must close admission, cancel/join the listener, release
+the endpoint before its lease, and join pending main work before destroying the
+host. Do not replace that with a synchronous endless worker whose exit depends
+on cleanup in the parent that is already waiting to join it.
+
+No new public application API, configuration field, or language syntax was
+introduced by this prerequisite work. The existing application path remains
+unchanged until cancellation, startup failure, competing launches, and teardown
+have executable integration coverage.
 
 Run the separate bounded primary-lease regression with:
 

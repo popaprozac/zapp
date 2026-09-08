@@ -55,6 +55,19 @@ internal function launchDeadline(milliseconds: i32): f64 = raw c {
   return (double)now.tv_sec + (double)now.tv_nsec / 1e9 + (double)milliseconds / 1000.0;
 }
 
+// Only connect-before-send may wait for a newly elected primary's endpoint.
+// Never retry a request or turn readiness failure into another primary.
+internal function retryLaunchConnection(code: i32, deadline: f64): boolean = raw c {
+  if (code != ENOENT && code != ECONNREFUSED && code != EAGAIN) return false;
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return false;
+  double remaining = deadline - ((double)now.tv_sec + (double)now.tv_nsec / 1e9);
+  if (!(remaining > 0)) return false;
+  struct timespec pause = { .tv_sec = 0, .tv_nsec = remaining > 0.01 ? 10000000 : (long)(remaining * 1e9) };
+  (void)nanosleep(&pause, NULL);
+  return true;
+}
+
 internal function waitLaunchSocket(
   in file: Foundation.NSFileHandle,
   writing: boolean,

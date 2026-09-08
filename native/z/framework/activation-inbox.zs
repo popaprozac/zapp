@@ -20,6 +20,7 @@ internal struct ActivationInboxState {
   tail: usize;
   count: usize;
   closed: boolean;
+  wakePending: boolean;
 }
 
 internal readonly class ActivationInbox {
@@ -32,6 +33,7 @@ internal readonly class ActivationInbox {
       tail: 0,
       count: 0,
       closed: false,
+      wakePending: false,
     }));
   }
 
@@ -74,9 +76,24 @@ internal readonly class ActivationInbox {
     return this.state.withLock((in state): boolean => state.closed);
   }
 
+  // Coalesce transport notifications independently of the bounded payload
+  // queue. Clear before draining so a concurrent producer cannot lose a wake.
+  function reserveWake(): boolean {
+    return this.state.withLock((inout state): boolean => {
+      if (state.closed || state.count == 0 || state.wakePending) return false;
+      state.wakePending = true;
+      return true;
+    });
+  }
+
+  function beginWake(): void {
+    this.state.withLock((inout state): void => { state.wakePending = false; });
+  }
+
   function close(): void {
     this.state.withLock((inout state): void => {
       state.closed = true;
+      state.wakePending = false;
       state.pending = Map<usize, ActivationRequest>();
       state.head = 0;
       state.tail = 0;

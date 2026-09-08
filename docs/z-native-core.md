@@ -786,8 +786,19 @@ through both compilers. It adds no polling thread and is not yet wired into
 The private bounded launch endpoint now owns that lease and forwards framed
 requests into the shared synchronized activation inbox. Both compilers pass
 real-process admission, capacity, deadline, malformed-input, lost-acknowledgement,
-and cleanup regressions. Startup/shutdown integration, main-executor draining,
-endpoint-readiness races, and automatic secondary-process exit remain next.
+and cleanup regressions. The private readiness path also waits through delayed
+endpoint publication within one absolute deadline, fails without primary
+promotion when readiness never arrives, and never resends after sending begins.
+The shared inbox coalesces wake reservations across concurrent producers. These
+pieces pass both compiler paths; the transport also passes UBSan.
+
+Startup/shutdown integration, main-executor draining, and automatic secondary
+exit are gated on two upstream Z composition gaps: ordinary owned struct
+destructuring in Stage-0 async frames, and general named native helpers with
+suspending loops. The listener needs cancellation observation between bounded
+receives and endpoint cleanup before lease release. These are recorded in the
+Z ownership-pressure log with reduced fixtures; no synchronous background-loop
+workaround or partial `app.run()` integration is enabled.
 The existing `singleInstance` bundle hint does
 not yet supply a cross-process forwarding protocol. Broader platform coverage,
 file/universal-link handling, additional worker engines, and sanitizer evidence

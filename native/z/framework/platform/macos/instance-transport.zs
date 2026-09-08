@@ -6,6 +6,7 @@ import {
   checkLaunchPeer, acceptLaunchSocket, closeLaunchSocket, removeLaunchSocket,
   receiveLaunchChunk, sendLaunchChunk, makeLaunchBuffer, launchHeaderLength,
   launchHeader, launchTextBytes, launchBytesText,
+  retryLaunchConnection,
 } from "./launch-socket.zs";
 
 internal readonly struct MacOSLaunchTransportError {
@@ -74,6 +75,24 @@ internal function listenMacOSLaunches(lease: MacOSInstanceLease): MacOSLaunchEnd
 // Private wire probe accepts encoded input so malformed-frame tests exercise
 // the same receiver. Startup will supply encodeApplicationLaunch's checked data.
 internal function forwardMacOSLaunch(in identifier: String, in payload: String): boolean throws MacOSLaunchTransportError {
+  return try forwardLaunch(in identifier, in payload, false);
+}
+
+internal function forwardMacOSLaunchWhenReady(in identifier: String, in payload: String): boolean throws MacOSLaunchTransportError {
+  return try forwardLaunch(in identifier, in payload, true);
+}
+
+function connectPrimary(in path: Foundation.NSString, deadline: f64, waitForReady: boolean): Foundation.NSFileHandle throws MacOSLaunchTransportError {
+  let code = 0;
+  let file = openLaunchSocket(in path, false, inout code);
+  while (file == null && waitForReady && retryLaunchConnection(code, deadline)) {
+    file = openLaunchSocket(in path, false, inout code);
+  }
+  if (file == null) throw MacOSLaunchTransportError({ code, mayHaveBeenAdmitted: false, message: "primary launch endpoint unavailable" });
+  return file;
+}
+
+function forwardLaunch(in identifier: String, in payload: String, waitForReady: boolean): boolean throws MacOSLaunchTransportError {
   if (payload.byteLength == 0 || payload.byteLength > 65536) {
     throw MacOSLaunchTransportError({ code: 0, mayHaveBeenAdmitted: false, message: "launch payload exceeds transport bounds" });
   }
@@ -83,8 +102,7 @@ internal function forwardMacOSLaunch(in identifier: String, in payload: String):
   const path = launchSocketPath(in nativeIdentifier, inout code);
   if (path == null) throw MacOSLaunchTransportError({ code, mayHaveBeenAdmitted: false, message: "launch endpoint path failed" });
   const deadline = launchDeadline(5000);
-  const file = openLaunchSocket(in path, false, inout code);
-  if (file == null) throw MacOSLaunchTransportError({ code, mayHaveBeenAdmitted: false, message: "primary launch endpoint unavailable" });
+  const file = try connectPrimary(in path, deadline, waitForReady);
   const connection = MacOSLaunchConnection({ file });
   const ready = waitLaunchSocket(in connection.file, true, deadline);
   if (ready != 0) throw MacOSLaunchTransportError({ code: ready, mayHaveBeenAdmitted: false, message: "primary connection deadline exceeded" });

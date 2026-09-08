@@ -1,10 +1,12 @@
 import console from "std/console";
 import process from "std/process";
+import { sleep } from "std/time";
 import { ActivationInbox } from "../framework/activation-inbox.zs";
 import { acquireMacOSInstanceLease } from "../framework/platform/macos/instance-lease.zs";
 import {
   listenMacOSLaunches,
   forwardMacOSLaunch,
+  forwardMacOSLaunchWhenReady,
 } from "../framework/platform/macos/instance-transport.zs";
 
 function serve(in identifier: String, in mode: String): i32 {
@@ -15,6 +17,11 @@ function serve(in identifier: String, in mode: String): i32 {
   match (ownership) {
     none => { console.log("secondary"); return 2; }
     some(lease) => {
+      if (mode == "late" || mode == "unready") {
+        console.log("elected");
+        sleep(u64(mode == "late" ? 250 : 8000));
+        if (mode == "unready") return 0;
+      }
       let endpoint = match (attempt listenMacOSLaunches(move lease)) {
         success(value) => value;
         failure(_) => return 4;
@@ -56,10 +63,13 @@ function main(): i32 {
   if (arguments.length < 2) return 90;
   const identifier = copy arguments[0];
   const mode = copy arguments[1];
-  if (mode == "send") {
+  if (mode == "send" || mode == "send-ready") {
     if (arguments.length != 3) return 91;
     const payload = copy arguments[2];
-    return match (attempt forwardMacOSLaunch(in identifier, in payload)) {
+    const forwarded = mode == "send-ready"
+      ? attempt forwardMacOSLaunchWhenReady(in identifier, in payload)
+      : attempt forwardMacOSLaunch(in identifier, in payload);
+    return match (forwarded) {
       success(accepted) => {
         const status = accepted ? "accepted" : "rejected";
         console.log(status);

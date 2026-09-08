@@ -60,7 +60,7 @@ function start(id: string, mode = "once") {
         output += decoder.decode(next.value, { stream: true });
         if (output.includes("\n")) resolveReady(output.split("\n")[0]!);
       }
-      if (!output.includes("\n")) rejectReady(new Error(`No readiness: ${await stderr}`));
+      if (!output.includes("\n")) rejectReady(new Error(`No readiness (${mode}, exit ${await child.exited}): ${await stderr}`));
       return output;
     } finally { reader.releaseLock(); }
   })();
@@ -71,8 +71,8 @@ async function finish(server: ReturnType<typeof start>, expected: string) {
   assert.equal(await server.exited, 0, await server.stderr);
   assert.equal(await server.stdout, `ready\n${expected}released\n`);
 }
-async function send(id: string, text = payload, status = 0, result = "accepted") {
-  const reply = await command([binary, id, "send", text]);
+async function send(id: string, text = payload, status = 0, result = "accepted", waitForReady = false) {
+  const reply = await command([binary, id, waitForReady ? "send-ready" : "send", text]);
   assert.equal(reply.status, status, reply.stderr || reply.stdout);
   assert.equal(reply.stdout, result + "\n");
 }
@@ -150,6 +150,24 @@ try {
     await finish(server, "accepted\nqueued 1\n");
     await assert.rejects(lstat(first.socket), { code: "ENOENT" });
     await send(first.id, payload, 6, "unavailable");
+
+    // A lease holder may still be setting up its endpoint. Only connect may
+    // retry; the single absolute exchange deadline includes this wait.
+    const late = identity(); const lateServer = start(late.id, "late");
+    assert.equal(await lateServer.ready, "elected");
+    await send(late.id, payload, 0, "accepted", true);
+    assert.equal(await lateServer.exited, 0, await lateServer.stderr);
+    assert.equal(await lateServer.stdout, "elected\nready\naccepted\nqueued 1\nreleased\n");
+
+    const unready = identity(); const unreadyServer = start(unready.id, "unready");
+    assert.equal(await unreadyServer.ready, "elected");
+    const readinessStarted = performance.now();
+    await send(unready.id, payload, 6, "unavailable", true);
+    assert.ok(performance.now() - readinessStarted < 7000, "endpoint readiness shares the five-second exchange deadline");
+    const stillSecondary = await command([binary, unready.id, "once"]);
+    assert.equal(stillSecondary.status, 2, stillSecondary.stderr);
+    assert.equal(await unreadyServer.exited, 0, await unreadyServer.stderr);
+    assert.equal(await unreadyServer.stdout, "elected\nreleased\n");
 
     const bounded = identity();
     const batch = start(bounded.id, "batch");
@@ -231,6 +249,13 @@ try {
     }
     await send(identity().id, "", 6, "unavailable");
     await send(identity().id, "a".repeat(65537), 6, "unavailable");
+    const onceOnly = identity();
+    let connections = 0;
+    await fakePrimary(onceOnly.socket, (socket) => {
+      connections++;
+      socket.once("data", () => socket.destroy());
+    }, () => send(onceOnly.id, payload, 7, "uncertain", true));
+    assert.equal(connections, 1, "readiness waiting must not retry after sending begins");
     const hostile = identity();
     const untouched = path.join(root, `untouched-${name.replaceAll(" ", "-")}`);
     await writeFile(untouched, "untouched", { mode: 0o600 });
@@ -238,8 +263,11 @@ try {
     const denied = await command([binary, hostile.id, "once"]);
     assert.equal(denied.status, 4, denied.stderr);
     await send(hostile.id, payload, 6, "unavailable");
+    const unsafeStarted = performance.now();
+    await send(hostile.id, payload, 6, "unavailable", true);
+    assert.ok(performance.now() - unsafeStarted < 2000, "unsafe endpoint paths must fail without waiting for readiness");
     assert.equal(await readFile(untouched, "utf8"), "untouched");
-    console.log(`${name}: admission, concurrent capacity, fragmentation, malformed input, deadlines, acknowledgement uncertainty, scope cleanup, stale recovery, and unsafe paths passed`);
+    console.log(`${name}: admission, concurrent capacity, fragmentation, malformed input, readiness/deadlines, no resend after uncertain acknowledgement, scope cleanup, stale recovery, and unsafe paths passed`);
   }
 } finally {
   for (const socket of sockets) socket.destroy();
