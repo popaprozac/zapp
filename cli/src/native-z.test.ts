@@ -174,6 +174,11 @@ describe("renderZConfiguredDesktopSmoke", () => {
 });
 
 describe("renderZApplicationMetadata", () => {
+  it("emits the opt-in single-instance runtime gate", () => {
+    const config = { name: "Notes", identifier: "com.example.notes", version: "1.0.0", assetDir: "./dist" };
+    expect(renderZApplicationMetadata(config)).toContain("configuredApplicationSingleInstance(): boolean {\n  return false;");
+    expect(renderZApplicationMetadata({ ...config, singleInstance: true })).toContain("configuredApplicationSingleInstance(): boolean {\n  return true;");
+  });
   it("compiles custom scheme registration into the native allowlist", () => {
     const output = renderZApplicationMetadata({
       name: "Links", identifier: "com.example.links", version: "1.0.0",

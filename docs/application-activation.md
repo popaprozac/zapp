@@ -1,5 +1,10 @@
 # Application activation
 
+Implementation checkpoint: the channel-readiness startup draft and its exact
+remaining native compiler gate are captured in
+[the startup integration plan](plans/application-startup-integration.md).
+Automatic application forwarding remains disabled until that gate passes.
+
 Zapp delivers OS reopen requests and registered custom URLs to application-owned
 Z events. Application code decides what those requests mean. This is distinct
 from WebView focus events, outgoing `app.shell.openExternal(...)`, and WebView

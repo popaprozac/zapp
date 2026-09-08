@@ -232,6 +232,10 @@ export function configuredApplicationDeepLinkSchemes(): Array<String> {
   return Array<String>(${(config.deepLinkSchemes ?? []).map(scheme => JSON.stringify(scheme.toLowerCase())).join(", ")});
 }
 
+export function configuredApplicationSingleInstance(): boolean {
+  return ${config.singleInstance === true};
+}
+
 export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: ${isPermissionAllowed(

@@ -35,6 +35,10 @@ export function configuredApplicationDeepLinkSchemes(): Array<String> {
   return Array<String>();
 }
 
+export function configuredApplicationSingleInstance(): boolean {
+  return false;
+}
+
 export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: true,
