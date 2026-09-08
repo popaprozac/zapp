@@ -88,13 +88,6 @@ try {
   ]) {
     const build = await runBoundedCommand([...frontend.args, "build", root], { cwd: root, timeoutMs: 180_000 });
     assert.equal(build.timedOut, false, `${frontend.name} startup build timed out`);
-    if (frontend.name === "native" && build.status !== 0
-      && build.stderr.includes("native TaskScope worker captures currently require a terminal await")
-      && /awaited target listenMacOSApplicationLaunches\s*$/.test(build.stderr.trim())) {
-      assert.notEqual(process.env.ZAPP_LAUNCH_REQUIRE_NATIVE, "1", build.stderr);
-      console.log("native: known imported internal async-call identity boundary reproduced; application integration remains disabled");
-      continue;
-    }
     assert.equal(build.status, 0, build.stderr || build.stdout);
     if (process.env.ZAPP_LAUNCH_UBSAN === "1") {
       await command(["clang", "-x", "objective-c", "-std=c11", "-fobjc-arc", "-O1", "-g", "-pthread",
