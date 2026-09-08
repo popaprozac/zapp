@@ -1,13 +1,28 @@
 import console from "std/console";
 import process from "std/process";
 import { sleep } from "std/time";
+import { scheduler } from "std/async";
 import { ActivationInbox } from "../framework/activation-inbox.zs";
 import { acquireMacOSInstanceLease } from "../framework/platform/macos/instance-lease.zs";
 import {
+  MacOSLaunchEndpoint,
   listenMacOSLaunches,
   forwardMacOSLaunch,
   forwardMacOSLaunchWhenReady,
 } from "../framework/platform/macos/instance-transport.zs";
+
+// Compile-only storage regression using the actual endpoint and inbox types.
+// The transport suite emits this bounded helper through both compilers, but
+// does not start it: listener child-await/error composition is a later gate.
+async function retainLaunchFrame(endpoint: MacOSLaunchEndpoint, inbox: ActivationInbox): i32 {
+  let turns = 0;
+  while (turns < 2) {
+    if (inbox.isClosed()) return 0;
+    await scheduler.yield();
+    turns = turns + 1;
+  }
+  return 0;
+}
 
 function serve(in identifier: String, in mode: String): i32 {
   const ownership = match (attempt acquireMacOSInstanceLease(in identifier)) {

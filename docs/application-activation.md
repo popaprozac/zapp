@@ -289,12 +289,18 @@ retains root Z-owned locals and selected fields across `if`/`while` yields,
 with cancellation-before-entry and post-initialization cleanup tests. Ordinary
 owned Z-value parameters now enter that cold frame before the body runs, with
 drop-before-poll and cancellation cleanup. Implicit ARC arguments preserve the
-caller's alias; explicit `move` transfers it. This remains a non-throwing
-`void`/`i32` tier without declaration affinity, not yet the real listener's
-Foundation-backed endpoint, synchronized inbox, or child-await composition.
+caller's alias; explicit `move` transfers it. The frame now also admits the
+real listener's Foundation-backed endpoint and synchronized inbox, including
+its nested readonly launch arguments. The transport regression compiles a
+bounded, unstarted `retainLaunchFrame` helper against those actual types through
+both compilers. Z's separate runtime tests check descriptor release, reverse
+endpoint/lease cleanup, and unlocked Mutex state on cold drop and cancellation.
+Clang strong slots in heap frames are explicitly cleared even for wrappers
+without a Z `deinit`. This remains a non-throwing `void`/`i32` tier without
+declaration affinity, not yet child-await/error composition or a running listener.
 
-The next sequence is to extend that native frame to the actual listener's
-storage and child-await/error requirements, then restore the integration probe.
+The next sequence is to extend that native frame to the listener's
+child-await/error requirements, then restore the integration probe.
 The listener will construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
