@@ -358,8 +358,9 @@ after native managers and synchronous service startup are ready. There is no
 automatic navigation, frontend broadcast, late replay, or cancellation API for
 these notifications. Z Notes validates a note route and explicitly creates the
 destination window. See [the activation contract](application-activation.md).
-Cross-process single-instance forwarding and file/universal-link delivery remain
-separate follow-ups.
+Private cross-process single-instance forwarding now has bounded transport and
+admission tests; wiring it into application startup/shutdown and file/universal-
+link delivery remain separate follow-ups.
 
 This does not make `Application` a universal namespace. A capability belongs
 on the application when it has stable application identity, compiled policy,

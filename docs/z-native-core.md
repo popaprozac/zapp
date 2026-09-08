@@ -783,8 +783,11 @@ The private macOS primary lease now has independent multi-process evidence:
 scope cleanup, nonblocking contention, crash recovery, and simultaneous launches
 through both compilers. It adds no polling thread and is not yet wired into
 `app.run()`; see [the activation contract](application-activation.md#private-primary-ownership-checkpoint).
-The next runtime slice connects that lease to a bounded launch endpoint,
-admission acknowledgements, startup buffering, and shutdown races.
+The private bounded launch endpoint now owns that lease and forwards framed
+requests into the shared synchronized activation inbox. Both compilers pass
+real-process admission, capacity, deadline, malformed-input, lost-acknowledgement,
+and cleanup regressions. Startup/shutdown integration, main-executor draining,
+endpoint-readiness races, and automatic secondary-process exit remain next.
 The existing `singleInstance` bundle hint does
 not yet supply a cross-process forwarding protocol. Broader platform coverage,
 file/universal-link handling, additional worker engines, and sanitizer evidence

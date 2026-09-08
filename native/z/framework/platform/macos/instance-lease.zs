@@ -104,6 +104,7 @@ function closeInstanceFile(in file: Foundation.NSFileHandle): void = raw objc {
 
 internal struct MacOSInstanceLease {
   file: Foundation.NSFileHandle;
+  readonly identifier: String;
 
   deinit {
     closeInstanceFile(in this.file);
@@ -126,5 +127,5 @@ internal function acquireMacOSInstanceLease(
     throw MacOSInstanceLeaseError({ code: errorCode, message: "could not acquire the private application instance lease" });
   }
   if (file == null) return Option<MacOSInstanceLease>.none;
-  return Option.some(MacOSInstanceLease({ file }));
+  return Option.some(MacOSInstanceLease({ file, identifier: copy identifier }));
 }

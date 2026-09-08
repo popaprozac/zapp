@@ -126,12 +126,11 @@ fields, malformed JSON, and unsupported versions are rejected. Error messages
 do not include argument contents. Launches share the existing 64-request FIFO.
 
 This is the **payload and event foundation**, not automatic cross-process
-delivery yet. The private primary-ownership primitive is tested independently
-below; wiring it into startup, admission acknowledgements, forwarding, and
-shutdown races are the next runtime slice. The existing bundle hint alone does
-not provide those guarantees.
+delivery yet. The private primary lease and forwarding transport are tested
+independently below; wiring them into startup and shutdown is the next runtime
+slice. The existing bundle hint alone does not provide those guarantees.
 
-The next transport must admit into the **same 64-request inbox** used by OS
+The transport admits into the **same 64-request inbox** used by OS
 activation. An acknowledgement means bounded admission, not that a listener
 ran or that delivery is durable. Native callback threads must not invoke app
 listeners while holding the inbox mutex. Shutdown closes admission before
@@ -148,10 +147,10 @@ producer thread, but it grants only admission, not main-bound event access.
 destroys the unused incoming request, and closing the inbox discards pending
 requests while existing producer handles remain safely closed.
 
-No cross-process endpoint is installed yet. The next slice is bounded
-forwarding/acknowledgements, followed by startup/shutdown ownership integration
-and competing-launch/teardown race tests. Acknowledgement remains admission,
-not listener completion or durable delivery.
+The private macOS transport below now forwards and acknowledges admission in
+isolated processes. It is not installed by `app.run()` yet. The next slice is
+startup/shutdown ownership integration and competing-launch/teardown race tests.
+Acknowledgement remains admission, not listener completion or durable delivery.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
 independent event delivery, reentrancy, unsubscribe, and shutdown behavior
@@ -190,7 +189,79 @@ permission to start a second application. This is cooperative same-user
 coordination, not a security boundary against other code running as that user.
 It does not yet prove that the owner has a ready endpoint or accepted a launch.
 
-Run the bounded native regression with:
+### Private bounded transport checkpoint
+
+`platform/macos/instance-transport.zs` owns framing, deadlines, typed failures,
+and admission in Z. `launch-socket.zs` isolates the OS socket and native byte
+buffer operations. No application listener or WebView operation runs on the
+transport path. No new public application API or configuration is added.
+
+The move-only endpoint consumes the primary lease and derives its name from
+that lease's exact identifier. Its static factory is the only way to initialize
+its private fields. Teardown removes the socket and closes its descriptor
+before field cleanup releases the lease. A successor holding that lease may
+remove a stale socket left by process death; the stable lock file is never
+removed. A process without the lease cannot install an endpoint through this
+API.
+
+The transport uses a local Unix stream socket beneath the checked mode-0700
+directory `/private/tmp/zapp-launch-<effective-uid>`, with a full SHA-256 filename
+and a mode-0600 socket. This short, canonical location fits Darwin's Unix-socket
+path limit without truncating the identity or trusting `TMPDIR`. Symlinks,
+wrong ownership, non-socket files, and permissive endpoint modes fail closed.
+Both peers check the effective UID using
+[`getpeereid`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/getpeereid.3.html).
+This is cooperative same-user coordination, not authentication against other
+programs running as the same user. App Sandbox/Mac App Store packaging and other
+platform transports still need separate validation.
+
+Each connection carries one four-byte big-endian length followed by the existing
+UTF-8 JSON launch envelope. Request length is checked **before** allocating the
+body and is limited to 64 KiB. Replies are length-framed too, limited to 64 bytes,
+and must be exactly `zapp-launch/1 accepted` or `zapp-launch/1 rejected`.
+Malformed UTF-8/JSON and full/closed inboxes receive rejection; malformed or
+incomplete framing closes the connection without admission. Socket setup asks
+for a backlog of 16; the receiver services one connection at a time and the
+application's shared pending queue stays limited to 64 requests.
+
+Nonblocking I/O uses monotonic absolute deadlines: at most one second to wait
+for a connection, one second for that connection's request/response, and five
+seconds for the client's complete connect/send/receive exchange. Partial reads,
+writes, and interruptions do not reset these deadlines. These are private first-
+tier limits, not a new user configuration surface. Socket writes suppress
+`SIGPIPE`, so a disconnected peer becomes a typed error instead of terminating
+the application.
+
+| Client outcome | Meaning |
+| --- | --- |
+| `true` | The primary acknowledged admission into the shared inbox. |
+| `false` | The primary explicitly rejected this request. |
+| Error, `mayHaveBeenAdmitted: false` | Failure before a request could be sent. No secondary primary is started. |
+| Error, `mayHaveBeenAdmitted: true` | Sending began but no valid final acknowledgement arrived. Admission may already have happened. |
+
+The transport never retries automatically. In particular, a timeout or broken
+connection after sending does not prove non-delivery, and blindly resending
+could produce duplicate application events. Accepted input remains best effort:
+shutdown may discard it after acknowledgement. Future startup integration must
+distinguish election, endpoint readiness, admission, and teardown rather than
+turn every transport failure into another primary.
+
+Run both compiler paths against real, isolated processes:
+
+```sh
+bun run cli/src/test-instance-transport-macos.ts
+# Optional undefined-behavior instrumentation of both generated executables:
+ZAPP_LAUNCH_UBSAN=1 bun run cli/src/test-instance-transport-macos.ts
+```
+
+The suite verifies sequential/concurrent capacity, acceptance without a main
+loop or listener, closed admission, fragmented input, invalid lengths and UTF-8,
+absolute slow-client deadlines, missing/corrupt/oversized acknowledgements,
+scope cleanup, contention, crash recovery, and hostile endpoint paths. Children
+have watchdogs; only run-unique socket/lock names are removed after all children
+stop. Interactive application bundles are never launched by this regression.
+
+Run the separate bounded primary-lease regression with:
 
 ```sh
 bun run cli/src/test-instance-lease-macos.ts
@@ -203,10 +274,10 @@ shapes. Every child has a deadline and teardown; interactive bundles and their
 instance identifiers are not used. `Z_SOURCE_ROOT` can select the compiler
 checkout (the default is the sibling `z-lang` directory).
 
-Current platform implementation: macOS `NSApplicationDelegate` reopen and
+Current application integration: macOS `NSApplicationDelegate` reopen and
 `application:openURLs:` callbacks. File associations, universal links, frontend
-event delivery, and cross-process single-instance forwarding remain future
-contracts. The existing `singleInstance` bundle hint is not a portable
+event delivery, and automatic cross-process single-instance forwarding remain
+future integration. The existing `singleInstance` bundle hint is not a portable
 forwarding protocol or a guarantee against direct executable launches.
 
 See [Z Notes](../spikes/z-notes/README.md#application-activation) for manual and
