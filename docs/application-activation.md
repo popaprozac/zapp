@@ -149,7 +149,7 @@ destroys the unused incoming request, and closing the inbox discards pending
 requests while existing producer handles remain safely closed.
 
 The private macOS transport below now forwards and acknowledges admission in
-isolated processes. It is not installed by `app.run()` yet. Owned async
+isolated processes. It is not installed by `app.run()` yet. Native owned async
 destructuring and the ordinary suspending-helper tier need upstream work before
 startup/shutdown integration and competing-launch/teardown race tests.
 Acknowledgement remains admission, not listener completion or durable delivery.
@@ -277,9 +277,12 @@ stop. Interactive application bundles are never launched by this regression.
 ### Integration prerequisite and continuation
 
 The attempted lifecycle-owned listener exposed two upstream Z boundaries:
-ordinary owned struct destructuring inside async frames in Stage 0, and native
-execution of an ordinary named helper with `await scheduler.yield()` inside a
-loop. The reduced cases are recorded in Z's ownership-pressure log and
+ordinary owned struct destructuring inside async frames, and native execution
+of an ordinary named helper with `await scheduler.yield()` inside a loop.
+Stage 0 now executes the first shape, with cleanup verified on success, error,
+and cancellation, including awaited initializers and joined scoped borrows.
+Owned branch/loop bindings still require explicit lexical async scopes. The
+reduced cases are recorded in Z's ownership-pressure log and
 `async-launch-owned-destructure.zs` / `async-launch-listener.zs` fixtures.
 The first also demonstrates that native `check` acceptance alone does not yet
 guarantee C emission for that combined frame shape.
