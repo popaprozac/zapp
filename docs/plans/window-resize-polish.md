@@ -159,9 +159,26 @@ rather than misleadingly printing zero.
 Conclusion: the candidate avoids several redundant native writes, but there is
 **no demonstrated substantial viewport-latency improvement** beyond the original
 stepped algorithm. These small overlapping ranges are not a CPU, energy, or
-paint-performance win. Background matching requires user visual feedback before
-claiming better appearance. Keep the simpler original as the reference; do not
+paint-performance win. Keep the simpler original as the reference; do not
 promote extra transaction machinery purely because it looks more sophisticated.
+
+The subsequent user visual comparison found no large difference between these
+variants. White background remained visible during zoom; the meaningful win was
+the responsive viewport throughout resizing. This closes the second polish
+probe: retain the original stepped approach as the implementation baseline.
+Consistent native/page backgrounds remain separate cosmetic polish, not evidence
+of reduced rendering lag. Do not extend the coordination experiment without new
+evidence that justifies it.
+
+The next work is correctness and the native override design checkpoint above,
+not another rendering experiment. Current Z protocol adapters own a separate Z
+controller and generate an `NSObject<Protocol>` object; changing that object's
+base alone would not provide a sound subclass implementation. Native receiver
+identity, superclass dispatch, construction-time callbacks, ARC cleanup, and
+executor provenance need explicit treatment. A foreign-subclass proposal is not
+approval for general inheritance among ordinary Z classes. Deliberate the new
+declaration/method surface before implementing it, then settle initialization
+and state lifetime before attempting a stateful production window subclass.
 
 Run `bun run spikes/window-resize/run.ts compare` for visual feedback, or
 `compare --repeat 3` for repeated observation data. The original interrupted
