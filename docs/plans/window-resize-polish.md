@@ -78,12 +78,19 @@ keep exact restoration semantics. Z's current `objc.adapt<P>` generates an
 NSObject protocol adapter; that does not supply native superclass overrides
 or `super` dispatch.
 
-Next design checkpoint: compare a narrowly checked native-subclass/override
-interop facility with a fully specified composition approach that independently
-owns zoom state. Prefer preserving AppKit semantics and keeping Zapp logic in Z.
-Any new Z API/syntax must be discussed with the user before implementation.
-Do not quietly turn the research `.m` into a production backend or introduce
-general Z inheritance to solve this one foreign-interface requirement.
+The user approved the foreign-only `class SmoothWindow extends AppKit.NSWindow
+on thread.main` direction, with checked `override`, the existing `as "selector:"`
+mapping, and native `super` dispatch. The approved direction and open safety
+questions are recorded in Z's `docs/objc-subclass-design.md`; no compiler support
+has landed yet. This preserves AppKit semantics and keeps production window logic
+in Z without introducing ordinary Z-to-Z inheritance.
+
+The next design checkpoint is construction and state lifetime using Z's existing
+`new` / `constructor` vocabulary. Start with a field-free native fixture before
+stateful window integration; native callbacks during initialization and teardown
+must not observe uninitialized or destroyed Z state. Any new surface must still
+be discussed before implementation. The research `.m` stays a test oracle, not
+a production backend.
 
 ## Follow-through after that decision
 
