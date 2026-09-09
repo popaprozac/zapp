@@ -74,26 +74,40 @@ Same-executor joins register waiters and preserve child-before-parent cleanup;
 separate-driver scopes retain the existing synchronous bridge. Bounded UBSan
 tests cover simultaneous waiters, cold/active destruction, exact scope reference
 counts, and the actual Z parent cancelled at 19 scheduler positions on both
-success/error paths. Latest upstream checkpoint: Z `3732b1c`, with all 212
+success/error paths. Passed-in-handle checkpoint: Z `3732b1c`, with all 212
 self-hosting-tier tests passing and the local compiler rebuilt to a fixed point.
 The ordinary native Z Notes auto-closing smoke and all eight Stage 0/native
 startup transport cases pass again under UBSan. This is a generic upstream
 capability, not a change to the application source or a claim that this wrapper
 now builds.
 
-Two gates remain in the full wrapper:
+The local structural-ownership gate is now fixed upstream. Direct root-local
+TaskScope constructors have implicit unwind states that close/join on return
+and cancel/join on propagated failure or parent cancellation. Moving the visible
+handle cannot skip its creating frame's join obligation. Scope children finish
+before parent locals are destroyed, even when cancellation skips an explicit
+source-level await. Nested/conditional constructors remain an explicit native
+boundary. This added no new source syntax or Zapp API. Local ownership and
+native callback re-entry checkpoint: Z `dec4079`.
 
-- Native-listener cancellation/join after the owned outcome still needs a
-  continuation state. Do not confuse an explicit worker cancel (which completes
-  normally) with cancellation of the parent task itself.
-- `launchUpdates` is created inside the wrapper, not merely passed in. An
-  additional upstream probe showed that cancelling a native parent before such
-  a scope's explicit join can leave scheduled children/timers alive. The native
-  linear frame now rejects locally created TaskScope owners with `Z0700` until
-  implicit scope-unwind states join those children on every exit. Passing handle
-  tests do not establish local structural ownership.
+The upstream probe covers two scopes, moved handles, free functions and supported
+method frames, and 492 bounded native cancellation/destruction cases under UBSan.
+All 215 self-hosting and 98 async tests pass, the local compiler reaches a fixed
+point, and the eight production-shaped startup process cases pass again with
+Stage 0 and native output under UBSan.
 
-Fix both upstream with cancellation/cleanup tests. Do not simply ignore every
+The full Z Notes smoke exposed and then verified an upstream native-entry fix:
+WebKit callbacks re-entering while an outer Z poll is inside AppKit must use the
+host driver, not merely queue work behind that blocked poll. The entry adapter
+now restores the outer executor after the callback. The auto-closing native
+smoke passes again, including frontend cancellation, WebView/service round trips,
+worker messages and joins, and service teardown. No framework workaround was
+added, and the saved integration patch remains unapplied.
+
+One gate remains in the full wrapper: native-listener cancellation/join after
+the owned outcome needs a continuation state. Do not confuse an explicit worker
+cancel (which completes normally) with cancellation of the parent task itself.
+Fix that upstream with cancellation/cleanup tests. Do not simply ignore every
 method named `cancel` in frame admission.
 Do not rewrite the application around polling, a synchronous wrapper, or a
 different public API merely to satisfy a lowering classifier.
@@ -105,8 +119,8 @@ match destinations during this work.
 
 ## Resume sequence
 
-1. Implement implicit unwinding for continuation-owned TaskScopes, then
-   native-thread cancellation/join. Passed-in TaskScope joins are now covered.
+1. Implement native-thread cancellation/join. Passed-in TaskScope joins and
+   implicit unwinding for continuation-owned TaskScopes are now covered.
    Preserve the owned outcome and parent storage until every admitted child has
    joined, even when cancellation skips a source-level explicit await. Avoid
    expanding unrelated nested-local/yield shapes.
