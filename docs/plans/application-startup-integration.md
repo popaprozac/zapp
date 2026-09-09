@@ -15,10 +15,10 @@ draft without importing it into the shipping macOS application graph.
   primary/secondary processes, idle cancellation, a partial native request during
   shutdown, and a hostile socket path during startup. They check one delivery,
   arguments/cwd snapshots, ordered joins, lease reacquisition, and socket cleanup.
-- The proposed full Z Notes graph checks with Stage 0, but the native application
-  build remains blocked on the scope/thread-join composition gap below. No app was
-  launched by the failed integration build; the patch was returned to this saved
-  state. This is **not** an executable application integration result.
+- The proposed full Z Notes graph checked with Stage 0; its previous native build
+  hit the scope/thread-join composition gaps recorded below. Those reduced gates
+  are now fixed upstream, but the saved wrapper has not yet been reapplied and
+  rebuilt. This is **not** an executable application integration result.
 - After restoring the unapplied state, the full native Z Notes auto-closing smoke
   passes with an isolated application identity: WebView/service round trips,
   application-worker messages, cancellation/join, and service teardown remain
@@ -27,7 +27,7 @@ draft without importing it into the shipping macOS application graph.
   setting as a private build hook, default false. No new configuration key was
   introduced, and the hook is not yet called by Application.run.
 
-## Remaining upstream blocker
+## Upstream checkpoints
 
 The imported internal async-call identity blocker is fixed upstream. Lowering
 preserves each direct call's source site and resolves its final emitted name
@@ -104,11 +104,27 @@ smoke passes again, including frontend cancellation, WebView/service round trips
 worker messages and joins, and service teardown. No framework workaround was
 added, and the saved integration patch remains unapplied.
 
-One gate remains in the full wrapper: native-listener cancellation/join after
-the owned outcome needs a continuation state. Do not confuse an explicit worker
-cancel (which completes normally) with cancellation of the parent task itself.
-Fix that upstream with cancellation/cleanup tests. Do not simply ignore every
-method named `cancel` in frame admission.
+The final reduced upstream gate is now fixed in Z `ef321a3`: a native-listener
+cancellation join can follow an owned awaited outcome. An explicit worker cancel
+completes normally; parent cancellation remains a separate structural outcome.
+Root-owned worker handles join before parent cleanup even when an early return
+or cancellation skips the explicit await. The compiler checks intrinsic Task or
+imported thread.spawn identity, not merely a method named `cancel`.
+
+Pending worker-to-main requests wake and resume the join frame through the
+external queue. Main-isolated function owners and expression-bodied worker
+placement now preserve their task identity. Cold/active waiter destruction drains
+worker completion before freeing notification storage. The focused suite covers
+300 parent-frame cancellation/destruction combinations plus 64 direct waiter
+destruction cases under UBSan, functions without TaskScope, and main-bound methods.
+
+The full upstream self-hosting run passed 218 tests; all 98 async tests passed.
+The final focused suite passed 12 tests. The rebuilt compiler reached a fixed
+point, all eight startup process cases passed again under UBSan, and the normal
+native Z Notes auto-closing smoke passed with an isolated identity. The integration
+patch remains unapplied: the next check is the actual full wrapper, not another
+claim based only on reduced probes.
+
 Do not rewrite the application around polling, a synchronous wrapper, or a
 different public API merely to satisfy a lowering classifier.
 
@@ -119,12 +135,12 @@ match destinations during this work.
 
 ## Resume sequence
 
-1. Implement native-thread cancellation/join. Passed-in TaskScope joins and
-   implicit unwinding for continuation-owned TaskScopes are now covered.
-   Preserve the owned outcome and parent storage until every admitted child has
-   joined, even when cancellation skips a source-level explicit await. Avoid
-   expanding unrelated nested-local/yield shapes.
-2. Rebuild the fixed-point compiler, then rerun the complete process matrix:
+1. Review and apply the saved integration patch. Its single-instance-disabled
+   path allocates no listener, queue, or delivery scope. The enabled path keeps
+   an owned outcome until listener and callback-scope teardown have joined.
+   The reduced upstream prerequisites are verified; build and test the actual
+   full application wrapper next. Address any additional gap upstream.
+2. Use the rebuilt fixed-point compiler and rerun the complete process matrix:
 
    ```sh
    ZAPP_LAUNCH_UBSAN=1 bun cli/src/test-launch-startup-macos.ts
@@ -132,12 +148,9 @@ match destinations during this work.
 
    Both compiler builds and all eight runtime cases are required by default.
    The former expected-native-failure escape has been removed.
-3. Review and apply the saved integration patch. Its single-instance-disabled
-   path allocates no listener, queue, or delivery scope. The enabled path keeps
-   an owned outcome until listener and callback-scope teardown have joined.
-4. Run the full native Z Notes smoke with an isolated identity. Add a complete
-   Application.run primary/secondary gate test and startup failure rollback;
+3. Add a complete Application.run primary/secondary gate test and startup failure rollback;
    check that a secondary never creates windows or starts services.
+4. Run the full native Z Notes smoke with an isolated identity.
 5. Only then enable/claim automatic forwarding and update activation docs.
 
 All new process tests use deadlines and process-tree cleanup. They use UBSan,
