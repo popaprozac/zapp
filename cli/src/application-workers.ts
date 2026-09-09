@@ -224,7 +224,8 @@ export function renderZApplicationWorkerStartup(
       `      source: applicationWorkerSource${index},`,
       `      name: ${JSON.stringify(worker.moduleUrl)},`,
       "    }),",
-      `    catalog.entries[${index}].serviceMethods,`,
+      // The escaping worker callback owns its snapshot; catalog stays owned.
+      `    copy catalog.entries[${index}].serviceMethods,`,
       `    catalog.entries[${index}].restart,`,
       "    services,",
       "    asyncService,",

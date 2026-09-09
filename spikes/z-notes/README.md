@@ -171,7 +171,27 @@ Use an existing note ID from the UI. Z validates the route, looks up the note
 after service startup, opens a note-specific window, and the frontend highlights
 that note. Unsupported routes and unknown note IDs do not create a window.
 Clicking the Dock icon while the app is running asks the app-authored reopen
-listener to show the main window. This does not add cross-process forwarding.
+listener to show the main window.
+
+The example also enables `application.singleInstance: true`. A second direct
+launch forwards its arguments and working directory to the primary, then exits
+without starting another service, worker, or WebView. The app's
+`secondInstanceLaunched` subscription shows the main window and logs the argument
+count, not their contents. It deliberately does not interpret those arguments as
+URLs, files, or service calls. A real command-line route would validate the
+snapshot before acting on it.
+
+While the packaged app is open, run its executable again (the executable name
+inside a dev-mode bundle is `z-notes` instead):
+
+```sh
+"$PWD/spikes/z-notes/bin/Z Notes.app/Contents/MacOS/zapp-z-webview" "draft with spaces" "second draft"
+```
+
+The original terminal reports `Z Notes handled a secondary launch (2 arguments)`;
+the second invocation exits successfully. Service constructors/setup before
+`app.run()` still execute in each process, so keep external work in lifecycle
+hooks rather than constructors.
 
 For a launch while the app is closed, first build the packaged interactive app
 with `bun run spike:z-notes` and close it normally. The same `open -a` command
@@ -198,6 +218,18 @@ It must report `deep link opened note 1`, `activation WebView selected note 1`,
 and normal service shutdown. Use `spike:z-notes:dev-smoke` with the same flags
 to test the Vite path and port cleanup. The direct delegate probe does not
 register its test executable as the system URL handler.
+
+The complete launch regression runs both packaged and Vite modes, starts a
+second copy with empty/spaced/Unicode/URL-looking arguments, and requires one
+event, one service lifecycle, normal worker/WebView checks, endpoint cleanup,
+and Vite port release. It uses a random application identity, private smoke
+bundles, and bounded process lifetimes; it does not replace the interactive app.
+
+```sh
+bun cli/src/test-notes-launch-macos.ts
+# Or select one mode:
+bun cli/src/test-notes-launch-macos.ts dev
+```
 
 ### Menus and windows
 

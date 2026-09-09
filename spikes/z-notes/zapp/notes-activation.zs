@@ -4,6 +4,7 @@ import {
   ApplicationEventSubscriptionError,
   ApplicationOpenURLRequestedEvent,
   ApplicationReopenRequestedEvent,
+  ApplicationSecondInstanceLaunchedEvent,
 } from "zapp";
 import { Window, WindowOptions } from "zapp/window";
 import { NotesService } from "./notes-service.zs";
@@ -45,6 +46,7 @@ function openRequestedNote(
 export struct NoteActivationSubscriptions {
   reopen: ApplicationEventSubscription;
   links: ApplicationEventSubscription;
+  launches: ApplicationEventSubscription;
 }
 
 export function observeNoteActivation(
@@ -63,5 +65,13 @@ export function observeNoteActivation(
     };
   const links = try app.events.openURLRequested.subscribe(linkHandler);
   const reopen = try app.events.reopenRequested.subscribe(reopenHandler);
-  return NoteActivationSubscriptions({ reopen, links });
+  const launchHandler: (in event: ApplicationSecondInstanceLaunchedEvent) => void on thread.main =
+    move (in event: ApplicationSecondInstanceLaunchedEvent): void => {
+      // A launch is an app-authored request, not an automatic URL/file action.
+      // Keep argument contents private; a real CLI route would validate them.
+      window.show();
+      console.log(`Z Notes handled a secondary launch (${event.arguments.length} arguments)`);
+    };
+  const launches = try app.events.secondInstanceLaunched.subscribe(launchHandler);
+  return NoteActivationSubscriptions({ reopen, links, launches });
 }

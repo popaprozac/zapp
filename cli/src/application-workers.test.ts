@@ -105,7 +105,8 @@ describe("resolveApplicationWorkers", () => {
     );
     expect(source).toContain("startZjsApplicationWorker(");
     expect(source).toContain("catalog.entries[0].restart");
-    expect(source).toContain("catalog.entries[0].serviceMethods");
+    expect(source).toContain("copy catalog.entries[0].serviceMethods,");
+    expect(source).not.toContain("    catalog.entries[0].serviceMethods,");
     expect(source).toContain("    services,");
     expect(source).toContain("    lifecycle");
     expect(source).toContain(

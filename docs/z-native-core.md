@@ -825,41 +825,30 @@ readonly argument snapshots and an optional working directory without a
 framework-specific JSON workaround. Stage 0 and native payload/event tests
 cover UTF-8, bounds, malformed input, FIFO delivery, and shutdown.
 
-The private macOS primary lease now has independent multi-process evidence:
-scope cleanup, nonblocking contention, crash recovery, and simultaneous launches
-through both compilers. It adds no polling thread and is not yet wired into
-`app.run()`; see [the activation contract](application-activation.md#private-primary-ownership-checkpoint).
-The private bounded launch endpoint now owns that lease and forwards framed
-requests into the shared synchronized activation inbox. Both compilers pass
-real-process admission, capacity, deadline, malformed-input, lost-acknowledgement,
-and cleanup regressions. The private readiness path also waits through delayed
-endpoint publication within one absolute deadline, fails without primary
-promotion when readiness never arrives, and never resends after sending begins.
-The shared inbox coalesces wake reservations across concurrent producers. These
-pieces pass both compiler paths; the transport also passes UBSan.
+The macOS single-instance path is integrated into `app.run()`. When
+`application.singleInstance` is true, startup elects a primary and publishes its
+bounded endpoint before constructing AppKit or starting services. A secondary
+forwards its arguments/cwd snapshot and exits after admission. Startup failures
+roll back; normal shutdown cancels and joins the listener and admitted main work
+before releasing the endpoint, lease, and event owner. The default false path
+creates no listener, readiness channel, or launch-delivery scope.
 
-Startup/shutdown integration, main-executor draining, and automatic secondary
-exit remain gated on the actual listener's native frame composition. The
-reduced owned-destructuring and ordinary named yield-loop cases now execute in
-both compilers; native cancellation tests cover before-entry and initialized
-root-field cleanup. Stage 0 has broader initialization, scoped-borrow, error,
-and cancellation coverage. Native yield frames now own Z-value parameters from
-cold invocation start, including cleanup when dropped or cancelled before entry.
-Foundation-backed endpoint and synchronized inbox storage now compile against
-the actual framework types, including nested readonly launch arguments. Reduced
-Z runtime regressions verify strong-slot release, exact-once resource cleanup,
-and no Mutex lock spanning a yield. The upstream loop frame now composes direct
-named child awaits with owned value arguments and typed errors, including
-`try`/`attempt`, repeated calls, owned results, and child-before-parent
-cancellation cleanup. Borrowed child arguments and method/placed awaits remain
-separate boundaries. The next check is the actual listener's receive-error and
-main-host wakeup composition. The listener needs cancellation
-observation between bounded receives and endpoint cleanup before lease release.
-These are recorded in the
-Z ownership-pressure log with reduced fixtures; no synchronous background-loop
-workaround or partial `app.run()` integration is enabled.
-The existing `singleInstance` bundle hint does
-not yet supply a cross-process forwarding protocol. Broader platform coverage,
-file/universal-link handling, additional worker engines, and sanitizer evidence
-on a compatible host remain separate work; they are not implied by the current
-macOS checks.
+The transport has Stage 0/native multi-process and UBSan coverage, including
+contention, delayed readiness, malformed input, lost acknowledgement, crash
+recovery, and cleanup. The complete fixed-point application gate covers failure
+rollback and real primary/secondary delivery without a secondary host or service
+startup. Exported service types can now live beside `main`; generated adapters
+link them without weakening source import-cycle or visibility checks.
+
+Z Notes enables this setting and proves the full packaged and Vite paths through
+`bun cli/src/test-notes-launch-macos.ts`: one forwarded secondary launch, one
+service lifecycle, ordinary worker/WebView checks, endpoint cleanup, and Vite
+port release. Worker startup explicitly copies its frozen service-permission
+snapshot out of the borrowed catalog; that snapshot is owned by the worker,
+not implicitly shared with the configuration storage.
+
+See [application activation](application-activation.md) for the developer
+contract and [the startup checkpoint](plans/application-startup-integration.md)
+for compiler evidence and reproducible gates. Windows/Linux forwarding,
+file/universal-link handling, additional worker engines, and release/package
+distribution remain separate work; current macOS evidence does not imply them.

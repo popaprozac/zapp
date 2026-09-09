@@ -11,7 +11,7 @@ reference. Engineering plans and historical material are separated below.
 | [`../spikes/z-notes/README.md`](../spikes/z-notes/README.md) | Runnable application: native services, windows, workers, permissions, and lifecycle |
 | [`configuration.md`](configuration.md) | Typed configuration, immutable build policy, and current support boundaries |
 | [`z-services.md`](z-services.md) | Native service registration, generated TypeScript clients, errors, and lifecycle |
-| [`application-activation.md`](application-activation.md) | Reopen and custom URL events, startup buffering, and shutdown guarantees |
+| [`application-activation.md`](application-activation.md) | Reopen/custom URL events, single-instance forwarding, startup buffering, and shutdown guarantees |
 | [`api-reference.md`](api-reference.md#application-lifecycle) | Current frontend application lifecycle; later sections contain explicitly labeled legacy APIs |
 
 Existing document filenames are retained so links remain stable. Future designs

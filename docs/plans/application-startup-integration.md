@@ -228,3 +228,41 @@ All new process tests use deadlines and process-tree cleanup. The transport
 matrix uses UBSan; the complete application uses the signed native release
 binary. Neither uses ASan. Interactive bundles and user-owned application
 identities are not used by these tests.
+
+## Z Notes developer-path checkpoint (2026-09-09)
+
+Z Notes now enables the existing `application.singleInstance` option. Its
+app-owned `secondInstanceLaunched` listener shows the main window and reports
+only the argument count. URL-looking arguments do not implicitly invoke the
+deep-link listener or gain file/service authority.
+
+`bun cli/src/test-notes-launch-macos.ts` passes both packaged and Vite modes
+with the fixed-point native compiler. Each mode uses a random identity and a
+private smoke bundle, starts a second process after service startup, and checks:
+
+- empty/spaced/Unicode/URL-looking arguments produce exactly one launch event;
+- the secondary exits zero without starting another service, worker, or WebView;
+- the primary completes its ordinary WebView and suspended worker-service checks;
+- worker cancellation/join precedes service shutdown, and the endpoint is removed;
+- the development command releases Vite port 5173.
+
+The smaller full startup gate remains responsible for exact argument/cwd payload
+comparison and failure rollback. This consumer gate proves the actual developer
+commands and generated framework graph, not another reduced transport fixture.
+Its build/run has a 240-second deadline and the secondary has a 15-second
+deadline, with process-tree cleanup. No ASan is used.
+
+This run exposed two upstream readonly parity gaps: numeric `length` evidence in
+callback interpolation, and explicit copying of readonly Array storage. Native
+checking also now rejects mutating frozen-collection methods before unknown-call
+fallback. The worker generator had independently been extracting its owned
+service-permission Array from a borrowed catalog; it now explicitly copies the
+worker's startup snapshot. That is an intentional startup copy per worker,
+not a per-call cost or a shared-ownership assumption.
+
+Z `a1404d1` reaches a byte-identical fixed point (10,971,404 C bytes); all 233
+self-hosting and 97 collection/module tests pass. Zapp's 502 CLI/runtime tests
+and both TypeScript projects pass. The corresponding Z
+ownership-pressure entry records the fixes and a separate readonly-alias indexed
+interpolation follow-up. The generated-service/startup integration is no longer
+blocking framework or CLI work; new public surfaces still require deliberation.

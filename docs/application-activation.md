@@ -266,9 +266,9 @@ An elected primary that never becomes ready produces failure, not promotion of
 the secondary into another primary. A timeout or broken connection after
 sending does not prove non-delivery, and blindly resending could produce
 duplicate application events. Accepted input remains best effort:
-shutdown may discard it after acknowledgement. Future startup integration must
-distinguish election, endpoint readiness, admission, and teardown rather than
-turn every transport failure into another primary.
+shutdown may discard it after acknowledgement. Startup distinguishes election,
+endpoint readiness, admission, and teardown; transport failure does not create
+another primary.
 
 Run both compiler paths against real, isolated processes:
 
