@@ -1,14 +1,15 @@
 # Application activation
 
-Implementation checkpoint: the channel-readiness startup draft and its exact
-remaining native compiler gate are captured in
-[the startup integration plan](plans/application-startup-integration.md).
-Automatic application forwarding remains disabled until that gate passes.
-
 Zapp delivers OS reopen requests and registered custom URLs to application-owned
 Z events. Application code decides what those requests mean. This is distinct
 from WebView focus events, outgoing `app.shell.openExternal(...)`, and WebView
 asset protocols.
+
+On macOS, `application.singleInstance: true` also makes `app.run()` forward a
+secondary process's launch arguments and working directory to the primary.
+The secondary exits without creating AppKit, realizing windows, or starting
+services. The default is false. Election and forwarding failures return an
+`ApplicationError.platform`; they never silently start another primary.
 
 ## Configure and subscribe
 
@@ -17,6 +18,7 @@ asset protocols.
 application: {
   name: "Z Notes",
   identifier: "com.example.notes",
+  singleInstance: true,
   deepLinks: ["znotes"],
 }
 ```
@@ -102,7 +104,7 @@ Z Notes demonstrates that separation in `notes-route.zs` and
 exist in the started service, and native code constructs its own relative
 `/notes?note=<validated-id>` window URL. The frontend highlights that note.
 
-## Secondary-instance payload foundation
+## Secondary-instance launches
 
 The event source and checked payload codec are implemented:
 
@@ -130,13 +132,13 @@ encoded envelope. Embedded NULs, an empty present working directory, duplicate
 fields, malformed JSON, and unsupported versions are rejected. Error messages
 do not include argument contents. Launches share the existing 64-request FIFO.
 
-This is the **payload and event foundation**, not automatic cross-process
-delivery yet. The private primary lease and forwarding transport are tested
-independently and together with the worker/main host below. Wiring them into
-startup and shutdown is the next integration step. Native synchronous-channel
-lowering now verifies the one-shot readiness result upstream; that does not yet
-install the listener in `app.run()`. The existing bundle hint alone does not
-provide those guarantees.
+With `singleInstance` enabled, `app.run()` elects a primary and waits for endpoint
+readiness before native application setup. A secondary sends its snapshot and
+returns zero after admission. Register `app.events.secondInstanceLaunched`
+before calling `app.run()` so early launches can be delivered after service
+startup. The existing bundle hint complements this protocol; direct executable
+launches are covered too. Application setup before `run()` still executes in
+each process, so avoid doing external work in service constructors.
 
 The transport admits into the **same 64-request inbox** used by OS
 activation. An acknowledgement means bounded admission, not that a listener
@@ -155,12 +157,11 @@ producer thread, but it grants only admission, not main-bound event access.
 destroys the unused incoming request, and closing the inbox discards pending
 requests while existing producer handles remain safely closed.
 
-The private macOS transport below now forwards and acknowledges admission in
-isolated processes. It is not installed by `app.run()` yet. Native owned async
-destructuring and the ordinary suspending-helper prerequisites have landed, and
-the integrated listener probe now covers competing launches and teardown. The
-remaining application startup readiness prerequisite is documented below.
-Acknowledgement remains admission, not listener completion or durable delivery.
+The private macOS transport below is owned by `app.run()`. Startup failures and
+shutdown close admission, cancel/join the listener, and join admitted main work
+before releasing delivery state. The complete application regression covers
+both failure rollback and primary/secondary execution. Acknowledgement remains
+admission, not listener completion or durable delivery.
 
 `native/z/tests/application-launch-smoke.zs` verifies the codec, limits,
 independent event delivery, reentrancy, unsubscribe, and shutdown behavior
@@ -172,7 +173,8 @@ one mutex-protected wake reservation across all producers. Clearing the pending
 reservation before draining allows a concurrent producer to reserve a later
 wake without losing notification; closing admission clears it and prevents
 further reservations. The integrated listener probe below connects this
-primitive to main dispatch; production application wiring is still pending.
+primitive to main dispatch; the complete application regression covers startup
+and shutdown through `app.run()`.
 `native/z/tests/activation-inbox-smoke.zs` additionally checks main-executor
 listener delivery, FIFO reentry, capacity reuse, cancelled quit, and rejection
 after shutdown. Its combined async event setup currently executes through
@@ -182,8 +184,8 @@ activation/launch smokes retain native coverage of event delivery and teardown.
 
 ### Private primary-ownership checkpoint
 
-The macOS backend now has an internal move-only instance lease, not yet called
-by `app.run()`. It uses a nonblocking exclusive OS file lock per effective user
+The macOS backend has an internal move-only instance lease, acquired by the
+`app.run()` listener. It uses a nonblocking exclusive OS file lock per effective user
 and exact application identifier. Stable SHA-256 filename encoding avoids path
 interpretation and filesystem-name length restrictions; it is not an
 authentication mechanism. The lock lives beneath the OS-reported private user
@@ -198,11 +200,12 @@ replacing the inode could let two processes lock different files under one
 name. Empty files are harmless, not evidence of a live or stale primary. There
 is no PID guessing, stale-file takeover timeout, polling, or background thread.
 
-Contention is distinct from setup failure. A future startup integration must
-forward to the owner or report failure; it must not treat an I/O failure as
+Contention is distinct from setup failure. Startup forwards to the owner or
+reports failure; it must not treat an I/O failure as
 permission to start a second application. This is cooperative same-user
 coordination, not a security boundary against other code running as that user.
-It does not yet prove that the owner has a ready endpoint or accepted a launch.
+The lease alone does not prove endpoint readiness or launch admission; startup
+performs those checks separately.
 
 ### Private bounded transport checkpoint
 
@@ -317,7 +320,8 @@ throw/`try`, loop exits, and cancellation, including Foundation ARC payloads.
 Borrowed child arguments, method/placed awaits, and nested awaited expressions
 remain outside this loop tier. Match arms cannot suspend in this tier; their
 payloads finish before the next yield. The running integration probe below
-builds on these reduced cases; automatic application forwarding is not enabled.
+builds on these reduced cases; the complete application gate verifies their
+composition in the automatic forwarding path.
 
 The main-host wakeup probe found and fixed another upstream issue: native
 TaskScope scheduling could start a non-suspending async body on the submitting
@@ -377,9 +381,8 @@ checkout. Direct `await delay(...)` inside native `main` remains a separate
 compiler entry-frame gap (now an explicit `Z0700`); the CFRunLoop test host is
 not a replacement Z timer implementation or a new framework API.
 
-Next is integrating this verified lifetime into application startup and shutdown,
-including fail-closed election/readiness/secondary handoff before automatic
-forwarding is enabled.
+This lifetime is integrated into application startup and shutdown, including
+fail-closed election, readiness, and secondary handoff.
 
 That integration exposed an upstream prerequisite: a capacity-one Z channel is
 the intended one-shot startup handshake. Both compiler paths now execute its
@@ -389,18 +392,18 @@ yielding worker holding `SyncSender<i32>` and `TaskScope`, followed by worker
 cancellation/join and scope closure. Native tests use UBSan and instrument
 storage releases to verify balanced endpoint ownership.
 
-Return to this application gate with the existing channel API; no polling or
-framework-native synchronization shim is needed. Native async channel waiters
-remain outside the tier and are not required for startup. The verified listener
-probe remains unchanged, and automatic forwarding remains disabled until
-Application.run integration passes its startup and teardown cases.
+The application gate uses the existing channel API; no polling or framework-
+native synchronization shim is needed. Native async channel waiters remain
+outside the tier and are not required for startup. The complete Application.run
+regression now passes its startup, secondary handoff, and teardown cases.
 
 The native frame tier remains deliberately bounded: void/i32 nonthrowing worker
 wrappers around named yielding functions, root owned storage, and supported
 direct child awaits. Other scope-capturing worker await shapes fail closed;
 general worker-body normalization and cross-thread TaskControl capture remain
-separate. These runtime tests are not proof of a production application listener.
-The application listener must construct/destroy the endpoint on its own worker,
+separate. Reduced runtime tests alone are not proof of full application behavior;
+the complete gate below supplies that evidence. The application listener must
+construct/destroy the endpoint on its own worker,
 observe cancellation between bounded receives, and send only inbox wakeups to
 the main-owned host. Startup must distinguish election from endpoint readiness
 and admission. Shutdown must close admission, cancel/join the listener, release
@@ -409,9 +412,23 @@ host. Do not replace that with a synchronous endless worker whose exit depends
 on cleanup in the parent that is already waiting to join it.
 
 No new public application API, configuration field, or language syntax was
-introduced by this integration probe. The existing application path remains
-unchanged until these verified components are wired into its startup/lifetime
-owner and the application-level gate passes.
+introduced by this integration. The existing `singleInstance` setting selects
+the startup owner; omitting it allocates no listener, readiness channel, or
+delivery scope.
+
+Run the complete signed-application regression with:
+
+```sh
+bun cli/src/test-application-startup-macos.ts
+```
+
+It uses the native compiler by default and a random application identity. It
+verifies endpoint failure before AppKit, service-startup rollback, successful
+primary/secondary delivery, no secondary host/service startup, and endpoint
+release. Each process has a 15-second deadline and process-tree cleanup. It
+does not replace or register the interactive Notes bundle. Compiler prerequisites
+and follow-ups are recorded in the
+[startup integration checkpoint](plans/application-startup-integration.md).
 
 Run the separate bounded primary-lease regression with:
 
@@ -427,10 +444,9 @@ instance identifiers are not used. `Z_SOURCE_ROOT` can select the compiler
 checkout (the default is the sibling `z-lang` directory).
 
 Current application integration: macOS `NSApplicationDelegate` reopen and
-`application:openURLs:` callbacks. File associations, universal links, frontend
-event delivery, and automatic cross-process single-instance forwarding remain
-future integration. The existing `singleInstance` bundle hint is not a portable
-forwarding protocol or a guarantee against direct executable launches.
+`application:openURLs:` callbacks, plus automatic same-user single-instance
+forwarding through `Application.run()`. File associations, universal links,
+frontend event delivery, and Windows/Linux forwarding remain future work.
 
 See [Z Notes](../spikes/z-notes/README.md#application-activation) for manual and
 bounded regression probes.

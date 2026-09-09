@@ -27,6 +27,13 @@ Only `application.name` is required. Zapp derives a stable
 omitted. It also supplies defaults for the frontend asset directory,
 development port, system WebView, and asset compression.
 
+`application.singleInstance` defaults to false. When true, macOS `app.run()`
+elects a primary, forwards secondary arguments/cwd to
+`app.events.secondInstanceLaunched`, and exits the secondary before native
+window or service startup. Failures are typed errors, not fallback primaries.
+See [application activation](application-activation.md) for delivery limits and
+shutdown semantics; Windows/Linux forwarding is not implemented yet.
+
 ## Complete shape
 
 ```ts

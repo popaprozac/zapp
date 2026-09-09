@@ -1,8 +1,9 @@
 # Application startup integration checkpoint
 
-The application launch path is unchanged. Automatic forwarding is **not enabled**.
-The adjacent `application-startup-integration.patch` preserves the implementation
-draft without importing it into the shipping macOS application graph.
+Automatic forwarding is now wired into macOS `Application.run()` when the
+existing `application.singleInstance` setting is true. The saved draft has been
+applied and its obsolete patch removed. The disabled path creates no listener,
+readiness channel, or delivery scope.
 
 ## Verified
 
@@ -15,19 +16,37 @@ draft without importing it into the shipping macOS application graph.
   primary/secondary processes, idle cancellation, a partial native request during
   shutdown, and a hostile socket path during startup. They check one delivery,
   arguments/cwd snapshots, ordered joins, lease reacquisition, and socket cleanup.
-- The proposed full Z Notes graph checked with Stage 0; its previous native build
-  hit the scope/thread-join composition gaps recorded below. Those reduced gates
-  are now fixed upstream, but the saved wrapper has not yet been reapplied and
-  rebuilt. This is **not** an executable application integration result.
-- After restoring the unapplied state, the full native Z Notes auto-closing smoke
-  passes with an isolated application identity: WebView/service round trips,
+- The complete native Application.run gate passes endpoint setup failure,
+  service-startup failure, and real primary/secondary processes. A secondary
+  forwards its empty/spaced/Unicode arguments and cwd exactly once, exits zero,
+  and creates neither an AppKit application nor started services. Both failures
+  return typed errors, reach stopped state, and release the same identity for
+  the next launch. The hostile socket symlink is preserved.
+- With the wrapper applied and single-instance disabled, the full native Z
+  Notes auto-closing smoke passes with an isolated application identity:
+  WebView/service round trips,
   application-worker messages, cancellation/join, and service teardown remain
   working. Both TypeScript check projects also pass.
 - Generated metadata now exposes the existing `application.singleInstance`
   setting as a private build hook, default false. No new configuration key was
-  introduced, and the hook is not yet called by Application.run.
+  introduced. Application.run now uses this hook before native host startup.
 
-## Upstream checkpoints
+The full gate is `bun cli/src/test-application-startup-macos.ts`. Its build has a
+240-second deadline; each launched process has a 15-second deadline and tree
+cleanup. It uses a random identity and a signed private smoke bundle, never the
+interactive Notes bundle or its LaunchServices registration.
+
+The first full run found a test-source ownership error that native Z incorrectly
+accepted: extracting `app.context.arguments` shallow-copied readonly owned
+storage. Stage 0 rejected it. Native cleanup/ownership classification is now
+fixed upstream, with rejection parity and a valid read/copy/await UBSan probe.
+The application fixture reads the array in place and copies only its mode
+string. Service-startup rollback and process teardown now both exit cleanly.
+
+## Historical upstream checkpoints
+
+These entries record the state at each earlier checkpoint. References below to
+an unapplied wrapper describe those earlier states, not the current integration.
 
 The imported internal async-call identity blocker is fixed upstream. Lowering
 preserves each direct call's source site and resolves its final emitted name
@@ -133,26 +152,39 @@ compilers with exact cleanup. Z also fixed normalized `try` ownership in arrays
 and channels, object-destructured worker capture lookup, and Stage 0 nested async
 match destinations during this work.
 
-## Resume sequence
+## Current upstream checkpoint
 
-1. Review and apply the saved integration patch. Its single-instance-disabled
-   path allocates no listener, queue, or delivery scope. The enabled path keeps
-   an owned outcome until listener and callback-scope teardown have joined.
-   The reduced upstream prerequisites are verified; build and test the actual
-   full application wrapper next. Address any additional gap upstream.
-2. Use the rebuilt fixed-point compiler and rerun the complete process matrix:
+Z `ca5cd55` added frame-owned nested returned-match payloads and normalized
+destructured locals, plus safe child-waiter teardown. Z `cd16a76` preserves
+readonly collection ownership and closes the full application's cleanup crash.
+All 226 upstream self-hosting tests pass, including both frontends' rejection
+parity and a valid read/copy/await UBSan probe. These are ordinary language
+composition fixes; no new framework API or Z syntax was added.
 
-   ```sh
-   ZAPP_LAUNCH_UBSAN=1 bun cli/src/test-launch-startup-macos.ts
-   ```
+## Next checkpoint
 
-   Both compiler builds and all eight runtime cases are required by default.
-   The former expected-native-failure escape has been removed.
-3. Add a complete Application.run primary/secondary gate test and startup failure rollback;
-   check that a secondary never creates windows or starts services.
-4. Run the full native Z Notes smoke with an isolated identity.
-5. Only then enable/claim automatic forwarding and update activation docs.
+1. Extend native captured block-callable cleanup to owned locals such as the
+   String returned by `json.encode`. The test-only formatter currently lives in
+   a named helper called by an expression closure; the production startup path
+   needs no workaround.
+2. Revisit entry-module service generation: a service declared in main currently
+   creates a generated-dispatch import cycle. Separate service modules work and
+   are used by this regression and Z Notes. Do not weaken Z module-cycle checks
+   to hide a generator dependency problem.
 
-All new process tests use deadlines and process-tree cleanup. They use UBSan,
-not ASan. The existing interactive bundle and user-owned application identities
-are not used by the transport matrix.
+Keep both gates available:
+
+```sh
+ZAPP_LAUNCH_UBSAN=1 bun cli/src/test-launch-startup-macos.ts
+bun cli/src/test-application-startup-macos.ts
+```
+
+The first covers both Stage 0 and native transport output under UBSan. The second
+builds the complete application with the selected compiler (native by default).
+Do not describe the complete application gate as a dual-compiler run unless both
+selections have actually been tested.
+
+All new process tests use deadlines and process-tree cleanup. The transport
+matrix uses UBSan; the complete application uses the signed native release
+binary. Neither uses ASan. Interactive bundles and user-owned application
+identities are not used by these tests.

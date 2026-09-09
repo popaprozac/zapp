@@ -42,7 +42,7 @@ internal struct MacOSLaunchEndpoint {
   }
 
   // Serial, deadline-bound admission, independent of AppKit/main-loop progress.
-  // A future lifecycle-owned worker calls this; no app listener runs here.
+  // The application-owned listener worker calls this; no event callback runs here.
   internal function receive(inout this, in inbox: ActivationInbox): boolean throws MacOSLaunchTransportError {
     const deadline = launchDeadline(1000);
     const ready = waitLaunchSocket(in this.file, false, deadline);
