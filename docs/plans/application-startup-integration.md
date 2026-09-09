@@ -163,10 +163,17 @@ composition fixes; no new framework API or Z syntax was added.
 
 ## Next checkpoint
 
-1. Extend native captured block-callable cleanup to owned locals such as the
-   String returned by `json.encode`. The test-only formatter currently lives in
-   a named helper called by an expression closure; the production startup path
-   needs no workaround.
+Z now plans ordinary invocation-local cleanup inside synchronous captured block
+callbacks, including the String returned by `json.encode`. The startup probe's
+formatter is inline again, with no named-helper accommodation. Both compiler
+paths pass reduced allocation-balance/destruction-order probes; the complete
+native Application.run gate passes rollback and primary/secondary forwarding
+with this inline callback. No public API changed.
+
+1. Close the adjacent Z rejection-parity gap found while probing closure-local
+   destructuring: native checking must preserve Stage 0's conservative rejection
+   for aggregate fields containing custom cleanup. This is upstream language
+   work, not a framework workaround.
 2. Revisit entry-module service generation: a service declared in main currently
    creates a generated-dispatch import cycle. Separate service modules work and
    are used by this regression and Z Notes. Do not weaken Z module-cycle checks
