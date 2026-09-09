@@ -152,7 +152,7 @@ compilers with exact cleanup. Z also fixed normalized `try` ownership in arrays
 and channels, object-destructured worker capture lookup, and Stage 0 nested async
 match destinations during this work.
 
-## Current upstream checkpoint
+## Earlier continuation checkpoint
 
 Z `ca5cd55` added frame-owned nested returned-match payloads and normalized
 destructured locals, plus safe child-waiter teardown. Z `cd16a76` preserves
@@ -161,23 +161,31 @@ All 226 upstream self-hosting tests pass, including both frontends' rejection
 parity and a valid read/copy/await UBSan probe. These are ordinary language
 composition fixes; no new framework API or Z syntax was added.
 
-## Next checkpoint
+## Current upstream checkpoint
 
-Z now plans ordinary invocation-local cleanup inside synchronous captured block
+Z `0d03bd0` plans ordinary invocation-local cleanup inside synchronous captured block
 callbacks, including the String returned by `json.encode`. The startup probe's
 formatter is inline again, with no named-helper accommodation. Both compiler
 paths pass reduced allocation-balance/destruction-order probes; the complete
 native Application.run gate passes rollback and primary/secondary forwarding
 with this inline callback. No public API changed.
 
-1. Close the adjacent Z rejection-parity gap found while probing closure-local
-   destructuring: native checking must preserve Stage 0's conservative rejection
-   for aggregate fields containing custom cleanup. This is upstream language
-   work, not a framework workaround.
-2. Revisit entry-module service generation: a service declared in main currently
-   creates a generated-dispatch import cycle. Separate service modules work and
-   are used by this regression and Z Notes. Do not weaken Z module-cycle checks
-   to hide a generator dependency problem.
+Z `601c7f9` closes the adjacent destructuring rejection-parity gap. Native
+checking now preserves Stage 0's conservative custom-cleanup boundary through
+aliases, concrete generic fields, arrays, Map keys/values, Set elements, and
+enum payloads. Supported ordinary owned fields and ARC aliases still work;
+no public API or runtime allocation was added. All 232 upstream self-hosting
+tests, 98 async tests, and focused UBSan ownership probes pass. The rebuilt
+compiler reaches a fixed point, and the complete Application.run gate passes
+again with that final compiler.
+
+## Next checkpoint
+
+Revisit entry-module service generation: a service declared in main currently
+creates a generated-dispatch import cycle. Separate service modules work and
+are used by this regression and Z Notes. Do not weaken Z module-cycle checks
+to hide a generator dependency problem. This is the next framework/compiler
+integration issue, not a reason to introduce a different service API.
 
 Keep both gates available:
 
