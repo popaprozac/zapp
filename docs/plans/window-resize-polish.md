@@ -1,6 +1,8 @@
 # Display-synchronized window geometry
 
-Status: platform probe, 2026-09-09. No Zapp public API or Z syntax changed.
+Status: platform probe, 2026-09-09. No Zapp public API changed. The approved
+upstream native-subclass syntax now has a field-free Stage 0 proof; production
+window integration has not started.
 
 ## Agreed intent
 
@@ -81,13 +83,19 @@ or `super` dispatch.
 The user approved the foreign-only `class SmoothWindow extends AppKit.NSWindow
 on thread.main` direction, with checked `override`, the existing `as "selector:"`
 mapping, and native `super` dispatch. The approved direction and open safety
-questions are recorded in Z's `docs/objc-subclass-design.md`; no compiler support
-has landed yet. This preserves AppKit semantics and keeps production window logic
+questions are recorded in Z's `docs/objc-subclass-design.md`. The first field-free
+Stage 0 compiler tier now proves native virtual/super dispatch, selector aliases,
+base references, designated construction, and exact ARC destruction, and the
+actual `NSWindow` declaration passes strict compile-only verification.
+This preserves AppKit semantics and keeps production window logic
 in Z without introducing ordinary Z-to-Z inheritance.
 
-The next design checkpoint is construction and state lifetime using Z's existing
-`new` / `constructor` vocabulary. Start with a field-free native fixture before
-stateful window integration; native callbacks during initialization and teardown
+Construction was approved using `new SmoothWindow(frame)` and an explicit
+`constructor` whose first statement is `super.initWithContentRect(...)`. Its
+native result is checked, not discarded. The next implementation checkpoint is
+native frontend parity; the next design checkpoint is owned state lifetime.
+Keep the field-free proof separate from stateful window integration: native
+callbacks during initialization and teardown
 must not observe uninitialized or destroyed Z state. Any new surface must still
 be discussed before implementation. The research `.m` stays a test oracle, not
 a production backend.
