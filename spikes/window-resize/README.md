@@ -44,6 +44,45 @@ bun run spikes/window-resize/run.ts delegate-zoom
 bun run spikes/window-resize/run.ts interrupted-zoom
 ```
 
+## Further-polish A/B
+
+To compare the current stepped baseline against the three additional variants:
+
+```sh
+bun run spikes/window-resize/run.ts compare
+```
+
+The order is baseline, background only, frame coordination only, and both.
+Each window's title identifies its variant. The page, start/end geometry,
+display-link policy, and AppKit animation duration are unchanged. All four
+use the same lower-overhead version-2 instrumentation. The runner refuses a
+timing comparison if recorded duration, geometry, OS, backing scale, maximum
+refresh rate, or Reduce Motion changes between cases.
+
+For visual feedback, the most useful direct pair is:
+
+```sh
+bun run spikes/window-resize/run.ts stepped-size
+bun run spikes/window-resize/run.ts combined-size
+```
+
+If combined looks better, run `background-size` and `coordinated-size` separately
+to identify which change helps. In particular, a missing white flash may simply
+mean that the native underlay matches the page, not that layout caught up sooner.
+
+For repeated observations with a rotating (not randomized) order:
+
+```sh
+bun run spikes/window-resize/run.ts compare --repeat 3
+```
+
+Repetition accepts 1–5 rounds and retains the per-process deadlines. The screen
+must remain visible and unobstructed. The native sampling code uses a bounded
+POD buffer and serializes after the test, avoiding per-display-callback boxed
+number/dictionary allocation. It reports dropped samples and rejects overflow.
+Do not compare small timing differences against the older, more intrusive
+version-1 recorder; the original implementation remains a version-2 control.
+
 ## Cases and interpretation
 
 | Case | Experiment |
@@ -53,6 +92,9 @@ bun run spikes/window-resize/run.ts interrupted-zoom
 | `interrupted-zoom` | Issue a second delegate-intercepted zoom halfway through the first; does it return to the original frame? |
 | `appkit-size` | Ordinary `setFrame:display:animate:` to a requested size, then back. |
 | `stepped-size` | Apply the same frames using a window-associated display link and AppKit's duration. |
+| `background-size` | Baseline stepped frames; set the window background and public WebKit under-page background to the page's unchanged `#15212b`. |
+| `coordinated-size` | Pixel-align intermediate frames in backing coordinates, skip unchanged frames, set `display:NO` within an explicit transaction with implicit actions disabled. No forced flush, webpage pre-layout, or new interpolation curve. |
+| `combined-size` | Background matching plus frame coordination. |
 | `retarget-size` | Replace an in-flight size target with the original frame, starting from the current geometry. |
 | `close-size` | Close halfway through; invalidate the display link and check no further callbacks arrive. |
 
@@ -72,6 +114,23 @@ them as compositor presentation timestamps or exact input latency. The probe
 has no Zapp JSON/event delivery path, so its overhead is not a Zapp benchmark.
 Its continuously running display observer is instrumentation, not a proposed
 always-on framework animation loop.
+
+`observed width gap p95` is the absolute difference between native width and
+the latest **received** DOM width, sampled at display callbacks within the
+requested animation interval. It includes WebKit message transit and is neither
+a measured blank-strip width nor a paint-latency measurement. When AppKit's
+animation prevents the observer from seeing moving frames, it reports `n/a`,
+not zero lag. Page-clock
+intervals between changed DOM dimensions are retained for analysis, but these
+too are layout observations, not compositor presentation. Native writes and
+skipped writes are per transition, not cumulative. Slowing the animation is not
+an optimization in this comparison.
+
+Validate the metric calculations without opening windows:
+
+```sh
+bun test spikes/window-resize/metrics.test.ts
+```
 
 System Reduce Motion is honored and recorded. With it enabled, expect direct
 changes, not evidence about animation smoothness. No system setting is modified.

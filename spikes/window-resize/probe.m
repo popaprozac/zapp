@@ -18,13 +18,22 @@ static NSDictionary *frameValue(NSRect frame) {
               @"width": @(frame.size.width), @"height": @(frame.size.height) };
 }
 
+// Bounded POD capture avoids allocating NSNumber/dictionary graphs on each
+// display callback. Serialization happens only after the observation ends.
+typedef struct {
+    double t, nativeWidth, nativeHeight, domWidth, domHeight, pageTime;
+    NSInteger phase;
+    unsigned char source;
+} ResizeSample;
+static const NSUInteger maximumSamples = 8192;
+
 @interface ResizeProbe : NSObject <NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate>
 @property NSString *mode;
 @property NSWindow *window;
 @property WKWebView *webView;
 @property CADisplayLink *displayLink;
 @property NSMutableArray<NSTimer *> *timers;
-@property NSMutableArray<NSDictionary *> *samples;
+@property NSMutableData *sampleData;
 @property NSMutableArray<NSDictionary *> *legs;
 @property NSRect original;
 @property NSRect enlarged;
@@ -35,11 +44,16 @@ static NSDictionary *frameValue(NSRect frame) {
 @property double epoch;
 @property double domWidth;
 @property double domHeight;
+@property double pageTime;
+@property double legStartedAt;
+@property double requestedDuration;
 @property NSInteger phase;
 @property NSInteger resizeNotifications;
 @property NSInteger displayCallbacks;
 @property NSInteger callbacksAfterClose;
 @property NSInteger animationWrites;
+@property NSInteger skippedWrites;
+@property NSInteger droppedSamples;
 @property NSInteger zoomRequests;
 @property NSInteger status;
 @property BOOL animating;
@@ -47,6 +61,8 @@ static NSDictionary *frameValue(NSRect frame) {
 @property BOOL finished;
 @property BOOL closed;
 @property BOOL reduceMotion;
+@property BOOL matchBackground;
+@property BOOL coordinateFrames;
 @end
 
 @implementation ResizeProbe
@@ -58,11 +74,31 @@ static NSDictionary *frameValue(NSRect frame) {
 }
 - (void)record:(NSString *)source {
     NSSize content = self.webView.bounds.size;
-    [self.samples addObject:@{
-        @"t": @(CACurrentMediaTime() - self.epoch), @"phase": @(self.phase),
-        @"source": source, @"nativeWidth": @(content.width), @"nativeHeight": @(content.height),
-        @"domWidth": @(self.domWidth), @"domHeight": @(self.domHeight),
-    }];
+    if (self.sampleData.length / sizeof(ResizeSample) >= maximumSamples) {
+        self.droppedSamples += 1;
+        return;
+    }
+    ResizeSample sample = {
+        .t = CACurrentMediaTime() - self.epoch, .phase = self.phase,
+        .source = [source isEqualToString:@"display"] ? 0 : [source isEqualToString:@"resize"] ? 1 : 2,
+        .nativeWidth = content.width, .nativeHeight = content.height,
+        .domWidth = self.domWidth, .domHeight = self.domHeight, .pageTime = self.pageTime,
+    };
+    [self.sampleData appendBytes:&sample length:sizeof(sample)];
+}
+- (NSArray *)serializedSamples {
+    NSMutableArray *result = [NSMutableArray new];
+    const ResizeSample *samples = self.sampleData.bytes;
+    for (NSUInteger i = 0; i < self.sampleData.length / sizeof(ResizeSample); i += 1) {
+        ResizeSample sample = samples[i];
+        [result addObject:@{
+            @"t": @(sample.t), @"phase": @(sample.phase),
+            @"source": sample.source == 0 ? @"display" : sample.source == 1 ? @"resize" : @"dom",
+            @"nativeWidth": @(sample.nativeWidth), @"nativeHeight": @(sample.nativeHeight),
+            @"domWidth": @(sample.domWidth), @"domHeight": @(sample.domHeight), @"pageTime": @(sample.pageTime),
+        }];
+    }
+    return result;
 }
 - (void)cancelAnimation {
     self.animating = NO;
@@ -86,9 +122,26 @@ static NSDictionary *frameValue(NSRect frame) {
     self.displayCallbacks += 1;
     if (self.animating) {
         double progress = (link.targetTimestamp - self.animationStart) / self.duration;
-        [self.window setFrame:interpolateFrame(self.startFrame, self.targetFrame, progress)
-                     display:YES animate:NO];
-        self.animationWrites += 1;
+        NSRect frame = interpolateFrame(self.startFrame, self.targetFrame, progress);
+        if (self.coordinateFrames) {
+            // Alignment operates in window coordinates, not screen coordinates.
+            // Keep the exact requested endpoint; AppKit applies its constraints.
+            if (progress < 1) {
+                NSRect local = [self.window convertRectFromScreen:frame];
+                local = [self.window backingAlignedRect:local options:NSAlignAllEdgesNearest];
+                frame = [self.window convertRectToScreen:local];
+            }
+            if (!NSEqualRects(frame, self.window.frame)) {
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                [self.window setFrame:frame display:NO animate:NO];
+                [CATransaction commit];
+                self.animationWrites += 1;
+            } else self.skippedWrites += 1;
+        } else {
+            [self.window setFrame:frame display:YES animate:NO];
+            self.animationWrites += 1;
+        }
         if (progress >= 1) self.animating = NO;
     }
     [self record:@"display"];
@@ -129,6 +182,7 @@ static NSDictionary *frameValue(NSRect frame) {
         ![body[@"height"] isKindOfClass:[NSNumber class]]) return;
     self.domWidth = [body[@"width"] doubleValue];
     self.domHeight = [body[@"height"] doubleValue];
+    if ([body[@"pageTime"] isKindOfClass:[NSNumber class]]) self.pageTime = [body[@"pageTime"] doubleValue];
     [self record:@"dom"];
     if (!self.ready) {
         self.ready = YES;
@@ -148,6 +202,8 @@ static NSDictionary *frameValue(NSRect frame) {
     if (self.finished) return;
     self.phase += 1;
     NSRect target = self.phase == 1 ? self.enlarged : self.original;
+    self.legStartedAt = CACurrentMediaTime() - self.epoch;
+    self.requestedDuration = self.reduceMotion ? 0 : [self.window animationResizeTime:target];
     __weak ResizeProbe *weakSelf = self;
     // Allow geometry/IPC to settle before inspecting the result. This is not
     // a performance assertion; display and DOM histories are reported below.
@@ -176,9 +232,11 @@ static NSDictionary *frameValue(NSRect frame) {
     if (self.finished) return;
     [self.legs addObject:@{
         @"phase": @(self.phase), @"frame": frameValue(self.window.frame),
+        @"startedAt": @(self.legStartedAt), @"duration": @(self.requestedDuration),
         @"isZoomed": @(self.window.isZoomed), @"animating": @(self.animating),
         @"closed": @(self.closed), @"displayCallbacks": @(self.displayCallbacks),
         @"animationWrites": @(self.animationWrites), @"resizeNotifications": @(self.resizeNotifications),
+        @"skippedWrites": @(self.skippedWrites),
     }];
     if (self.phase == 1 && ![self.mode isEqualToString:@"close-size"] &&
         ![self.mode isEqualToString:@"retarget-size"] &&
@@ -201,16 +259,19 @@ static NSDictionary *frameValue(NSRect frame) {
     for (NSTimer *timer in self.timers) if (timer.valid) activeTimers += 1;
     [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"probe"];
     NSDictionary *report = @{
+        @"instrumentationVersion": @2, @"droppedSamples": @(self.droppedSamples),
         @"mode": self.mode, @"error": error ?: (id)[NSNull null],
+        @"matchBackground": @(self.matchBackground), @"coordinateFrames": @(self.coordinateFrames),
         @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"maximumFramesPerSecond": @(self.window.screen.maximumFramesPerSecond),
+        @"backingScaleFactor": @(self.window.backingScaleFactor),
         @"reduceMotion": @(self.reduceMotion), @"original": frameValue(self.original),
         @"enlarged": frameValue(self.enlarged), @"final": frameValue(self.window.frame),
         @"zoomRequests": @(self.zoomRequests), @"closed": @(self.closed),
         @"callbacksAfterClose": @(self.callbacksAfterClose),
         @"activeTimersAfterFinish": @(activeTimers),
         @"animationStopped": @((BOOL)(!self.animating && self.displayLink == nil)),
-        @"legs": self.legs, @"samples": self.samples,
+        @"legs": self.legs, @"samples": [self serializedSamples],
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:report options:0 error:nil];
     if (json) { fwrite(json.bytes, 1, json.length, stdout); fputc('\n', stdout); fflush(stdout); }
@@ -224,10 +285,12 @@ static NSDictionary *frameValue(NSRect frame) {
 }
 - (void)begin {
     self.timers = [NSMutableArray new];
-    self.samples = [NSMutableArray new];
+    self.sampleData = [NSMutableData dataWithCapacity:maximumSamples * sizeof(ResizeSample)];
     self.legs = [NSMutableArray new];
     self.epoch = CACurrentMediaTime();
     self.reduceMotion = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    self.matchBackground = [self.mode isEqualToString:@"background-size"] || [self.mode isEqualToString:@"combined-size"];
+    self.coordinateFrames = [self.mode isEqualToString:@"coordinated-size"] || [self.mode isEqualToString:@"combined-size"];
     NSRect screen = NSScreen.mainScreen.visibleFrame;
     if (screen.size.width < 400 || screen.size.height < 300) { self.status = 2; return; }
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, screen.size.width * 0.45,
@@ -241,6 +304,13 @@ static NSDictionary *frameValue(NSRect frame) {
     self.webView = [[WKWebView alloc] initWithFrame:self.window.contentView.bounds configuration:configuration];
     self.window.contentView = self.webView;
     self.webView.navigationDelegate = self;
+    if (self.matchBackground) {
+        // Same #15212b as the page, no CSS changes. This is a visual control,
+        // not a claim that matching the underlay makes WebKit paint sooner.
+        NSColor *background = [NSColor colorWithSRGBRed:21.0/255 green:33.0/255 blue:43.0/255 alpha:1];
+        self.window.backgroundColor = background;
+        self.webView.underPageBackgroundColor = background;
+    }
     [self.window center];
     self.original = self.window.frame;
     self.enlarged = NSMakeRect(screen.origin.x + screen.size.width * 0.075,
@@ -262,7 +332,7 @@ static NSDictionary *frameValue(NSRect frame) {
         "document.getElementById('grid').innerHTML=Array.from({length:18},(_,i)=>'<div class=card>Note '+(i+1)+'</div>').join('');"
         "let previous='',heartbeat=0;function tick(){const key=innerWidth+','+innerHeight;"
         "if(key!==previous||++heartbeat%30===0){previous=key;document.getElementById('size').textContent=innerWidth+' × '+innerHeight;"
-        "webkit.messageHandlers.probe.postMessage({width:innerWidth,height:innerHeight});}requestAnimationFrame(tick)}"
+        "webkit.messageHandlers.probe.postMessage({width:innerWidth,height:innerHeight,pageTime:performance.now()});}requestAnimationFrame(tick)}"
         "requestAnimationFrame(tick)</script>";
     [self.webView loadHTMLString:html baseURL:nil];
     __weak ResizeProbe *weakSelf = self;
