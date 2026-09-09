@@ -83,7 +83,6 @@ try {
   await mkdir(path.join(root, "zapp"), { recursive: true });
   await mkdir(path.join(root, "dist"), { recursive: true });
   await copyFile(path.join(repo, "native/z/tests/application-run-startup-smoke.zs"), path.join(root, "zapp/main.zs"));
-  await copyFile(path.join(repo, "native/z/tests/application-run-startup-service.zs"), path.join(root, "zapp/application-run-startup-service.zs"));
   await writeFile(path.join(root, "dist/index.html"), "<!doctype html><title>Startup probe</title><p>Application startup regression</p>");
   const build = await runBoundedCommand([process.execPath, import.meta.path, "--build", root, identifier], {
     cwd: repo, timeoutMs: 240_000,

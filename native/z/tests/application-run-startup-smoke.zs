@@ -1,10 +1,26 @@
 import { Application, ApplicationSecondInstanceLaunchedEvent } from "zapp";
 import { WindowOptions } from "zapp/window";
-import { StartupProbe } from "./application-run-startup-service.zs";
+import { ApplicationContext, ServiceLifecycle, ServiceLifecycleError, ServiceLifecyclePhase } from "zapp/service";
 import AppKit from "AppKit/AppKit.h";
 import console from "std/console";
 import json from "std/json";
 import { thread } from "std/thread";
+
+// Keep the service beside main: generated dispatch imports this entry's public
+// declarations without creating an artificial source initialization cycle.
+export readonly class StartupProbe implements ServiceLifecycle {
+  fail: boolean;
+  function ping(): i32 { return 42; }
+  function start(in context: ApplicationContext): void throws ServiceLifecycleError on thread.main {
+    console.log("service started");
+    if (this.fail) throw ServiceLifecycleError({
+      service: "probe", phase: ServiceLifecyclePhase.start, message: "intentional startup failure",
+    });
+  }
+  function stop(in context: ApplicationContext): void throws ServiceLifecycleError on thread.main {
+    console.log("service stopped");
+  }
+}
 
 // Observe without calling sharedApplication: a secondary must not create AppKit.
 function nativeApplicationCreated(): boolean = raw objc { return NSApp != nil; }

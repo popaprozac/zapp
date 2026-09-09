@@ -1,4 +1,4 @@
-# Z-owned services
+# Services
 
 Status: synchronous and suspending typed vertical slices implemented through
 headless and AppKit/WebView hosts, August 2026.
@@ -138,6 +138,16 @@ codecs from the service type, so authors name the service once rather than
 maintaining a handwritten route table. An inferred-name convenience can be
 reconsidered if real applications demonstrate enough repetition, but explicit
 identity is the designed default in this tier.
+
+An exported service type may live beside `main` or in a separate module. Choose
+separate files for organization, not to satisfy the generator. Generated
+dispatch imports the service's public declaration through the ordinary Z export
+boundary; the compiler links its validated adapter call without inventing a
+source import cycle. Private types do not gain implicit visibility, and real
+circular source imports remain errors. The isolated
+[application startup example](../native/z/tests/application-run-startup-smoke.zs)
+registers an exported lifecycle service defined in the same file as `main` and
+exercises startup failure, teardown, and primary/secondary launch forwarding.
 
 `app.windows` is a readonly class reference: application code cannot replace
 the manager, while its main-executor methods may safely update the manager's

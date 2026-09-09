@@ -179,13 +179,38 @@ tests, 98 async tests, and focused UBSan ownership probes pass. The rebuilt
 compiler reaches a fixed point, and the complete Application.run gate passes
 again with that final compiler.
 
-## Next checkpoint
+## Entry-defined service checkpoint (2026-09-09)
 
-Revisit entry-module service generation: a service declared in main currently
-creates a generated-dispatch import cycle. Separate service modules work and
-are used by this regression and Z Notes. Do not weaken Z module-cycle checks
-to hide a generator dependency problem. This is the next framework/compiler
-integration issue, not a reason to introduce a different service API.
+The upstream generated-link distinction is implemented. The startup probe now
+defines its exported StartupProbe service beside main; the separate service
+fixture has been removed. Generated dispatch remains ordinary Z and imports
+that exported declaration. Only the source-hash/target-validated adapter
+reference is a function link rather than a source initialization edge. Real
+source cycles and visibility checks remain enforced.
+
+The complete native Application.run gate passes again: endpoint failure before
+AppKit, service-startup failure with joined listener cleanup, and primary/secondary
+forwarding of empty/spaced/Unicode arguments and cwd exactly once. The secondary
+creates neither an AppKit host nor started services. The integration required no
+application API change or generated-source splicing.
+
+The full build also caught a native lowering prerequisite: generated adapters
+return their own ARC implementation types into generic registration methods.
+The compiler now provides checked nominal ABI/cleanup evidence at each adapted
+caller before emitting generated definitions. Reduced shared-driver regressions
+cover owned inputs, distinct adapters, a shared adapter requested by multiple
+modules, and UBSan cleanup. Stage 0 also isolates semantic sites for separate
+generic method instances so one concrete trait receiver cannot overwrite another.
+
+This closes the saved entry-module generation blocker. Separate service files
+remain an organizational choice. Return to the framework/CLI sequence after
+this checkpoint; deliberate any new public API before implementing it.
+
+Upstream checkpoint: Z `591f92d`. All 232 self-hosting, 97 module/collection,
+and 98 async tests pass, as do both drivers' expanded UBSan adapter probes.
+The native compiler reaches a byte-identical fixed point (10,965,112 C bytes).
+This repository's complete native startup gate and both TypeScript check
+projects pass with that compiler.
 
 Keep both gates available:
 
