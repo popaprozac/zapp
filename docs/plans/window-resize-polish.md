@@ -1,8 +1,10 @@
 # Display-synchronized window geometry
 
-Status: platform probe, 2026-09-09. No Zapp public API changed. The approved
-upstream native-subclass syntax now has a field-free Stage 0 proof; production
-window integration has not started.
+Status: integration pressure checkpoint, 2026-09-10. No Zapp public API changed.
+Upstream native subclasses now have checked state/lifecycle, native frontend
+execution, selector entries, and `objc.selector(Type.method)` registration.
+Production still creates ordinary `NSWindow`: the first live Z subclass probe
+exposed a receiver-reentry decision and two additional composition gaps below.
 
 ## Agreed intent
 
@@ -92,13 +94,46 @@ in Z without introducing ordinary Z-to-Z inheritance.
 
 Construction was approved using `new SmoothWindow(frame)` and an explicit
 `constructor` whose first statement is `super.initWithContentRect(...)`. Its
-native result is checked, not discarded. The next implementation checkpoint is
-native frontend parity; the next design checkpoint is owned state lifetime.
-Keep the field-free proof separate from stateful window integration: native
-callbacks during initialization and teardown
-must not observe uninitialized or destroyed Z state. Any new surface must still
-be discussed before implementation. The research `.m` stays a test oracle, not
-a production backend.
+native result is checked, not discarded. Native frontend parity, owned state
+lifetime, Ready/main entry checks, and checked selector registration have since
+landed upstream. Native callbacks during initialization and teardown must not
+observe uninitialized or destroyed Z state. Any new surface must still be
+discussed before implementation. The research `.m` stays a test oracle, not a
+production backend.
+
+### Current blockers: real Z subclass probe
+
+Z's `scripts/probe-appkit-subclass-reentry.ts --run` is a bounded, explicit GUI
+probe using an actual `NSWindow` subclass written in Z. On the tested Mac:
+
+- A direct animated `setFrame` operation completes.
+- An exclusive native entry calling `super.zoom(null)` triggers AppKit's
+  virtual `setFrame:display:animate:` callback. The current whole-entry
+  `inout this` guard rejects that nested exclusive entry.
+- Removing the state writes and making both entries readers permits zoom.
+  This is a diagnostic control, not a usable mutable animation controller.
+
+All three run at `-O0` and `-O2` with strict Clang/UBSan and ten-second runtime
+deadlines. Expected guard failures are caught to avoid macOS crash reports;
+no ASan is used. This measures dispatch compatibility, not WebView presentation
+or interrupted-zoom correctness.
+
+Before integration, resolve these upstream rather than adding a framework shim:
+
+1. Deliberate checked native-call reentry. One candidate temporarily suspends
+   the current receiver loan only if no receiver-field borrow can remain live
+   across the call, then reacquires it before returning to Z. Other live loans
+   and cleanup reentry must remain protected. This is **not yet approved or
+   implemented**; do not merely turn off the guard around `super`.
+2. Deliberate source-nameable erased Objective-C identity: `zoom:` receives
+   nullable `id`, which cannot soundly be replaced by `NSObject *`.
+3. Close async-program composition: Stage 0 currently rejects a native
+   subclass anywhere in a program using async lowering, even if every
+   subclass method is synchronous. Zapp's application entry is async.
+
+The compiler's `docs/objc-subclass-design.md` and `docs/ownership-pressure.md`
+record the reproducer and these boundaries. Selector registration support alone
+does not mean the full resize integration is ready.
 
 ## Follow-through after that decision
 
