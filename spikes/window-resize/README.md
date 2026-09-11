@@ -37,6 +37,19 @@ bun spikes/window-resize/trace-shutdown.ts
 bun spikes/window-resize/trace-shutdown.ts --dev
 ```
 
+Accepted windows hide before close notifications and framework shutdown.
+The single-instance listener uses an owned cancellation wake pipe, so idle or
+partial-client I/O does not hold shutdown until the socket deadline. A packaged
+smoke after this change observed 2.4 ms from the close log to worker-join log and
+10.1 ms from service-stop log to runner exit (previous observations: 18 ms and
+470.6 ms). These are single-run pipe-observation intervals, not pixel timings or
+a guarantee about arbitrary application callbacks and cleanup.
+
+The corresponding dev smoke observed 21.5 ms close-log to worker-join and
+28.8 ms service-stop to runner-exit, with Vite port 5173 confirmed released
+(previous observations: 27.7 ms and 831.6 ms). Build and smoke setup time is not
+included in these shutdown intervals.
+
 The trace separates observed window-close, worker-join, service-stop, and runner
 exit logs; dev mode also observes Vite port release. Full output and timings are
 saved under ignored `.zapp/window-resize/shutdown-*.json`. These are observed pipe

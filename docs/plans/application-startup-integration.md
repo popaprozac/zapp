@@ -7,6 +7,18 @@ readiness channel, or delivery scope.
 
 ## Verified
 
+- Listener shutdown now closes admission and signals an owned, sticky wake
+  pipe before joining the worker. Accept and partial-frame I/O poll that pipe
+  alongside the socket. Cancellation never closes an active socket from a
+  different thread and does not increase idle polling frequency.
+- The wake pipe is a move-only Z resource with checked `deinit on thread.any`,
+  retained inside a readonly owner through `Mutex<LaunchWakePipe>`. The lock is
+  released before I/O waits; final ownership closes both pipe ends exactly once.
+- `ZAPP_LAUNCH_UBSAN=1 bun cli/src/test-launch-startup-macos.ts` passes on both
+  compilers for normal delivery, idle, partial header/body, repeated/full-pipe
+  cancellation, simultaneous readiness, and startup failure. This run observed
+  cancellation-to-join below 3 ms. The test threshold is a generous 400 ms to
+  detect regression to the former one-second socket timeout, not a latency SLA.
 - The production-shaped listener owns its endpoint and election lease on one
   native worker. A capacity-one Channel reports primary readiness, completed
   secondary forwarding, or a typed failure before AppKit setup.

@@ -3,6 +3,7 @@ import system from "unistd.h";
 import descriptors from "fcntl.h";
 import errors from "errno.h";
 import { Mutex } from "std/sync";
+import { thread } from "std/thread";
 import { waitCancellableLaunchSocket } from "./launch-socket.zs";
 
 // This move-only payload is the sole descriptor owner. Shared Mutex handles
@@ -10,7 +11,7 @@ import { waitCancellableLaunchSocket } from "./launch-socket.zs";
 struct LaunchWakePipe {
   read: i32;
   write: i32;
-  deinit { closeWakePipe(this.read, this.write); }
+  deinit on thread.any { closeWakePipe(this.read, this.write); }
 }
 
 function openWakePipe(inout read: i32, inout write: i32): i32 = raw c {

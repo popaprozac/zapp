@@ -6,6 +6,8 @@ import { thread } from "std/thread";
 import runLoop from "CoreFoundation/CoreFoundation.h";
 import nativeThread from "pthread.h";
 import nativeProcess from "stdlib.h";
+import Foundation from "Foundation/Foundation.h";
+import errors from "sys/errno.h";
 import { createApplicationEvents } from "../framework/application-events.zs";
 import { ApplicationSecondInstanceLaunchedEvent } from "../framework/application-launch.zs";
 import { initializeMacOSLaunchDelivery } from "../framework/platform/macos/launch-delivery.zs";
@@ -31,11 +33,27 @@ function leaseAvailable(in identifier: String): boolean {
   };
 }
 
+function verifyStickyCancellation(): boolean {
+  const cancellation = match (attempt MacOSLaunchCancellation.create()) {
+    success(value) => value;
+    failure(_) => return false;
+  };
+  // More than the pipe capacity: requests must remain nonblocking and sticky.
+  let index = 0;
+  while (index < 100000) { cancellation.request(); index = index + 1; }
+  const file = Foundation.NSFileHandle.fileHandleWithNullDevice;
+  // /dev/null is also ready, so cancellation must win both readiness races.
+  const first = cancellation.wait(in file, false, launchDeadline(1));
+  const second = cancellation.wait(in file, false, launchDeadline(1));
+  return first == errors.ECANCELED && second == errors.ECANCELED;
+}
+
 async function main(): i32 on thread.main {
   const arguments = process.args();
   if (arguments.length < 2) return 90;
   const identifier = copy arguments[0];
   const mode = copy arguments[1];
+  if (mode == "sticky" && !verifyStickyCancellation()) return 99;
   const events = createApplicationEvents();
   const observed = new Observation({ count: 0, valid: true });
   const subscribed = attempt events.secondInstanceLaunched.subscribe(move (in event: ApplicationSecondInstanceLaunchedEvent): void => {
@@ -77,7 +95,7 @@ async function main(): i32 on thread.main {
   let ticks = 0;
   if (phase == 1) {
     events.startActivation();
-    if (mode == "idle" || mode == "partial" || mode == "partial-body") pumpMain(150);
+    if (mode == "idle" || mode == "partial" || mode == "partial-body" || mode == "sticky") pumpMain(150);
     else while (observed.count == 0 && ticks < 1000) { pumpMain(5); ticks = ticks + 1; }
   }
   events.finish();

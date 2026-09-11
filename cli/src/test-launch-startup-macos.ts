@@ -95,7 +95,7 @@ try {
         "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=14.0", "-fsanitize=undefined", "-fno-sanitize-recover=all",
         "-framework", "Foundation", "-framework", "CoreFoundation", path.join(root, ".z-cache/build/startup-probe.m"), "-o", binary], 60_000);
     }
-    for (const mode of ["normal", "idle", "partial", "partial-body", "startup-failure"]) {
+    for (const mode of ["normal", "idle", "partial", "partial-body", "sticky", "startup-failure"]) {
       const id = `com.zapp.startup-probe.${randomUUID()}`;
       const key = createHash("sha256").update(id).digest("hex");
       const socket = `/private/tmp/zapp-launch-${process.geteuid!()}/${key}`;
