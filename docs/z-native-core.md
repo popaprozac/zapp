@@ -523,6 +523,19 @@ may call `event.cancel()`, and cancellation is monotonic for that request. If
 the request proceeds, `closed` is published exactly once after the manager has
 removed the native and Z-owned window state.
 
+On macOS, an accepted close cancels any resize animation and hides the native
+window before delivering its close notifications. A veto still leaves the
+window visible. Keep `closeRequested` and other synchronous UI handlers short:
+blocking the main thread before acceptance can still delay the close. This is
+an ordering guarantee, not a compositor-presentation or latency guarantee.
+
+Window closure and application exit are separate. After the last window closes,
+the process remains alive to cancel and join workers, drain admitted callbacks,
+stop services, and release native resources. Awaiting `app.run()` waits for this
+teardown too; a `closed` event does not mean it has finished. In development, the
+launcher additionally stops and awaits Vite. UI-affine cleanup stays on the main
+thread; hiding a window does not detach cleanup or abandon owned tasks.
+
 Multiple subscribers are allowed. A specific channel publishes before `all`,
 and each channel preserves subscription order. `window.events.all` observes the
 same `WindowCloseRequestedEvent`, so an aggregate handler may also cancel it.

@@ -14,6 +14,7 @@ bun spikes/window-resize/verify-z.ts --check
 bun spikes/window-resize/verify-z.ts --check --webview
 bun spikes/window-resize/verify-z.ts --run
 bun spikes/window-resize/verify-z.ts --run --webview
+bun spikes/window-resize/verify-z.ts --run --shutdown
 ```
 
 This harness needs the sibling Z compiler workspace and its test-only abort
@@ -23,6 +24,26 @@ controller. The 20 geometry/delegate cases and real WebView check run at `-O0`
 and `-O2`, with strict Clang and UBSan. Children have 8-second geometry or
 15-second WebView deadlines; timeout cleanup kills the process group. No ASan.
 `ZAPP_KEEP_RESIZE_PROBE=1` retains generated source for diagnostics.
+
+`--shutdown` runs two additional close-ordering cases at both optimization
+levels. A deliberately blocking 250 ms close notification must observe a hidden
+window; a delayed close veto must keep it visible and suppress the notification.
+This checks native visibility state, not WindowServer pixel-presentation timing.
+
+To timestamp the real Z Notes shutdown path (one bounded smoke at a time):
+
+```sh
+bun spikes/window-resize/trace-shutdown.ts
+bun spikes/window-resize/trace-shutdown.ts --dev
+```
+
+The trace separates observed window-close, worker-join, service-stop, and runner
+exit logs; dev mode also observes Vite port release. Full output and timings are
+saved under ignored `.zapp/window-resize/shutdown-*.json`. These are observed pipe
+intervals, not per-function profiling: a logged window close is not necessarily
+the final native window, and runner exit includes launcher cleanup. The runner
+has a four-minute process-group deadline. This does not establish an exit-time
+guarantee or measure the moment pixels disappear.
 
 For an interactive application, run `bun run spike:z-notes` and Option-click
 the green titlebar button. Close every app window when finished. Automated

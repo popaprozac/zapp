@@ -243,6 +243,10 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.animating = false;
     invalidateDisplay(this.displayLink);
     this.displayLink = null;
+    // performClose: has already consulted the cancellable delegate request.
+    // Hide the accepted window before AppKit delivers windowWillClose: and
+    // before any application close observer can perform slower cleanup.
+    super.orderOut(null);
     super.close();
   }
 

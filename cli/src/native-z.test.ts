@@ -678,6 +678,7 @@ describe("Z native host inputs", () => {
     expect(windowBridge).toContain("navigation: move inheritedNavigation");
     expect(macOSPlatform).toContain("new MacOSWindow(frame, style)");
     expect(macOSPlatform).toContain("this.releasedWhenClosed = false");
+    expect(macOSPlatform).toContain("super.orderOut(null);\n    super.close();");
     expect(macOSPlatform).toContain("objc.selector(MacOSWindow.onDisplay)");
     expect(macOSPlatform).toContain('as "windowWillStartLiveResize:"');
     expect(macOSPlatform).toContain('as "windowWillEnterFullScreen:"');

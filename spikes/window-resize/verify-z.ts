@@ -8,9 +8,11 @@ import { runBoundedCommand } from "../../cli/src/bounded-process";
 
 const mode = process.argv[2];
 const webview = process.argv.includes("--webview");
+const shutdown = process.argv.includes("--shutdown");
 if (process.platform !== "darwin" || !["--check", "--run"].includes(mode ?? "")
-  || process.argv.slice(3).some((argument) => argument !== "--webview")) {
-  throw new Error("Usage: bun spikes/window-resize/verify-z.ts --check|--run [--webview]");
+  || (webview && shutdown)
+  || process.argv.slice(3).some((argument) => !["--webview", "--shutdown"].includes(argument))) {
+  throw new Error("Usage: bun spikes/window-resize/verify-z.ts --check|--run [--webview|--shutdown]");
 }
 const root = resolve(import.meta.dir, "../..");
 const zRoot = resolve(root, "../z-lang");
@@ -25,12 +27,22 @@ class ResizeDelegate on thread.main implements WebKit.NSWindowDelegate {
   vetoZoom: boolean;
   vetoClose: boolean;
   resized: i32;
+  closeCalls: i32;
+  visibleDuringClose: boolean;
   function standardFrame(in window: WebKit.NSWindow, frame: WebKit.CGRect): WebKit.CGRect as "windowWillUseStandardFrame:defaultFrame:" {
     if (probe.z_subclass_access_scenario() == 18) return WebKit.NSMakeRect(80, 100, 520, 420);
     return frame;
   }
   function shouldZoom(in window: WebKit.NSWindow, frame: WebKit.CGRect): boolean as "windowShouldZoom:toFrame:" { return !this.vetoZoom; }
-  function shouldClose(in window: WebKit.NSWindow): boolean as "windowShouldClose:" { return !this.vetoClose; }
+  function shouldClose(in window: WebKit.NSWindow): boolean as "windowShouldClose:" {
+    if (probe.z_subclass_access_scenario() == 21) sleep(250);
+    return !this.vetoClose;
+  }
+  function willClose(inout this, in notification: WebKit.NSNotification): void as "windowWillClose:" {
+    this.closeCalls = this.closeCalls + 1;
+    this.visibleDuringClose = this.window.visible;
+    if (probe.z_subclass_access_scenario() == 20) sleep(250);
+  }
   function didResize(inout this, in notification: WebKit.NSNotification): void as "windowDidResize:" { this.resized = this.resized + 1; }
   function willMove(inout this, in notification: WebKit.NSNotification): void as "windowWillMove:" { this.window.cancelResize(); }
 }
@@ -38,6 +50,7 @@ class ResizeDelegate on thread.main implements WebKit.NSWindowDelegate {
 const scenarios = `
 import probe from "./objc-subclass.h";
 import console from "std/console";
+import { sleep } from "std/time";
 function pump(seconds: f64): void on thread.main {
   const deadline = clock.CACurrentMediaTime() + seconds;
   while (clock.CACurrentMediaTime() < deadline) {
@@ -64,14 +77,31 @@ function main(): i32 {
     window.close();
     return 3;
   }
-  const delegate = new ResizeDelegate({ window, vetoZoom: false, vetoClose: false, resized: 0 });
+  const delegate = new ResizeDelegate({ window, vetoZoom: false, vetoClose: false, resized: 0, closeCalls: 0, visibleDuringClose: false });
   const adapter = objc.adapt<WebKit.NSWindowDelegate>(delegate);
   window.delegate = adapter;
   const original = window.frame;
   let expected = original;
   const enlarged = WebKit.NSMakeRect(original.origin.x, original.origin.y, original.size.width + 150, original.size.height + 100);
   const scenario = probe.z_subclass_access_scenario();
-  if (scenario == 19) {
+  if (scenario == 20) {
+    const started = clock.CACurrentMediaTime();
+    window.performClose(null);
+    const elapsed = (clock.CACurrentMediaTime() - started) * 1000;
+    console.log(\`accepted close: visible during delayed callback=\${delegate.visibleDuringClose}, duration=\${elapsed}ms\`);
+    if (delegate.closeCalls != 1 || delegate.visibleDuringClose || window.visible) return 201;
+    if (elapsed < 240) return 202;
+    return 0;
+  } else if (scenario == 21) {
+    delegate.vetoClose = true;
+    window.performClose(null);
+    if (!window.visible || delegate.closeCalls != 0) return 211;
+    delegate.vetoClose = false;
+    window.performClose(null);
+    if (window.visible || delegate.closeCalls != 1) return 212;
+    console.log("delayed veto retains the window; acceptance hides before close notifications");
+    return 0;
+  } else if (scenario == 19) {
     window.zoom(null);
     pump(0.5);
     const maximized = window.frame;
@@ -259,6 +289,7 @@ function main(): i32 {
 const pageObserver = `
 import probe from "./objc-subclass.h";
 import console from "std/console";
+import { sleep } from "std/time";
 class PageObserver on thread.main implements WebKit.WKScriptMessageHandler {
   readonly window: WebKit.NSWindow;
   status: i32;
@@ -303,7 +334,7 @@ function main(): i32 {
   configuration.websiteDataStore = WebKit.WKWebsiteDataStore.nonPersistentDataStore();
   const webview = WebKit.WKWebView.alloc().initWithFrame(WebKit.CGRectMake(0, 0, 640, 440), configuration: configuration);
   window.contentView = webview;
-  const delegate = new ResizeDelegate({ window, vetoZoom: false, vetoClose: false, resized: 0 });
+  const delegate = new ResizeDelegate({ window, vetoZoom: false, vetoClose: false, resized: 0, closeCalls: 0, visibleDuringClose: false });
   const adapter = objc.adapt<WebKit.NSWindowDelegate>(delegate);
   window.delegate = adapter;
   const observer = new PageObserver({ window, status: 0 });
@@ -352,7 +383,7 @@ try {
   for (const name of ["objc-subclass.h", "objc-subclass.h.zd"]) {
     symlinkSync(resolve(zRoot, "tests/fixtures", name), resolve(temporary, name));
   }
-  for (const reduced of webview ? [false] : [false, true]) {
+  for (const reduced of webview || shutdown ? [false] : [false, true]) {
     const candidate = original.replace("internal class MacOSWindow", "class MacOSWindow")
       .replace("  private displayLink:", "  private callbacks: i32;\n  private testReducedMotion: boolean;\n  private displayLink:")
       .replace("    this.displayLink = null;", `    this.callbacks = 0;\n    this.testReducedMotion = ${reduced};\n    this.displayLink = null;`)
@@ -381,7 +412,7 @@ try {
       await command(["xcrun", "clang", optimization, ...flags, "-fsanitize=undefined", "-fno-sanitize-recover=all",
         "-framework", "AppKit", "-framework", "QuartzCore", "-framework", "WebKit", generated,
         resolve(zRoot, "tests/fixtures/objc-subclass.m"), "-o", executable]);
-      for (const scenario of webview ? [0] : reduced ? [6] : [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) {
+      for (const scenario of webview ? [0] : shutdown ? [20, 21] : reduced ? [6] : [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) {
         const result = await command([executable], webview ? 15_000 : 8_000, { Z_SUBCLASS_ACCESS_SCENARIO: String(scenario) });
         console.log(`${optimization} scenario ${scenario}: ${result.trim()}`);
       }

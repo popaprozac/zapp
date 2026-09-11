@@ -38,11 +38,66 @@ An unchanged AppKit zoom target now remains unchanged: the controller must not
 substitute a saved restore frame when a delegate vetoed zoom. That correction
 and veto regressions were also carried back to Z's standalone example.
 
-Next: visual feedback in Z Notes, then measure the existing resize event/bridge
+Visual feedback in Z Notes confirmed the resize behavior. The follow-up close
+ordering checkpoint below precedes measuring the existing resize event/bridge
 path before considering coalescing. Actual mouse dragging during a transition,
 fullscreen/Spaces/tiling, screen changes, mixed refresh rates, and physical
 accessibility changes still need platform-specific evidence. The handoff tests
 are not claims that all those system animations have been validated.
+
+### Accepted close versus shutdown tail
+
+The user observed a pause when closing the last window. The intended contract
+is to remove an accepted window promptly, independently of process-wide cleanup;
+request vetoes remain authoritative. No new public API or hold mechanism was
+introduced.
+
+The actual production controller now calls `super.orderOut(null)` before
+`super.close()`, after invalidating its display link. A regression with a
+deliberately blocking 250 ms `windowWillClose:` callback failed before the change:
+the callback observed `visible=true`. With the change it observes `visible=false`
+at both `-O0` and `-O2`. A separate delayed-veto case leaves the window visible
+until acceptance. These are native-state assertions, not screen-presentation
+measurements, and do not establish that this callback was the cause of the
+original user's pause.
+
+Validation after the ordering change: all 40 geometry cases, both real WebView
+cases, and all four delayed-close/veto cases pass with strict Clang and UBSan.
+Both TypeScript checks and all 502 CLI/runtime tests pass. No ASan was used.
+
+Bounded packaged and dev Z Notes smokes also passed. Observed output intervals
+from one run of each (2026-09-11, same workstation):
+
+| Interval | Packaged smoke | Dev smoke |
+| --- | ---: | ---: |
+| Window-close log to worker-joined log | 18.0 ms | 27.7 ms |
+| Worker-joined log to service-stopped log | 0.2 ms | 1.0 ms |
+| Service-stopped log to runner exit | 470.6 ms | 831.6 ms |
+
+These are pipe-observation intervals, not per-function profiles. The window log
+is a subscribed window's notification, not necessarily the final native window;
+runner exit includes launch/runtime teardown and, in dev, Vite cleanup. Thus the
+observations do not justify blaming service shutdown for a half-second visible
+pause. `spikes/window-resize/trace-shutdown.ts [--dev]` repeats this diagnostic.
+
+Remaining shutdown work is explicitly separate from the accepted-close fix:
+
+1. The single-instance launch listener waits in a socket poll with a one-second
+   deadline. Closing its inbox requests cancellation but does not wake that
+   wait. Add an explicit cancellation wakeup, including waits on an accepted
+   client, instead of reducing the timeout and increasing idle polling. Its
+   remaining wait can contribute to process exit, but the trace does not
+   attribute the entire measured tail to it.
+2. Worker joining still uses synchronous `pthread_join`. Normal cancellation
+   was prompt in these runs, but a slow engine teardown can still block the main
+   executor. A direct Z `thread.spawn` joining the readonly `ApplicationWorkers`
+   owner was rejected by native lowering as a non-shareable ARC capture. Resolve
+   the owned cancellation/join seam upstream if needed; do not erase the owner
+   into a raw integer or detach cleanup to bypass that protection.
+3. The probe also exposed a separate native lowering issue when new delegate
+   class fields used defaults: synthesized constructor calls omitted their
+   arguments. The fixture supplies explicit fields for now. Retain a focused
+   upstream class-default-construction repro before expanding that work.
 
 ## Agreed intent
 
