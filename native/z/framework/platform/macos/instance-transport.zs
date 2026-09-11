@@ -1,6 +1,7 @@
 import Foundation from "Foundation/Foundation.h";
 import { ActivationInbox } from "../../activation-inbox.zs";
 import { MacOSInstanceLease } from "./instance-lease.zs";
+import { MacOSLaunchCancellation } from "./launch-cancellation.zs";
 import {
   launchSocketPath, launchDeadline, waitLaunchSocket, openLaunchSocket,
   checkLaunchPeer, acceptLaunchSocket, closeLaunchSocket, removeLaunchSocket,
@@ -44,8 +45,14 @@ internal struct MacOSLaunchEndpoint {
   // Serial, deadline-bound admission, independent of AppKit/main-loop progress.
   // The application-owned listener worker calls this; no event callback runs here.
   internal function receive(inout this, in inbox: ActivationInbox): boolean throws MacOSLaunchTransportError {
+    return try this.receiveCancellable(in inbox, Option<MacOSLaunchCancellation>.none);
+  }
+
+  internal function receiveCancellable(
+    inout this, in inbox: ActivationInbox, cancellation: Option<MacOSLaunchCancellation>
+  ): boolean throws MacOSLaunchTransportError {
     const deadline = launchDeadline(1000);
-    const ready = waitLaunchSocket(in this.file, false, deadline);
+    const ready = waitForLaunch(in this.file, false, deadline, in cancellation);
     if (ready != 0) throw MacOSLaunchTransportError({ code: ready, mayHaveBeenAdmitted: false, message: "launch endpoint wait failed" });
     let code = 0;
     const file = acceptLaunchSocket(in this.file, inout code);
@@ -54,7 +61,7 @@ internal struct MacOSLaunchEndpoint {
     const peer = checkLaunchPeer(in connection.file);
     if (peer != 0) throw MacOSLaunchTransportError({ code: peer, mayHaveBeenAdmitted: false, message: "launch peer validation failed" });
     const requestDeadline = launchDeadline(1000);
-    const bytes = try readFrame(in connection.file, 65536, requestDeadline, false);
+    const bytes = try readFrame(in connection.file, 65536, requestDeadline, false, in cancellation);
     const nativeText = launchBytesText(in bytes);
     let accepted = false;
     if (nativeText != null) {
@@ -63,7 +70,7 @@ internal struct MacOSLaunchEndpoint {
     }
     const reply: Foundation.NSString = accepted ? "zapp-launch/1 accepted" : "zapp-launch/1 rejected";
     const response = launchTextBytes(in reply);
-    try writeFrame(in connection.file, in response, requestDeadline, accepted);
+    try writeFrame(in connection.file, in response, requestDeadline, accepted, in cancellation);
     return accepted;
   }
 }
@@ -109,8 +116,9 @@ function forwardLaunch(in identifier: String, in payload: String, waitForReady: 
   const peer = checkLaunchPeer(in connection.file);
   if (peer != 0) throw MacOSLaunchTransportError({ code: peer, mayHaveBeenAdmitted: false, message: "primary peer validation failed" });
   const request = launchTextBytes(in text);
-  try writeFrame(in connection.file, in request, deadline, true);
-  const response = try readFrame(in connection.file, 64, deadline, true);
+  const cancellation = Option<MacOSLaunchCancellation>.none;
+  try writeFrame(in connection.file, in request, deadline, true, in cancellation);
+  const response = try readFrame(in connection.file, 64, deadline, true, in cancellation);
   const reply = launchBytesText(in response);
   if (reply != null) {
     const value: String = reply;
@@ -120,11 +128,18 @@ function forwardLaunch(in identifier: String, in payload: String, waitForReady: 
   throw MacOSLaunchTransportError({ code: 0, mayHaveBeenAdmitted: true, message: "invalid primary admission acknowledgement" });
 }
 
-function readBytes(in file: Foundation.NSFileHandle, length: usize, deadline: f64, uncertain: boolean): Foundation.NSData throws MacOSLaunchTransportError {
+function waitForLaunch(in file: Foundation.NSFileHandle, writing: boolean, deadline: f64, in cancellation: Option<MacOSLaunchCancellation>): i32 {
+  return match (in cancellation) {
+    some(signal) => signal.wait(in file, writing, deadline);
+    none => waitLaunchSocket(in file, writing, deadline);
+  };
+}
+
+function readBytes(in file: Foundation.NSFileHandle, length: usize, deadline: f64, uncertain: boolean, in cancellation: Option<MacOSLaunchCancellation>): Foundation.NSData throws MacOSLaunchTransportError {
   let bytes = makeLaunchBuffer(length);
   let offset: usize = 0;
   while (offset < length) {
-    const ready = waitLaunchSocket(in file, false, deadline);
+    const ready = waitForLaunch(in file, false, deadline, in cancellation);
     if (ready != 0) throw MacOSLaunchTransportError({ code: ready, mayHaveBeenAdmitted: uncertain, message: "launch receive deadline or connection failure" });
     const received = receiveLaunchChunk(in file, inout bytes, offset);
     if (received < 0) throw MacOSLaunchTransportError({ code: i32(-received), mayHaveBeenAdmitted: uncertain, message: "launch connection ended before a complete frame" });
@@ -133,17 +148,17 @@ function readBytes(in file: Foundation.NSFileHandle, length: usize, deadline: f6
   return bytes;
 }
 
-function readFrame(in file: Foundation.NSFileHandle, maximum: usize, deadline: f64, uncertain: boolean): Foundation.NSData throws MacOSLaunchTransportError {
-  const header = try readBytes(in file, 4, deadline, uncertain);
+function readFrame(in file: Foundation.NSFileHandle, maximum: usize, deadline: f64, uncertain: boolean, in cancellation: Option<MacOSLaunchCancellation>): Foundation.NSData throws MacOSLaunchTransportError {
+  const header = try readBytes(in file, 4, deadline, uncertain, in cancellation);
   const length = launchHeaderLength(in header);
   if (length == 0 || length > maximum) throw MacOSLaunchTransportError({ code: 0, mayHaveBeenAdmitted: uncertain, message: "invalid launch frame length" });
-  return try readBytes(in file, length, deadline, uncertain);
+  return try readBytes(in file, length, deadline, uncertain, in cancellation);
 }
 
-function writeBytes(in file: Foundation.NSFileHandle, in bytes: Foundation.NSData, deadline: f64, uncertain: boolean): void throws MacOSLaunchTransportError {
+function writeBytes(in file: Foundation.NSFileHandle, in bytes: Foundation.NSData, deadline: f64, uncertain: boolean, in cancellation: Option<MacOSLaunchCancellation>): void throws MacOSLaunchTransportError {
   let offset: usize = 0;
   while (offset < bytes.length) {
-    const ready = waitLaunchSocket(in file, true, deadline);
+    const ready = waitForLaunch(in file, true, deadline, in cancellation);
     if (ready != 0) throw MacOSLaunchTransportError({ code: ready, mayHaveBeenAdmitted: uncertain, message: "launch send deadline or connection failure" });
     const sent = sendLaunchChunk(in file, in bytes, offset);
     if (sent < 0) throw MacOSLaunchTransportError({ code: i32(-sent), mayHaveBeenAdmitted: uncertain, message: "launch send failed" });
@@ -151,8 +166,8 @@ function writeBytes(in file: Foundation.NSFileHandle, in bytes: Foundation.NSDat
   }
 }
 
-function writeFrame(in file: Foundation.NSFileHandle, in bytes: Foundation.NSData, deadline: f64, uncertain: boolean): void throws MacOSLaunchTransportError {
+function writeFrame(in file: Foundation.NSFileHandle, in bytes: Foundation.NSData, deadline: f64, uncertain: boolean, in cancellation: Option<MacOSLaunchCancellation>): void throws MacOSLaunchTransportError {
   const header = launchHeader(bytes.length);
-  try writeBytes(in file, in header, deadline, uncertain);
-  try writeBytes(in file, in bytes, deadline, uncertain);
+  try writeBytes(in file, in header, deadline, uncertain, in cancellation);
+  try writeBytes(in file, in bytes, deadline, uncertain, in cancellation);
 }

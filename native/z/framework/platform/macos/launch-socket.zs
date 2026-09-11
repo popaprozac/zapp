@@ -72,6 +72,17 @@ internal function waitLaunchSocket(
   in file: Foundation.NSFileHandle,
   writing: boolean,
   deadline: f64
+): i32 {
+  return waitCancellableLaunchSocket(in file, writing, deadline, -1);
+}
+
+// The caller retains the wake-pipe owner throughout this wait. A negative
+// descriptor selects the ordinary secondary-launch deadline-only path.
+internal function waitCancellableLaunchSocket(
+  in file: Foundation.NSFileHandle,
+  writing: boolean,
+  deadline: f64,
+  cancellation: i32
 ): i32 = raw objc {
   while (true) {
     struct timespec now;
@@ -80,14 +91,21 @@ internal function waitLaunchSocket(
     if (!(remaining > 0)) return ETIMEDOUT;
     // Deadlines are internal and at most five seconds; clamp defensively.
     int milliseconds = remaining > 5.0 ? 5000 : (int)(remaining * 1000.0) + 1;
-    struct pollfd item = { .fd = file.fileDescriptor, .events = writing ? POLLOUT : POLLIN };
-    int result = poll(&item, 1, milliseconds);
+    struct pollfd items[2] = {
+      { .fd = file.fileDescriptor, .events = writing ? POLLOUT : POLLIN },
+      { .fd = cancellation, .events = POLLIN },
+    };
+    int result = poll(items, 2, milliseconds);
     if (result < 0 && errno == EINTR) continue;
     if (result < 0) return errno;
     if (result == 0) continue;
-    if (item.revents & POLLNVAL) return EBADF;
+    // Cancellation wins when both inputs are ready. Never consume its byte:
+    // later waits, including a partially received client frame, stay cancelled.
+    if (items[1].revents & POLLNVAL) return EBADF;
+    if (items[1].revents & (POLLIN | POLLHUP | POLLERR)) return ECANCELED;
+    if (items[0].revents & POLLNVAL) return EBADF;
     // EOF and errors are consumed by the nonblocking read/write/connect check.
-    if (item.revents & (item.events | POLLHUP | POLLERR)) return 0;
+    if (items[0].revents & (items[0].events | POLLHUP | POLLERR)) return 0;
   }
 }
 

@@ -70,6 +70,7 @@ async function exchange(socketPath: string, partial: boolean) {
 try {
   const files = [
     "framework/platform/macos/instance-lease.zs", "framework/platform/macos/launch-socket.zs",
+    "framework/platform/macos/launch-cancellation.zs",
     "framework/platform/macos/instance-transport.zs", "framework/activation-inbox.zs",
     "framework/application-launch.zs", "tests/application-launch-listener-smoke.zs",
   ];

@@ -52,7 +52,7 @@ function start(id: string, mode: string) {
   return { ready, stdout, stderr, exited };
 }
 
-async function partialRequest(socketPath: string) {
+async function partialRequest(socketPath: string, body: boolean) {
   await new Promise<void>((resolve, reject) => {
     const socket = createConnection(socketPath);
     sockets.add(socket);
@@ -60,13 +60,14 @@ async function partialRequest(socketPath: string) {
     socket.on("error", reject);
     socket.on("data", () => reject(new Error("partial request was acknowledged")));
     socket.on("close", () => { clearTimeout(deadline); sockets.delete(socket); resolve(); });
-    socket.on("connect", () => socket.write(Buffer.from([0])));
+    socket.on("connect", () => socket.write(body ? Buffer.from([0, 0, 0, 32, 123]) : Buffer.from([0])));
   });
 }
 
 try {
   const files = [
     "framework/platform/macos/instance-lease.zs", "framework/platform/macos/launch-socket.zs",
+    "framework/platform/macos/launch-cancellation.zs",
     "framework/platform/macos/instance-transport.zs", "framework/platform/macos/launch-listener.zs",
     "framework/platform/macos/launch-delivery.zs", "framework/activation-inbox.zs",
     "framework/application-launch.zs", "framework/application-events.zs", "framework/application-activation.zs",
@@ -94,7 +95,7 @@ try {
         "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=14.0", "-fsanitize=undefined", "-fno-sanitize-recover=all",
         "-framework", "Foundation", "-framework", "CoreFoundation", path.join(root, ".z-cache/build/startup-probe.m"), "-o", binary], 60_000);
     }
-    for (const mode of ["normal", "idle", "partial", "startup-failure"]) {
+    for (const mode of ["normal", "idle", "partial", "partial-body", "startup-failure"]) {
       const id = `com.zapp.startup-probe.${randomUUID()}`;
       const key = createHash("sha256").update(id).digest("hex");
       const socket = `/private/tmp/zapp-launch-${process.geteuid!()}/${key}`;
@@ -112,16 +113,20 @@ try {
         const secondary = start(id, "secondary");
         assert.equal(await secondary.ready, "forwarded");
         assert.equal(await secondary.exited, 0, `${await secondary.stdout}\n${await secondary.stderr}`);
-        assert.equal(await secondary.stdout, "forwarded\nlistener joined\ndelivery joined\ndelivered 0\n");
+        assert.equal((await secondary.stdout).replace(/^cancellation joined in .*ms\n/m, ""), "forwarded\nlistener joined\ndelivery joined\ndelivered 0\n");
         assert.equal(await secondary.stderr, "");
-      } else if (mode === "partial") await partialRequest(socket);
+      } else if (mode === "partial" || mode === "partial-body") await partialRequest(socket, mode === "partial-body");
       assert.equal(await primary.exited, 0, `${frontend.name}/${mode}\n${await primary.stdout}\n${await primary.stderr}`);
-      assert.equal(await primary.stdout, `${ready}\nlistener joined\ndelivery joined\ndelivered ${mode === "normal" ? 1 : 0}\n`);
+      const output = await primary.stdout;
+      const timing = /^cancellation joined in ([0-9.e+-]+)ms$/m.exec(output);
+      assert.ok(timing, output);
+      assert.ok(Number(timing[1]) < 400, output);
+      assert.equal(output.replace(/^cancellation joined in .*ms\n/m, ""), `${ready}\nlistener joined\ndelivery joined\ndelivered ${mode === "normal" ? 1 : 0}\n`);
       assert.equal(await primary.stderr, "");
       assert.ok(performance.now() - began < 4_000, `${mode} exceeded bounded shutdown`);
       if (mode === "startup-failure") assert.equal((await lstat(socket)).isSymbolicLink(), true);
       else await assert.rejects(lstat(socket), { code: "ENOENT" });
-      console.log(`${frontend.name}: ${mode} passed`);
+      console.log(`${frontend.name}: ${mode} passed (cancellation to join ${Number(timing[1]).toFixed(2)}ms)`);
     }
   }
 } finally {

@@ -116,6 +116,7 @@ try {
   for (const directory of ["framework/platform/macos", "tests"]) await mkdir(path.join(root, directory), { recursive: true });
   for (const file of [
     "framework/platform/macos/instance-lease.zs", "framework/platform/macos/launch-socket.zs",
+    "framework/platform/macos/launch-cancellation.zs",
     "framework/platform/macos/instance-transport.zs", "framework/activation-inbox.zs",
     "framework/application-launch.zs", "tests/application-instance-transport-smoke.zs",
   ]) await copyFile(path.join(nativeRoot, file), path.join(root, file));

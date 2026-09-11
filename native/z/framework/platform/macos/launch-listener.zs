@@ -11,6 +11,7 @@ import {
   listenMacOSLaunches, forwardMacOSLaunchWhenReady,
 } from "./instance-transport.zs";
 import { deliverMacOSLaunches } from "./launch-delivery.zs";
+import { MacOSLaunchCancellation } from "./launch-cancellation.zs";
 
 internal enum MacOSLaunchReadiness {
   primary,
@@ -66,10 +67,10 @@ function openPrimaryEndpoint(
   };
 }
 
-function receiveLaunch(inout endpoint: MacOSLaunchEndpoint, inbox: ActivationInbox, updates: TaskScope): void {
+function receiveLaunch(inout endpoint: MacOSLaunchEndpoint, inbox: ActivationInbox, updates: TaskScope, cancellation: MacOSLaunchCancellation): void {
   // Even a lost acknowledgement may follow successful admission. Always
   // inspect the inbox, and never replay a possibly admitted request.
-  const received = attempt endpoint.receive(in inbox);
+  const received = attempt endpoint.receiveCancellable(in inbox, Option.some(cancellation));
   if (!inbox.reserveWake()) return;
   const wake = updates.schedule(thread.main, async (): void => deliverMacOSLaunches());
   if (!wake.accepted) inbox.beginWake();
@@ -77,7 +78,7 @@ function receiveLaunch(inout endpoint: MacOSLaunchEndpoint, inbox: ActivationInb
 
 internal async function listenMacOSApplicationLaunches(
   identifier: String, inbox: ActivationInbox, updates: TaskScope,
-  sender: Sender<MacOSLaunchReadiness>
+  sender: Sender<MacOSLaunchReadiness>, cancellation: MacOSLaunchCancellation
 ): i32 {
   const ready = sender.sync();
   let endpoint = match (attempt openPrimaryEndpoint(in identifier, ready)) {
@@ -92,7 +93,7 @@ internal async function listenMacOSApplicationLaunches(
   };
   reportLaunchReadiness(ready, MacOSLaunchReadiness.primary);
   while (!inbox.isClosed()) {
-    receiveLaunch(inout endpoint, inbox, updates);
+    receiveLaunch(inout endpoint, inbox, updates, cancellation);
     await scheduler.yield();
   }
   return 0;

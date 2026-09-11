@@ -9,6 +9,7 @@ import { Channel } from "std/channel";
 import { MacOSLaunchReadiness, listenMacOSApplicationLaunches, releaseMacOSLaunchSender } from "./launch-listener.zs";
 import { initializeMacOSLaunchDelivery } from "./launch-delivery.zs";
 import { MacOSLaunchTransportError } from "./instance-transport.zs";
+import { MacOSLaunchCancellation } from "./launch-cancellation.zs";
 import { ApplicationQuitOperation } from "../../application-events.zs";
 import { TaskScope } from "std/async";
 import { thread } from "std/thread";
@@ -74,8 +75,12 @@ export async function runMacOSApplication(
   const launchUpdates = new TaskScope();
   const { sender, receiver } = Channel<MacOSLaunchReadiness>.bounded(1);
   const readiness = receiver.sync();
+  const cancellation = match (attempt MacOSLaunchCancellation.create()) {
+    success(value) => value;
+    failure(code) => throw ApplicationError.platform(PlatformError({ code, message: "launch cancellation setup failed" }));
+  };
   const identifier = copy config.metadata.identifier;
-  const listener = thread.spawn(async move (): i32 => await listenMacOSApplicationLaunches(move identifier, inbox, launchUpdates, sender));
+  const listener = thread.spawn(async move (): i32 => await listenMacOSApplicationLaunches(move identifier, inbox, launchUpdates, sender, cancellation));
   releaseMacOSLaunchSender(move sender);
   const startup = readiness.receive();
   // Keep the outcome owned until both the listener and every admitted main
@@ -83,6 +88,7 @@ export async function runMacOSApplication(
   const outcome = attempt await runMacOSReadyApplication(move startup, config, updates);
   config.events.finish();
   inbox.close();
+  cancellation.request();
   await listener.cancel();
   await launchUpdates.cancel();
   await updates.cancel();

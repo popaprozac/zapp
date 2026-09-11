@@ -11,6 +11,8 @@ import { ApplicationSecondInstanceLaunchedEvent } from "../framework/application
 import { initializeMacOSLaunchDelivery } from "../framework/platform/macos/launch-delivery.zs";
 import { MacOSLaunchReadiness, listenMacOSApplicationLaunches, releaseMacOSLaunchSender } from "../framework/platform/macos/launch-listener.zs";
 import { acquireMacOSInstanceLease } from "../framework/platform/macos/instance-lease.zs";
+import { MacOSLaunchCancellation } from "../framework/platform/macos/launch-cancellation.zs";
+import { launchDeadline } from "../framework/platform/macos/launch-socket.zs";
 
 function pumpMain(milliseconds: i32): void = raw c {
   if (!pthread_main_np()) abort();
@@ -51,8 +53,12 @@ async function main(): i32 on thread.main {
   const updates = new TaskScope();
   const { sender, receiver } = Channel<MacOSLaunchReadiness>.bounded(1);
   const readiness = receiver.sync();
+  const cancellation = match (attempt MacOSLaunchCancellation.create()) {
+    success(value) => value;
+    failure(_) => return 97;
+  };
   const workerIdentifier = copy identifier;
-  const worker = thread.spawn(async move (): i32 => await listenMacOSApplicationLaunches(move workerIdentifier, inbox, updates, sender));
+  const worker = thread.spawn(async move (): i32 => await listenMacOSApplicationLaunches(move workerIdentifier, inbox, updates, sender, cancellation));
   releaseMacOSLaunchSender(move sender);
   const startup = readiness.receive();
   let phase = 0;
@@ -71,12 +77,18 @@ async function main(): i32 on thread.main {
   let ticks = 0;
   if (phase == 1) {
     events.startActivation();
-    if (mode == "idle" || mode == "partial") pumpMain(150);
+    if (mode == "idle" || mode == "partial" || mode == "partial-body") pumpMain(150);
     else while (observed.count == 0 && ticks < 1000) { pumpMain(5); ticks = ticks + 1; }
   }
   events.finish();
+  const began = launchDeadline(0);
   inbox.close();
+  cancellation.request();
+  cancellation.request(); // Sticky and safe even before the worker polls again.
   await worker.cancel();
+  const elapsed = (launchDeadline(0) - began) * 1000;
+  console.log(`cancellation joined in ${elapsed}ms`);
+  if (elapsed > 400) return 98;
   console.log("listener joined");
   await updates.cancel();
   console.log("delivery joined");
