@@ -78,6 +78,82 @@ worker, Vite process, saved window frame, or developer application is reused.
 The executable is removed; raw observation data goes into the ignored
 `.zapp/window-resize/` directory, with the exact path printed at completion.
 
+## Resize-event path measurement
+
+```sh
+bun spikes/window-resize/measure-events.ts --check
+bun spikes/window-resize/measure-events.ts
+bun spikes/window-resize/measure-events.ts --allocations
+bun spikes/window-resize/measure-events.ts --ubsan
+```
+
+The timing, allocation-request, and UBSan passes are deliberately separate.
+Each execution runs three automatically closing windows, with a 15-second
+process-group deadline per child. `--check` only compiles. No ASan, user app
+identity, Vite server, service, worker, or persistent WebView data is used.
+The `.zs.in` file is a template, not a standalone Z application.
+
+The probe extracts the production `MacOSWindow`, `Event`, `WindowEvents`, JSON
+helpers, and resize delivery function. It bundles the real WebView bootstrap
+and public `WindowHandle.subscribe` implementation. A test delegate adds stage
+timers; the production window-manager lookup/weak upgrade and application
+graph are not included. Animation duration is fixed to 250 ms, with Reduce
+Motion disabled **only in the temporary test source**. No system settings change.
+It verifies that every native notification reaches both Z listeners and one
+frontend listener, with matching ordered window IDs and dimensions. It also
+records consecutive duplicate sizes and pending WebKit evaluations.
+
+Reports go to ignored `.zapp/window-resize/events-*.json`, including source
+hashes, emitted-code hash, host, optimization/sanitizer mode, and raw payloads.
+`allocationCalls` counts instrumented **generated allocation requests**, not
+allocator-internal activity or peak memory. Clang can eliminate the backing
+storage while preserving the counter (notably the no-listener case). It does
+not count framework allocations or retain/release operations. Never treat a
+null count as zero, or compare instrumented timings with ordinary timings.
+
+### 2026-09-11 checkpoint
+
+Apple M4 Pro, arm64, Darwin 25.4.0; native Z compiler, Clang `-O2`. Three runs
+before and three after transferring the resize payload into its aggregate
+event instead of copying it:
+
+| Measured stage | Before: range of run medians | After: range of run medians |
+| --- | ---: | ---: |
+| Z publication, one specific + one aggregate listener | 1.29–1.38 µs | 1.21–1.38 µs |
+| JSON + JavaScript message construction | 2.21–2.42 µs | 2.46–2.54 µs |
+| `evaluateJavaScript` enqueue call | 10.63–30.33 µs | 11.04–11.17 µs |
+| Enqueue to WebKit completion callback | 0.674–0.800 ms | 0.687–0.747 ms |
+| Synchronous frontend dispatch, 10,000-call batch mean | 0.5 µs | 0.5 µs |
+
+These short, non-randomized observations do **not** establish a statistically
+significant latency improvement. The concrete reduction is one owned String
+copy: generated publication allocation requests go from **2 to 1 per resize**;
+serialization remains 11 requests, enqueue adds one generated closure request.
+The no-listener path is already near the timer floor after optimization.
+
+The ordinary before/after runs delivered 465/469 events respectively, with no
+missing/reordered payloads or consecutive duplicate sizes. Peak outstanding
+evaluations were 2 before and 1 after, with complete drainage; these are
+observations, not queue-size guarantees. After-change completion p95s ranged
+1.32–2.28 ms. Completion includes WebKit scheduling and the return callback,
+**not compositor paint or exact one-way IPC latency**. The JS batch excludes IPC
+and uses counting-only callbacks, not realistic application handler work.
+
+The frontend performs two JSON parses and one stringify per delivered resize:
+one parse for the native data, then a local stringify/parse round trip through
+`_onEvent`. That round trip is a future normalization-preserving cleanup, not a
+measured bottleneck here. No coalescing, listener filtering, subscription change,
+or event loss was introduced. Both Z compilers retain independently copied
+payloads after publisher closure at `-O0` and `-O2` under UBSan. Three WebView
+UBSan runs verify the final actual-delivery-function instrumentation as well.
+
+Saved version-3 reports: `events-1789167350455.json` (before timing),
+`events-1789167370602.json` (before requests), `events-1789167439146.json`
+(after timing), `events-1789167458549.json` (after requests), and
+`events-1789167635250.json` (final UBSan). Early requestAnimationFrame-gated
+probe attempts timed out; readiness now uses a timer and retains hard deadlines.
+Those incomplete runs are excluded, not counted as passing observations.
+
 ## Visual A/B
 
 Run these separately and repeat as needed:

@@ -1,0 +1,110 @@
+// Template appended to production sources by measure-events.ts. No framework
+// source is edited, and no service, worker, app identity, or Vite server is used.
+import probe from "./event-probe.h";
+import console from "std/console";
+
+class EventCounts on thread.main {
+  resized: i32;
+  all: i32;
+}
+
+class EventProbeDelegate on thread.main implements WebKit.NSWindowDelegate {
+  readonly window: MacOSWindow;
+  readonly webview: WebKit.WKWebView;
+  readonly events: WindowEvents;
+  active: boolean;
+  function didResize(in notification: WebKit.NSNotification): void as "windowDidResize:" {
+    if (!this.active) return;
+    const bounds = this.webview.bounds;
+    const width = u32(bounds.size.width);
+    const height = u32(bounds.size.height);
+    probe.probe_begin(1);
+    this.events.publishResized("probe-window", width, height);
+    probe.probe_end();
+    deliverWebViewWindowResize(in this.webview, "probe-window", width, height);
+  }
+}
+
+class EventProbeObserver on thread.main implements WebKit.WKScriptMessageHandler {
+  readonly app: WebKit.NSApplication;
+  readonly window: MacOSWindow;
+  readonly delegate: EventProbeDelegate;
+  readonly original: WebKit.CGRect;
+  phase: i32;
+  ready: boolean;
+  done: boolean;
+  function receive(inout this, in controller: WebKit.WKUserContentController, in message: WebKit.WKScriptMessage): void as "userContentController:didReceiveScriptMessage:" {
+    const body = message.body;
+    if (body instanceof WebKit.NSString) {
+      const text: String = body;
+      if (text == "ready") { console.log("PROBE ready"); this.ready = true; this.delegate.active = true; }
+      else if (text == "step") {
+        let delta: f64 = 0;
+        if (this.phase % 2 == 0) delta = 280;
+        const frame = this.original;
+        this.window.resize(WebKit.NSMakeRect(frame.origin.x, frame.origin.y, frame.size.width + delta, frame.size.height + delta), true, true);
+        this.phase = this.phase + 1;
+      }
+      else {
+        console.log(text);
+        this.done = true;
+        this.delegate.active = false;
+        this.window.close();
+        this.app.stop(null);
+        const emptyModifiers = WebKit.NSEventModifierFlagCapsLock ^ WebKit.NSEventModifierFlagCapsLock;
+        const wake = WebKit.NSEvent.otherEventWithType(WebKit.NSEventTypeApplicationDefined,
+          location: WebKit.NSMakePoint(0, 0), modifierFlags: emptyModifiers,
+          timestamp: 0, windowNumber: 0, context: null, subtype: 0, data1: 0, data2: 0);
+        if (wake != null) this.app.postEvent(wake, atStart: true);
+      }
+    }
+  }
+}
+
+function runProbe(): i32 throws EventSubscriptionError on thread.main {
+  const app = WebKit.NSApplication.sharedApplication;
+  app.setActivationPolicy(WebKit.NSApplicationActivationPolicyRegular);
+  const window = new MacOSWindow(WebKit.NSMakeRect(100, 100, 640, 440), WebKit.NSWindowStyleMaskTitled | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable);
+  window.title = "Zapp resize-event measurement";
+  const configuration = WebKit.WKWebViewConfiguration.new();
+  configuration.websiteDataStore = WebKit.WKWebsiteDataStore.nonPersistentDataStore();
+  const webview = WebKit.WKWebView.alloc().initWithFrame(WebKit.CGRectMake(0, 0, 640, 440), configuration: configuration);
+  window.contentView = webview;
+  const events = createWindowEvents();
+  const counts = new EventCounts({ resized: 0, all: 0 });
+  let sample: i32 = 0;
+  while (sample < 1000) {
+    probe.probe_begin(0);
+    events.publishResized("probe-window", 640, 440);
+    probe.probe_end();
+    sample = sample + 1;
+  }
+  const resized = try events.resized.subscribe(move (in event: WindowResizedEvent): void => { counts.resized = counts.resized + 1; });
+  const all = try events.all.subscribe(move (in event: WindowEvent): void => { counts.all = counts.all + 1; });
+  const delegate = new EventProbeDelegate({ window, webview, events, active: false });
+  const adapter = objc.adapt<WebKit.NSWindowDelegate>(delegate);
+  window.delegate = adapter;
+  const observer = new EventProbeObserver({ app, window, delegate, original: window.frame, phase: 0, ready: false, done: false });
+  const controller = configuration.userContentController;
+  const registration = objc.register({
+    add: controller.addScriptMessageHandler(observer, "probe"),
+    remove: controller.removeScriptMessageHandlerForName("probe"),
+  });
+  webview.loadHTMLString(probePage(), baseURL: null);
+  window.makeKeyAndOrderFront(null);
+  app.activate();
+  console.log("PROBE entering AppKit loop");
+  app.run();
+  if (!observer.ready || !observer.done || observer.phase != 6) return 1;
+  if (probe.probe_pending() != 0 || probe.probe_sent_total() < 12) return 2;
+  if (counts.resized != probe.probe_sent_total() || counts.all != counts.resized) return 3;
+  probe.probe_report();
+  return 0;
+}
+
+function main(): i32 {
+  return match (attempt runProbe()) {
+    success(status) => status;
+    failure(_) => 5;
+  };
+}

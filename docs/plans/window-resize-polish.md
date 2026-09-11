@@ -38,9 +38,9 @@ An unchanged AppKit zoom target now remains unchanged: the controller must not
 substitute a saved restore frame when a delegate vetoed zoom. That correction
 and veto regressions were also carried back to Z's standalone example.
 
-Visual feedback in Z Notes confirmed the resize behavior. The follow-up close
-ordering checkpoint below precedes measuring the existing resize event/bridge
-path before considering coalescing. Actual mouse dragging during a transition,
+Visual feedback in Z Notes confirmed the resize and accepted-close behavior.
+The event/bridge measurement below is now complete; it does not justify changing
+event semantics or adding coalescing. Actual mouse dragging during a transition,
 fullscreen/Spaces/tiling, screen changes, mixed refresh rates, and physical
 accessibility changes still need platform-specific evidence. The handoff tests
 are not claims that all those system animations have been validated.
@@ -80,14 +80,14 @@ runner exit includes launch/runtime teardown and, in dev, Vite cleanup. Thus the
 observations do not justify blaming service shutdown for a half-second visible
 pause. `spikes/window-resize/trace-shutdown.ts [--dev]` repeats this diagnostic.
 
-Remaining shutdown work is explicitly separate from the accepted-close fix:
+Shutdown follow-ups are explicitly separate from the accepted-close fix:
 
-1. The single-instance launch listener waits in a socket poll with a one-second
-   deadline. Closing its inbox requests cancellation but does not wake that
-   wait. Add an explicit cancellation wakeup, including waits on an accepted
-   client, instead of reducing the timeout and increasing idle polling. Its
-   remaining wait can contribute to process exit, but the trace does not
-   attribute the entire measured tail to it.
+1. **Completed in `8b1dc6e`:** the single-instance launch listener now has an
+   owned pipe-backed cancellation wakeup, including accepted-client waits.
+   Z's checked `deinit on thread.any` contract preserves descriptor ownership.
+   Idle/partial-client cancellation joined below 3 ms in the recorded runs.
+   Packaged/dev service-stop-to-runner-exit observations improved to 10/29 ms;
+   these are not hard OS or user-cleanup bounds. No faster idle polling was added.
 2. Worker joining still uses synchronous `pthread_join`. Normal cancellation
    was prompt in these runs, but a slow engine teardown can still block the main
    executor. A direct Z `thread.spawn` joining the readonly `ApplicationWorkers`
@@ -99,15 +99,40 @@ Remaining shutdown work is explicitly separate from the accepted-close fix:
    arguments. The fixture supplies explicit fields for now. Retain a focused
    upstream class-default-construction repro before expanding that work.
 
-Wakeup follow-up (2026-09-11): a pipe-backed cancellation prototype is preserved
+Historical wakeup blocker (resolved by `8b1dc6e`): a pipe-backed cancellation prototype was preserved
 on local branch `codex/launch-listener-wakeup-prototype`, commit `72e8139`. It is
-not merged or claimed working. Its shared owner contains `Mutex<WakePipe>`, whose
-custom descriptor cleanup is rejected by Z's cross-thread destruction classifier.
+not merged at that checkpoint. Its shared owner contains `Mutex<WakePipe>`, whose
+custom descriptor cleanup was rejected by Z's cross-thread destruction classifier.
 Even an empty custom `deinit` reproduces the restriction. The Z ownership-pressure
 log records the pending upstream cleanup-affinity decision. Keep the main branch
 working; do not remove the destructor or pass around unowned fds to bypass this
 check. Resume the idle/partial-header/partial-body cancellation tests and real
 shutdown timing comparison after the ownership contract is agreed and implemented.
+That work is now complete as recorded above; the synchronous worker-join and
+class-default-construction follow-ups remain separate.
+
+### Resize-event performance checkpoint (2026-09-11)
+
+The bounded [actual-source measurement](../../spikes/window-resize/README.md#resize-event-path-measurement)
+separates Z publication, message construction, WebKit enqueue/completion, and
+the public frontend listener. Three ordinary before/after runs deliver every
+notification in order, without consecutive duplicate sizes or a growing backlog.
+Z publication is approximately 1–1.4 µs, message construction 2–3 µs, and median
+WebKit completion roughly 0.7–0.8 ms on this workstation. These are not paint
+latencies or a cross-machine performance guarantee.
+
+The only production change transfers the already-published borrowed payload
+into the aggregate event (`move event`) instead of making another owned copy.
+Separate allocation-request instrumentation drops publication from two requests
+to one; both compiler paths retain independent subscriber snapshots under UBSan.
+No API, permission, ordering, cancellation, coalescing, or subscription behavior
+changes. The local frontend JSON round trip, unconditional empty-listener bridge
+delivery, and historical subscription-order tombstones are recorded for a future
+measured optimization pass, not changed speculatively here.
+
+Next: return to Zapp's developer-facing framework/package readiness discussion,
+then prioritize feature build-out. No remaining resize measurement blocker
+requires another open-ended language detour. Deliberate public API additions.
 
 ## Agreed intent
 

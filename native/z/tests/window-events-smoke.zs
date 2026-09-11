@@ -18,6 +18,8 @@ class ObservedEvents on thread.main {
   resized: i32;
   closeRequested: i32;
   closed: i32;
+  retainedResize: Option<WindowResizedEvent>;
+  retainedAllResize: Option<WindowResizedEvent>;
 }
 
 function runWindowEventsSmoke(
@@ -30,6 +32,8 @@ function runWindowEventsSmoke(
     resized: 0,
     closeRequested: 0,
     closed: 0,
+    retainedResize: Option<WindowResizedEvent>.none,
+    retainedAllResize: Option<WindowResizedEvent>.none,
   });
 
   const allObserved = observed;
@@ -45,6 +49,7 @@ function runWindowEventsSmoke(
         navigationRequested(_) => {}
         resized(value) => {
           allObserved.all = allObserved.all + i32(value.size.width);
+          allObserved.retainedAllResize = Option<WindowResizedEvent>.some(copy value);
         }
         closeRequested(_) => { allObserved.all = allObserved.all + 20; }
         closed(_) => { allObserved.all = allObserved.all + 10; }
@@ -71,6 +76,7 @@ function runWindowEventsSmoke(
   const resized = try events.resized.subscribe(
     move (in event: WindowResizedEvent): void => {
       resizedObserved.resized = i32(event.size.width + event.size.height);
+      resizedObserved.retainedResize = Option<WindowResizedEvent>.some(copy event);
     }
   );
   const closedObserved = observed;
@@ -106,6 +112,18 @@ function runWindowEventsSmoke(
   if (observed.closeRequested != 1) return 5;
   if (firstCloseAllowed || !secondCloseAllowed) return 6;
   if (observed.all != 56) return 7;
+  // Both borrowed streams can deliberately retain their own payload copy.
+  // Closing the publisher and moving its payload into the aggregate stream
+  // must not invalidate either retained snapshot.
+  const specificValid = match (in observed.retainedResize) {
+    some(value) => value.windowId == "win-1" && value.size.width == 4 && value.size.height == 6;
+    none => false;
+  };
+  const aggregateValid = match (in observed.retainedAllResize) {
+    some(value) => value.windowId == "win-1" && value.size.width == 4 && value.size.height == 6;
+    none => false;
+  };
+  if (!specificValid || !aggregateValid) return 10;
 
   const late = attempt events.closed.subscribe(
     move (in event: WindowClosedEvent): void => {}

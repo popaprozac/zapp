@@ -64,7 +64,9 @@ export readonly class WindowEvents on thread.main {
     });
     let resized = this.resized;
     resized.publish(in event);
-    const aggregate = WindowEvent.resized(copy event);
+    // The borrowed publication has finished; transfer our payload to the
+    // aggregate stream. Subscribers retain snapshots with their own `copy`.
+    const aggregate = WindowEvent.resized(move event);
     let all = this.all;
     all.publish(in aggregate);
   }
