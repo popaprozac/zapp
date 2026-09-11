@@ -3,6 +3,7 @@
 import { getBridge } from "./bridge";
 import { ensurePermission } from "./permissions";
 import { MenuError } from "./menu-errors";
+import { MenuPresentations } from "./menu-presentations";
 
 export { MenuError, type MenuErrorPayload } from "./menu-errors";
 
@@ -114,10 +115,10 @@ type WireMenuItem = WireCommand | WireSubmenu | WireSeparator | WireRole;
 interface MenuOwner {
   readonly token: string;
   readonly commandsById: Map<string, Command>;
-  readonly commands: Set<Command>;
 }
 
 let currentOwner: MenuOwner | undefined;
+const presentations = new MenuPresentations<Command>();
 let wiredBridge: ReturnType<typeof getBridge> | undefined;
 let unwireEvents: (() => void) | undefined;
 
@@ -138,16 +139,17 @@ function wireEvents(): void {
   const bridge = getBridge();
   if (wiredBridge === bridge) return;
   unwireEvents?.();
+  presentations.clear();
+  currentOwner = undefined;
   const unsubscribe = bridge.on("__zapp:menu-command", (payload) => {
+    if (wiredBridge !== bridge) return;
     if (payload === null || typeof payload !== "object") return;
     const record = payload as Record<string, unknown>;
-    const owner = currentOwner;
     if (
-      !owner
-      || record.ownerToken !== owner.token
+      typeof record.ownerToken !== "string"
       || typeof record.commandId !== "string"
     ) return;
-    const command = owner.commandsById.get(record.commandId);
+    const command = presentations.command(record.ownerToken, record.commandId);
     if (!command) return;
     try {
       const result = command.action({ command });
@@ -172,7 +174,6 @@ export class Command {
   readonly _id: string;
   _enabled: boolean;
   _state: CommandState;
-  _ownerToken?: string;
 
   constructor(options: CommandOptions) {
     this.label = requiredLabel(options.label, "command");
@@ -188,9 +189,10 @@ export class Command {
 
   /** Update every installed native item that shares this command identity. */
   async setEnabled(enabled: boolean): Promise<void> {
-    if (this._ownerToken && this._ownerToken === currentOwner?.token) {
+    if (presentations.tokensFor(this).length > 0) wireEvents();
+    for (const token of presentations.tokensFor(this)) {
       await getBridge().invoke("__zapp:menu:set-enabled", {
-        ownerToken: this._ownerToken,
+        ownerToken: token,
         commandId: this._id,
         enabled,
       });
@@ -203,9 +205,10 @@ export class Command {
     if (!Object.values(CommandState).includes(state)) {
       throw new MenuError({ message: `unknown command state ${JSON.stringify(state)}` });
     }
-    if (this._ownerToken && this._ownerToken === currentOwner?.token) {
+    if (presentations.tokensFor(this).length > 0) wireEvents();
+    for (const token of presentations.tokensFor(this)) {
       await getBridge().invoke("__zapp:menu:set-state", {
-        ownerToken: this._ownerToken,
+        ownerToken: token,
         commandId: this._id,
         state,
       });
@@ -223,7 +226,6 @@ function commandItem(
   owner: MenuOwner,
 ): WireCommand {
   owner.commandsById.set(command._id, command);
-  owner.commands.add(command);
   return {
     kind: "command",
     commandId: command._id,
@@ -277,17 +279,14 @@ export const applicationMenu: ApplicationMenu = {
     const owner: MenuOwner = {
       token: ownerToken(),
       commandsById: new Map(),
-      commands: new Set(),
     };
     const wireItems = items.map((item) => serializeItem(item, owner));
     await getBridge().invoke("__zapp:menu:set", {
       ownerToken: owner.token,
       items: wireItems,
     });
-    for (const command of currentOwner?.commands ?? []) {
-      command._ownerToken = undefined;
-    }
-    for (const command of owner.commands) command._ownerToken = owner.token;
+    if (currentOwner) presentations.remove(currentOwner.token);
+    presentations.add(owner.token, owner.commandsById);
     currentOwner = owner;
   },
 };

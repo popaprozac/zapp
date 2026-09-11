@@ -168,6 +168,63 @@ test("Application menu owns opaque callbacks and ignores stale generations", asy
   }
 });
 
+test("failed menu replacement preserves callbacks and bridge replacement retires them", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
+  const makeBridge = () => {
+    const callbacks: Array<(payload: unknown) => void> = [];
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = [];
+    let rejectSet = false;
+    return {
+      callbacks, calls,
+      rejectNextSet() { rejectSet = true; },
+      on(_name: string, callback: (payload: unknown) => void) {
+        callbacks.push(callback);
+        // Deliberately keep a queued callback to check stale-bridge rejection.
+        return () => {};
+      },
+      async invoke(method: string, args: Record<string, unknown>) {
+        calls.push({ method, args });
+        if (rejectSet && method === "__zapp:menu:set") {
+          rejectSet = false;
+          throw new Error("replacement rejected");
+        }
+        return null;
+      },
+      emit() {},
+    };
+  };
+  const first = makeBridge();
+  const second = makeBridge();
+  (globalThis as any)[BRIDGE_KEY] = first;
+  (globalThis as any)[WINDOW_ID_KEY] = "win-presentation";
+  try {
+    let invoked = 0;
+    const command = new Command({ label: "Shared", action: () => { invoked++; } });
+    await Application.current().menu.set([{ command }]);
+    const original = first.calls[0].args;
+    const id = (original.items as any[])[0].commandId;
+    first.rejectNextSet();
+    await expect(Application.current().menu.set([])).rejects.toThrow("replacement rejected");
+    first.callbacks[0]({ ownerToken: original.ownerToken, commandId: id });
+    expect(invoked).toBe(1);
+
+    (globalThis as any)[BRIDGE_KEY] = second;
+    await command.setEnabled(false);
+    expect(command.enabled).toBe(false);
+    expect(second.calls).toEqual([]); // Never send an old token to a new bridge.
+    await Application.current().menu.set([{ command }]);
+    const replacement = second.calls[0].args;
+    first.callbacks[0]({ ownerToken: replacement.ownerToken, commandId: id });
+    expect(invoked).toBe(1);
+    second.callbacks[0]({ ownerToken: original.ownerToken, commandId: id });
+    expect(invoked).toBe(1);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
+  }
+});
+
 test("package exports focused application and menu facades", async () => {
   const manifest = await Bun.file(
     new URL("./package.json", import.meta.url),
