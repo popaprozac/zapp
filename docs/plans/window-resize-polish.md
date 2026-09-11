@@ -1,10 +1,11 @@
 # Display-synchronized window geometry
 
-Status: integration pressure checkpoint, 2026-09-10. No Zapp public API changed.
+Status: checked reentry checkpoint, 2026-09-11. No Zapp public API changed.
 Upstream native subclasses now have checked state/lifecycle, native frontend
 execution, selector entries, and `objc.selector(Type.method)` registration.
-Production still creates ordinary `NSWindow`: the first live Z subclass probe
-exposed a receiver-reentry decision and two additional composition gaps below.
+Production still creates ordinary `NSWindow`. The live Z subclass probe's
+receiver-reentry blocker now has an approved, implemented narrow handoff;
+two additional upstream composition gaps remain below.
 
 ## Agreed intent
 
@@ -108,23 +109,27 @@ probe using an actual `NSWindow` subclass written in Z. On the tested Mac:
 
 - A direct animated `setFrame` operation completes.
 - An exclusive native entry calling `super.zoom(null)` triggers AppKit's
-  virtual `setFrame:display:animate:` callback. The current whole-entry
-  `inout this` guard rejects that nested exclusive entry.
+  virtual `setFrame:display:animate:` callback. The original whole-entry
+  `inout this` guard rejected that nested exclusive entry.
 - Removing the state writes and making both entries readers permits zoom.
   This is a diagnostic control, not a usable mutable animation controller.
 
-All three run at `-O0` and `-O2` with strict Clang/UBSan and ten-second runtime
+The approved checked superclass handoff now lets the mutable zoom case complete
+without changing its receiver capability. All three run at `-O0` and `-O2`
+with strict Clang/UBSan and ten-second runtime
 deadlines. Expected guard failures are caught to avoid macOS crash reports;
 no ASan is used. This measures dispatch compatibility, not WebView presentation
 or interrupted-zoom correctness.
 
 Before integration, resolve these upstream rather than adding a framework shim:
 
-1. Deliberate checked native-call reentry. One candidate temporarily suspends
-   the current receiver loan only if no receiver-field borrow can remain live
-   across the call, then reacquires it before returning to Z. Other live loans
-   and cleanup reentry must remain protected. This is **not yet approved or
-   implemented**; do not merely turn off the guard around `super`.
+1. **Implemented upstream:** checked synchronous full-expression `super` calls
+   can temporarily release the current receiver loan when their boundary uses
+   scalar/enum/plain-record values or literal object `null`. Arguments are
+   evaluated first, the receiver remains alive, other readers remain protected,
+   and access is reacquired before Z continuation or cleanup. Borrowed arguments
+   and nested expressions retain the original guard; live receiver-field loans
+   are rejected. This is not a blanket exception around `super`.
 2. Deliberate source-nameable erased Objective-C identity: `zoom:` receives
    nullable `id`, which cannot soundly be replaced by `NSObject *`.
 3. Close async-program composition: Stage 0 currently rejects a native
