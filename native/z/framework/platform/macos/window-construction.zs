@@ -28,6 +28,7 @@ import {
 } from "./window-delegate.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
+import { MacOSWindow } from "./window-resize.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 
 internal function createMacOSWindowRuntime(
@@ -88,13 +89,7 @@ internal function createMacOSWindowRuntime(
   if (options.resizable) {
     style = style | WebKit.NSWindowStyleMaskResizable;
   }
-  const window = WebKit.NSWindow.alloc().initWithContentRect(
-    frame,
-    styleMask: style,
-    backing: WebKit.NSBackingStoreBuffered,
-    defer: false
-  );
-  window.releasedWhenClosed = false;
+  const window = new MacOSWindow(frame, style);
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;

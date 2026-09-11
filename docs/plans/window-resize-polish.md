@@ -1,11 +1,48 @@
 # Display-synchronized window geometry
 
-Status: checked reentry checkpoint, 2026-09-11. No Zapp public API changed.
-Upstream native subclasses now have checked state/lifecycle, native frontend
-execution, selector entries, and `objc.selector(Type.method)` registration.
-Production still creates ordinary `NSWindow`. The live Z subclass probe's
-receiver-reentry blocker now has an approved, implemented narrow handoff;
-two additional upstream composition gaps remain below.
+Status: production controller integrated, 2026-09-11. No Zapp public API changed.
+Production now constructs the Z-defined `MacOSWindow` in
+`native/z/framework/platform/macos/window-resize.zs`. The compiler gaps recorded
+below are resolved; the older sections retain the investigation history.
+
+The controller replaces only native geometry handling. Existing managers,
+capabilities, protocol delegates, resize events, and application shutdown stay
+in place. It uses a window-associated display link only during an active
+animation, preserves immediate sizing, and honors Reduce Motion. Live-resize
+and move notifications stop an outstanding transition; fullscreen lifecycle
+callbacks hand geometry back to AppKit rather than animating Spaces ourselves.
+
+### Integration evidence
+
+- All 94 modules in Z Notes check through the fixed-point native compiler.
+- The production source passes 20 geometry/delegate cases at both `-O0` and
+  `-O2` with strict Clang and UBSan: 40 runs, no ASan. These include interrupted
+  transitions, stale callbacks, zoom and close vetoes, content constraints and
+  delegate standard-frame selection compared with an unmodified `NSWindow`,
+  Reduce Motion, cancellation, and system-geometry handoff state without
+  replacing the saved user restore frame.
+- A real WebView probe at both optimization levels verifies readiness, more
+  than three distinct viewport widths, aligned edge layout, resize delegate
+  notifications, and return from the AppKit loop after close.
+- Both TypeScript check projects and all 502 CLI/runtime tests pass. The
+  packaged and dev Z Notes smokes pass with WebView routing, workers, and
+  teardown. Dev reports HMR ready and successfully reclaims Vite port 5173.
+
+Run the actual-source harness with
+`bun spikes/window-resize/verify-z.ts --run` and `--run --webview`.
+`--check` variants never open a window. Every build and child process has a hard
+deadline, and timeout cleanup kills its process group. Test-only duration and
+accessibility inputs do not modify system settings.
+
+An unchanged AppKit zoom target now remains unchanged: the controller must not
+substitute a saved restore frame when a delegate vetoed zoom. That correction
+and veto regressions were also carried back to Z's standalone example.
+
+Next: visual feedback in Z Notes, then measure the existing resize event/bridge
+path before considering coalescing. Actual mouse dragging during a transition,
+fullscreen/Spaces/tiling, screen changes, mixed refresh rates, and physical
+accessibility changes still need platform-specific evidence. The handoff tests
+are not claims that all those system animations have been validated.
 
 ## Agreed intent
 
@@ -102,7 +139,7 @@ observe uninitialized or destroyed Z state. Any new surface must still be
 discussed before implementation. The research `.m` stays a test oracle, not a
 production backend.
 
-### Current blockers: real Z subclass probe
+### Historical blockers: real Z subclass probe
 
 Z's `scripts/probe-appkit-subclass-reentry.ts --run` is a bounded, explicit GUI
 probe using an actual `NSWindow` subclass written in Z. On the tested Mac:
@@ -121,7 +158,7 @@ deadlines. Expected guard failures are caught to avoid macOS crash reports;
 no ASan is used. This measures dispatch compatibility, not WebView presentation
 or interrupted-zoom correctness.
 
-Before integration, resolve these upstream rather than adding a framework shim:
+These were resolved upstream before integration, without a framework shim:
 
 1. **Implemented upstream:** checked synchronous full-expression `super` calls
    can temporarily release the current receiver loan when their boundary uses
@@ -130,11 +167,10 @@ Before integration, resolve these upstream rather than adding a framework shim:
    and access is reacquired before Z continuation or cleanup. Borrowed arguments
    and nested expressions retain the original guard; live receiver-field loans
    are rejected. This is not a blanket exception around `super`.
-2. Deliberate source-nameable erased Objective-C identity: `zoom:` receives
-   nullable `id`, which cannot soundly be replaced by `NSObject *`.
-3. Close async-program composition: Stage 0 currently rejects a native
-   subclass anywhere in a program using async lowering, even if every
-   subclass method is synchronous. Zapp's application entry is async.
+2. **Implemented upstream:** `objc.Object` names erased Objective-C identity;
+   `zoom:` receives nullable `id`, not an invented `NSObject *` substitute.
+3. **Implemented upstream:** synchronous native subclasses compose with
+   supported async programs, including Zapp's asynchronous application entry.
 
 The compiler's `docs/objc-subclass-design.md` and `docs/ownership-pressure.md`
 record the reproducer and these boundaries. Selector registration support alone

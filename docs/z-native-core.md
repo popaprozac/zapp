@@ -657,6 +657,15 @@ both DOMs before closing every window. Both
 use the same staged native inputs and generated Z asset catalog as an ordinary
 `ZAPP_NATIVE_LANG=z` build.
 
+On macOS 14+, windows use a Z-written native `NSWindow` subclass that keeps the
+WebView viewport updating during zoom/restore. Option-click the green titlebar
+button to try it, including a second click during the transition. Direct mouse
+resizing remains immediate; Reduce Motion skips the custom animation. The
+existing window API, close vetoes, and resize subscriptions are unchanged. This
+does not claim compositor-synchronous painting or eliminate every exposed
+background pixel. Fullscreen/Spaces remains owned by AppKit and needs separate
+visual validation.
+
 The development commands exercise the complete CLI-owned loop: Vite serves the
 same logical application URL with its HMR client, the Z-native AppKit/WebKit
 host loads it, and closing the app deterministically terminates and awaits the

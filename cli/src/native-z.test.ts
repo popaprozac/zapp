@@ -550,6 +550,7 @@ describe("Z native host inputs", () => {
       "window-construction.zs",
       "window-delegate.zs",
       "window-geometry.zs",
+      "window-resize.zs",
       "window-runtime.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
@@ -583,7 +584,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(18);
+    expect(macOSModules).toHaveLength(19);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
     expect(messageHandler).toContain("if (!frame.mainFrame)");
@@ -675,7 +676,11 @@ describe("Z native host inputs", () => {
     expect(windowBridge).toContain('fields.has("navigation")');
     expect(windowBridge).toContain("copy options.navigation");
     expect(windowBridge).toContain("navigation: move inheritedNavigation");
-    expect(macOSPlatform).toContain("window.releasedWhenClosed = false");
+    expect(macOSPlatform).toContain("new MacOSWindow(frame, style)");
+    expect(macOSPlatform).toContain("this.releasedWhenClosed = false");
+    expect(macOSPlatform).toContain("objc.selector(MacOSWindow.onDisplay)");
+    expect(macOSPlatform).toContain('as "windowWillStartLiveResize:"');
+    expect(macOSPlatform).toContain('as "windowWillEnterFullScreen:"');
     expect(macOSPlatform).toContain("u32(math.trunc(value))");
     expect(macOSPlatform).toContain("WebKit.NSMakeRect(");
     expect(macOSPlatform).toContain("configuredEmbeddedAssetAtIndex(index)");

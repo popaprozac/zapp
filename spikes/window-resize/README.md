@@ -1,10 +1,33 @@
 # Window resize research probe
 
-This is an isolated AppKit/WebKit experiment, **not an implemented Zapp feature**.
-It is never linked into the framework, Z Notes, or a shipped application.
-The small Objective-C oracle establishes platform behavior before choosing a
-Z implementation or adding language capabilities. It does not subclass
-`NSWindow` or use private APIs.
+This directory retains the isolated AppKit/WebKit research oracle (`run.ts`
+and `probe.m`) alongside verification of the production Z controller.
+The small Objective-C oracle is never linked into the framework, Z Notes, or a
+shipped application. It establishes platform behavior independently of the Z
+implementation and does not subclass `NSWindow` or use private APIs.
+
+The production Z implementation is now integrated separately. Verify its actual
+source (not the Objective-C oracle) from the repository root:
+
+```sh
+bun spikes/window-resize/verify-z.ts --check
+bun spikes/window-resize/verify-z.ts --check --webview
+bun spikes/window-resize/verify-z.ts --run
+bun spikes/window-resize/verify-z.ts --run --webview
+```
+
+This harness needs the sibling Z compiler workspace and its test-only abort
+fixture; `ZAPP_Z_COMPILER` can select a rebuilt native driver. It injects only
+observation counters and deterministic test inputs into the production Z
+controller. The 20 geometry/delegate cases and real WebView check run at `-O0`
+and `-O2`, with strict Clang and UBSan. Children have 8-second geometry or
+15-second WebView deadlines; timeout cleanup kills the process group. No ASan.
+`ZAPP_KEEP_RESIZE_PROBE=1` retains generated source for diagnostics.
+
+For an interactive application, run `bun run spike:z-notes` and Option-click
+the green titlebar button. Close every app window when finished. Automated
+geometry checks do not replace visual testing of macOS fullscreen, tiling,
+mixed-refresh displays, or dragging during an active transition.
 
 Requires macOS 14+ with a visible, unlocked desktop and Xcode command-line tools.
 Run from the repository root:

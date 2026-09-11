@@ -1,0 +1,11 @@
+declare module "WebKit/WebKit.h" {
+  // The window-associated display link invokes its target on the main run loop.
+  // Its owner must invalidate it to disconnect the retained target.
+  export function NSWindow.displayLinkWithTarget(target: _, selector: _): _ {
+    callback selector {
+      target target;
+      type (in link: CADisplayLink) => void on thread.main;
+      invoked repeatedly;
+    }
+  }
+}

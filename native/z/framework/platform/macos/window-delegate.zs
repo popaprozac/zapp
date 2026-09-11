@@ -3,6 +3,7 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import { macOSContentDimension } from "./window-geometry.zs";
+import { MacOSWindow } from "./window-resize.zs";
 import {
   deliverWebViewWindowEvent,
   deliverWebViewWindowResize,
@@ -16,7 +17,7 @@ class DesktopWindowDelegate on thread.main
   implements WebKit.NSWindowDelegate {
   readonly id: String;
   readonly nativeId: i32;
-  readonly window: WebKit.NSWindow;
+  readonly window: MacOSWindow;
   readonly webView: WebKit.WKWebView;
   readonly windows: Weak<WindowManager>;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
@@ -102,12 +103,42 @@ class DesktopWindowDelegate on thread.main
       failure(_) => {}
     }
   }
+
+  // User tracking and system-owned fullscreen geometry must not race the
+  // display-driven controller. These callbacks do not change event delivery.
+  function willMove(inout this, in notification: WebKit.NSNotification): void as "windowWillMove:" {
+    this.window.cancelResize();
+  }
+
+  function willStartLiveResize(inout this, in notification: WebKit.NSNotification): void as "windowWillStartLiveResize:" {
+    this.window.cancelResize();
+  }
+
+  function willEnterFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowWillEnterFullScreen:" {
+    this.window.setSystemResize(true);
+  }
+
+  function willExitFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowWillExitFullScreen:" {
+    this.window.setSystemResize(true);
+  }
+
+  function didExitFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowDidExitFullScreen:" {
+    this.window.setSystemResize(false);
+  }
+
+  function didFailToEnterFullScreen(inout this, in window: WebKit.NSWindow): void as "windowDidFailToEnterFullScreen:" {
+    this.window.setSystemResize(false);
+  }
+
+  function didFailToExitFullScreen(inout this, in window: WebKit.NSWindow): void as "windowDidFailToExitFullScreen:" {
+    this.window.setSystemResize(true);
+  }
 }
 
 internal function createDesktopWindowDelegate(
   id: String,
   nativeId: i32,
-  in window: WebKit.NSWindow,
+  in window: MacOSWindow,
   in webView: WebKit.WKWebView,
   windows: Weak<WindowManager>,
   didCloseNativeWindow: NativeWindowClosedOperation
