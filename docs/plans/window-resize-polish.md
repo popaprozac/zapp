@@ -99,6 +99,16 @@ Remaining shutdown work is explicitly separate from the accepted-close fix:
    arguments. The fixture supplies explicit fields for now. Retain a focused
    upstream class-default-construction repro before expanding that work.
 
+Wakeup follow-up (2026-09-11): a pipe-backed cancellation prototype is preserved
+on local branch `codex/launch-listener-wakeup-prototype`, commit `72e8139`. It is
+not merged or claimed working. Its shared owner contains `Mutex<WakePipe>`, whose
+custom descriptor cleanup is rejected by Z's cross-thread destruction classifier.
+Even an empty custom `deinit` reproduces the restriction. The Z ownership-pressure
+log records the pending upstream cleanup-affinity decision. Keep the main branch
+working; do not remove the destructor or pass around unowned fds to bypass this
+check. Resume the idle/partial-header/partial-body cancellation tests and real
+shutdown timing comparison after the ownership contract is agreed and implemented.
+
 ## Agreed intent
 
 Improve native-feeling window resizing by keeping the WebView viewport updated
