@@ -34,6 +34,11 @@ window or service startup. Failures are typed errors, not fallback primaries.
 See [application activation](application-activation.md) for delivery limits and
 shutdown semantics; Windows/Linux forwarding is not implemented yet.
 
+`application.quitOnLastWindowClosed` defaults to `true`. Set it to `false` to
+keep the application running after its last window closes, for example with a
+[tray menu](trays.md). Adding a tray does not silently change this policy.
+Explicit application quit still runs the usual cancellation and cleanup path.
+
 ## Complete shape
 
 ```ts
@@ -43,6 +48,7 @@ export default defineConfig({
     identifier: "com.example.z-notes",
     version: "0.1.0",
     singleInstance: true,
+    quitOnLastWindowClosed: true,
     deepLinks: ["znotes"],
   },
 

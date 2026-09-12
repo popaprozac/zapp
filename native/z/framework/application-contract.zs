@@ -12,6 +12,7 @@ import { ShellManager } from "./shell.zs";
 import { FileManager } from "./files.zs";
 import { FilesystemAuthority } from "./filesystem-authority.zs";
 import { ApplicationMenu } from "./application-menu.zs";
+import { TrayManager } from "./tray.zs";
 import { WorkerManager } from "./worker/worker-manager.zs";
 import { thread } from "std/thread";
 import {
@@ -35,6 +36,7 @@ export readonly class PreparedApplication on thread.main {
   readonly shell: ShellManager;
   readonly files: FileManager;
   readonly menu: ApplicationMenu;
+  readonly trays: TrayManager;
   readonly services: AsyncServices;
   readonly lifecycles: ServiceLifecycles;
   readonly workers: WorkerManager;

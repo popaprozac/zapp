@@ -12,6 +12,7 @@ reference. Engineering plans and historical material are separated below.
 | [`configuration.md`](configuration.md) | Typed configuration, immutable build policy, and current support boundaries |
 | [`z-services.md`](z-services.md) | Native service registration, generated TypeScript clients, errors, and lifecycle |
 | [`application-activation.md`](application-activation.md) | Reopen/custom URL events, single-instance forwarding, startup buffering, and shutdown guarantees |
+| [`trays.md`](trays.md) | Native status-menu items, shared commands, and background application lifetime |
 | [`api-reference.md`](api-reference.md#application-lifecycle) | Current frontend application lifecycle; later sections contain explicitly labeled legacy APIs |
 
 Existing document filenames are retained so links remain stable. Future designs

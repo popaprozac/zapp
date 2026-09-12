@@ -21,6 +21,10 @@ static void zapp_desktop_smoke_close_all_windows(void) {
   for (NSWindow *window in [NSApp.windows copy]) {
     [window close];
   }
+  // Background/tray applications may intentionally survive their last window.
+  // Finish this test through the ordinary delegate-backed Z quit lifecycle;
+  // NSApp's delegate cancels process termination and lets app.run() unwind.
+  [NSApp terminate:nil];
 }
 
 bool zapp_desktop_smoke_window_received(int32_t native_id) {

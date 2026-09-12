@@ -1,5 +1,6 @@
 import { ServiceLifecycleError } from "../api/zapp/service.zs";
 import { MenuError } from "./menu.zs";
+import { TrayError } from "./tray.zs";
 
 export struct WindowError {
   id: String;
@@ -26,6 +27,7 @@ export enum ApplicationError {
   state ApplicationStateError,
   lifecycle ServiceLifecycleError,
   menu MenuError,
+  tray TrayError,
   window WindowError,
   platform PlatformError,
 }

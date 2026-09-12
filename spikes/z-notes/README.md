@@ -744,3 +744,19 @@ outside its text field, or choose **Actions…**, to open its native context men
 Edit title, Save title, Archive, and Delete. Archive is disabled for archived
 notes. Escape or clicking outside dismisses the menu without changing a note.
 Text fields retain WebKit's normal editing menu.
+
+## Tray menu
+
+Z Notes registers a native menu-bar item with **Show Z Notes**, **Log Note
+Count**, and **Quit Z Notes**. The note-count Command is shared with the
+application menu. Its icon is a new embedded monochrome note glyph, independent
+of earlier Zapp branding.
+
+The demo sets `application.quitOnLastWindowClosed: false`: closing the last
+window leaves the app and workers running. **Show Z Notes** reveals a remaining
+window or creates a fresh one. **Quit Z Notes** follows the normal cancellable
+application shutdown path. Use that command or the application menu to end the
+demo and let the dev launcher shut Vite down.
+
+The implementation is in [`zapp/notes-tray.zs`](zapp/notes-tray.zs). See
+[tray documentation](../../docs/trays.md) for lifetime rules and current limits.

@@ -26,6 +26,26 @@ test("deep links accept custom scheme names and reject ambiguous registration", 
   expect(() => validateDeepLinkSchemes("notes" as unknown as string[])).toThrow(/array/);
 });
 
+test("last-window policy is explicit, boolean, and retained in resolved configuration", async () => {
+  for (const value of [false, true, "false", 0, null]) {
+    const root = await mkdtemp(path.join(tmpdir(), "zapp-last-window-"));
+    try {
+      await writeFile(path.join(root, "zapp.config.ts"), `export default {
+        application: { name: "Tray", quitOnLastWindowClosed: ${JSON.stringify(value)} }
+      };`);
+      const context = createConfigContext(root, "build", "macos");
+      if (typeof value !== "boolean") {
+        await expect(loadConfig(root, context)).rejects.toThrow(/quitOnLastWindowClosed.*boolean/);
+      } else {
+        const config = await loadConfig(root, context);
+        expect(config.quitOnLastWindowClosed).toBe(value);
+        const snapshot = JSON.parse(await readFile(path.join(root, ".zapp/config.resolved.json"), "utf8"));
+        expect(snapshot.config.quitOnLastWindowClosed).toBe(value);
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("defineConfig preserves object and contextual factory definitions", () => {
   const object = { application: { name: "notes" } };
   const factory = (context: ReturnType<typeof createConfigContext>) => ({
@@ -118,6 +138,7 @@ test("loadConfig evaluates a contextual factory and writes the resolved snapshot
     expect(config.identifier).toBe("com.example.notes");
     expect(config.version).toBe("1.2.3");
     expect(config.singleInstance).toBe(true);
+    expect(config.quitOnLastWindowClosed).toBe(true);
     expect(config.devPort).toBe(4200);
     expect(config.assetDir).toBe("./web-dist");
     expect(config.compressAssets).toBe(false);

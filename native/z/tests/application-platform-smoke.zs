@@ -17,6 +17,7 @@ import {
   createFilesystemAuthority,
 } from "../framework/filesystem-authority.zs";
 import { createApplicationMenu } from "../framework/application-menu.zs";
+import { createTrayManager } from "../framework/tray.zs";
 import { emptyApplicationWorkerCatalog } from "../framework/worker/configuration.zs";
 import { createWorkerManager } from "../framework/worker/worker-manager.zs";
 import { createApplicationEvents } from "../framework/application-events.zs";
@@ -77,6 +78,7 @@ async function main(): i32 on thread.main {
     shell,
     files,
     menu: createApplicationMenu(),
+    trays: createTrayManager(),
     services: services.freeze(),
     lifecycles: lifecycles.freeze(),
     workers: createWorkerManager(emptyApplicationWorkerCatalog()),

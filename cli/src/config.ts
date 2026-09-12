@@ -523,6 +523,8 @@ export interface ApplicationConfig {
   version?: string;
   /** Prevent multiple application instances where the platform supports it. */
   singleInstance?: boolean;
+  /** Quit after the last window closes. False allows tray/background apps. @default true */
+  quitOnLastWindowClosed?: boolean;
   /** Custom OS URL schemes, without `://`; delivered to native openURLRequested. */
   deepLinks?: string[];
 }
@@ -689,6 +691,7 @@ export interface ResolvedConfig {
   deepLinkSchemes?: string[];
   protocols?: string[];
   singleInstance?: boolean;
+  quitOnLastWindowClosed?: boolean;
   fs?: FsConfig;
   permissions?: ZappPermission[];
   capabilityProfiles?: Record<string, CapabilityProfileConfig>;
@@ -1470,6 +1473,10 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     throw new Error("[zapp] config.application.name must be a non-empty string");
   }
   const normalizedName = name.trim();
+  if (config.application.quitOnLastWindowClosed !== undefined
+    && typeof config.application.quitOnLastWindowClosed !== "boolean") {
+    throw new Error("[zapp] application.quitOnLastWindowClosed must be a boolean");
+  }
   const identifier = config.application.identifier?.trim()
     ?? defaultApplicationIdentifier(normalizedName);
   if (identifier.length === 0) {
@@ -1484,6 +1491,7 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     identifier,
     version,
     singleInstance: config.application.singleInstance,
+    quitOnLastWindowClosed: config.application.quitOnLastWindowClosed ?? true,
     deepLinkSchemes: config.application.deepLinks,
     assetDir: config.frontend?.assets ?? "./dist",
     devPort: config.frontend?.devServer?.port,

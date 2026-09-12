@@ -1,4 +1,5 @@
 import { PreparedApplication } from "../application-contract.zs";
+import { TrayManagerLifetime, unsupportedTrayBackend } from "../tray.zs";
 import { ApplicationError } from "../application-error.zs";
 import { thread } from "std/thread";
 import { TaskScope } from "std/async";
@@ -115,6 +116,11 @@ export async function runApplicationPlatform(
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
   const context = config.contextSnapshot();
+  const trayLifetime = TrayManagerLifetime({ manager: config.trays });
+  match (attempt config.trays.start(unsupportedTrayBackend())) {
+    success => {}
+    failure(error) => throw ApplicationError.tray(move error);
+  }
   const runtime = new HeadlessApplicationRuntime({
     updates,
     exitStatus: 0,

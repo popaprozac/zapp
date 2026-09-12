@@ -1,4 +1,5 @@
 import WebKit from "WebKit/WebKit.h";
+import { configuredApplicationQuitOnLastWindowClosed } from "../../configured-application.zs";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
 import {
@@ -180,7 +181,7 @@ internal class MacOSApplicationRuntime {
         let menu = this.menu;
         menu.invalidateFrontendOwner(in window.id);
         this.retiredNativeWindows.push(move window);
-        if (this.nativeWindows.length == 0) {
+        if (this.nativeWindows.length == 0 && configuredApplicationQuitOnLastWindowClosed()) {
           stopMacOSRunLoop();
         }
       }

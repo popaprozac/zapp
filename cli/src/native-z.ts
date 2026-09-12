@@ -236,6 +236,10 @@ export function configuredApplicationSingleInstance(): boolean {
   return ${config.singleInstance === true};
 }
 
+export function configuredApplicationQuitOnLastWindowClosed(): boolean {
+  return ${config.quitOnLastWindowClosed !== false};
+}
+
 export function configuredApplicationPermissions(): ApplicationPermissions {
   return ApplicationPermissions({
     windowCreate: ${isPermissionAllowed(

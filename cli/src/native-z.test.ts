@@ -174,6 +174,11 @@ describe("renderZConfiguredDesktopSmoke", () => {
 });
 
 describe("renderZApplicationMetadata", () => {
+  it("emits the explicit last-window lifetime policy with the existing default", () => {
+    const config = { name: "Notes", identifier: "com.example.notes", version: "1.0.0", assetDir: "./dist" };
+    expect(renderZApplicationMetadata(config)).toContain("configuredApplicationQuitOnLastWindowClosed(): boolean {\n  return true;");
+    expect(renderZApplicationMetadata({ ...config, quitOnLastWindowClosed: false })).toContain("configuredApplicationQuitOnLastWindowClosed(): boolean {\n  return false;");
+  });
   it("emits the opt-in single-instance runtime gate", () => {
     const config = { name: "Notes", identifier: "com.example.notes", version: "1.0.0", assetDir: "./dist" };
     expect(renderZApplicationMetadata(config)).toContain("configuredApplicationSingleInstance(): boolean {\n  return false;");

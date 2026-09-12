@@ -1,4 +1,5 @@
 import { createNotesService } from "./notes-service.zs";
+import { configureNotesTray } from "./notes-tray.zs";
 import { observeNoteActivation } from "./notes-activation.zs";
 import { createHealthService } from "./health-service.zs";
 import {
@@ -256,6 +257,10 @@ async function main(): i32 on thread.main {
       return 80;
     }
   }
+  match (attempt configureNotesTray(app, logNoteCountCommand)) {
+    success => {}
+    failure(error) => { console.error(`could not configure tray: ${error.message}`); return 82; }
+  }
   const workers = app.workers;
   const noteIndexerSubscription = observeApplicationWorker(
     in workers,
@@ -345,6 +350,10 @@ async function main(): i32 on thread.main {
         menu(menuError) => {
           console.log(`application menu failed: ${menuError.message}`);
           select 80;
+        }
+        tray(trayError) => {
+          console.error(`tray ${trayError.id} failed: ${trayError.message}`);
+          select 82;
         }
         window(windowError) => {
           console.log(`window ${windowError.id} failed: ${windowError.message}`);

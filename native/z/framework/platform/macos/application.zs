@@ -1,4 +1,6 @@
 import { PreparedApplication } from "../../application-contract.zs";
+import { TrayManagerLifetime } from "../../tray.zs";
+import { macOSTrayBackend } from "./tray-backend.zs";
 import {
   ApplicationError,
   PlatformError,
@@ -132,13 +134,8 @@ async function runMacOSPrimaryApplication(
   let shell = config.shell;
   const files = config.files;
   let menu = config.menu;
-  const registeredWindows = windows.all();
-  if (registeredWindows.length == 0) {
-    throw ApplicationError.window(WindowError({
-      id: "",
-      message: "a macOS desktop application requires a registered window in this tier",
-    }));
-  }
+  const trays = config.trays;
+  const trayLifetime = TrayManagerLifetime({ manager: trays });
   config.events.configureActivation(configuredApplicationDeepLinkSchemes());
   const hostLifetime = initializeMacOSApplicationHost(config.events);
   let workerManager = config.workers;
@@ -175,6 +172,15 @@ async function runMacOSPrimaryApplication(
       windows.stop();
       abortMacOSApplicationRuntime();
       throw ApplicationError.menu(menuError);
+    }
+  }
+  match (attempt trays.start(macOSTrayBackend())) {
+    success => {}
+    failure(trayError) => {
+      menu.stop();
+      windows.stop();
+      abortMacOSApplicationRuntime();
+      throw ApplicationError.tray(move trayError);
     }
   }
   dialogs.start(macOSDialogBackend());
@@ -233,6 +239,7 @@ async function runMacOSPrimaryApplication(
   events.startActivation();
   const status = runMacOSApplicationLoop();
   events.finish();
+  trays.stop();
   workers.requestCancellation();
   cancelAllMacOSApplicationWorkerServices();
   workers.join();

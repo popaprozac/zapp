@@ -6,6 +6,8 @@ export default defineConfig({
     identifier: process.env.ZAPP_Z_NOTES_IDENTIFIER ?? "com.zapp.z-notes",
     version: "0.1.0",
     singleInstance: true,
+    // Closing a window does not quit. Reopen or quit from the native tray menu.
+    quitOnLastWindowClosed: false,
     deepLinks: ["znotes"],
   },
   frontend: {

@@ -1,4 +1,5 @@
 import { PreparedApplication } from "../framework/application-contract.zs";
+import { TrayManager, createTrayManager } from "../framework/tray.zs";
 import {
   ApplicationSecondInstanceLaunchedEvent as FrameworkApplicationSecondInstanceLaunchedEvent,
 } from "../framework/application-launch.zs";
@@ -141,12 +142,14 @@ class ApplicationRunState on thread.main {
 struct ApplicationRunLifetime on thread.main {
   runState: ApplicationRunState;
   events: ApplicationEvents;
+  trays: TrayManager;
 
   deinit {
     let runState = this.runState;
     runState.finish();
     let events = this.events;
     events.finish();
+    this.trays.stop();
   }
 }
 
@@ -166,6 +169,7 @@ export readonly class Application {
   readonly shell: ShellManager;
   readonly files: FileManager;
   readonly menu: ApplicationMenu;
+  readonly trays: TrayManager;
   readonly workers: WorkerManager;
   readonly services: ApplicationServices;
   internal readonly filesystemAuthority: FilesystemAuthority;
@@ -189,6 +193,7 @@ export readonly class Application {
     this.shell = createShellManager(this.filesystemAuthority);
     this.files = createFileManager(this.filesystemAuthority);
     this.menu = createApplicationMenu();
+    this.trays = createTrayManager();
     this.workers = createWorkerManager(configuredApplicationWorkers());
     this.services = createApplicationServices();
     this.runState = new ApplicationRunState({
@@ -217,6 +222,7 @@ export readonly class Application {
     const runLifetime = ApplicationRunLifetime({
       runState: applicationState,
       events: this.events,
+      trays: this.trays,
     });
     const publicationState = currentApplication.state();
     try requireApplicationPublicationState(publicationState);
@@ -294,6 +300,7 @@ function prepareApplication(
     shell,
     files,
     menu,
+    trays: app.trays,
     services: new AsyncServices({
       synchronous: routes,
       asynchronous,
