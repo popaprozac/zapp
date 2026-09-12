@@ -13,6 +13,7 @@ reference. Engineering plans and historical material are separated below.
 | [`z-services.md`](z-services.md) | Native service registration, generated TypeScript clients, errors, and lifecycle |
 | [`application-activation.md`](application-activation.md) | Reopen/custom URL events, single-instance forwarding, startup buffering, and shutdown guarantees |
 | [`trays.md`](trays.md) | Native status-menu items, shared commands, and background application lifetime |
+| [`windows.md`](windows.md) | Native window visibility, foreground focus requests, and lifecycle behavior |
 | [`api-reference.md`](api-reference.md#application-lifecycle) | Current frontend application lifecycle; later sections contain explicitly labeled legacy APIs |
 
 Existing document filenames are retained so links remain stable. Future designs

@@ -28,6 +28,11 @@ function hideMacOSWindow(in id: String): void on thread.main {
   current.hideWindow(in id);
 }
 
+function focusMacOSWindow(in id: String): void on thread.main {
+  const current = currentMacOSApplication();
+  current.focusWindow(in id);
+}
+
 function closeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
   current.requestWindowClose(in id);
@@ -44,12 +49,14 @@ function setMacOSWindowTitle(
 internal function macOSWindowBackend(): WindowBackend on thread.main {
   const create: WindowCreateOperation = createMacOSWindowDeferred;
   const show: WindowOperation = showMacOSWindow;
+  const focus: WindowOperation = focusMacOSWindow;
   const hide: WindowOperation = hideMacOSWindow;
   const close: WindowOperation = closeMacOSWindow;
   const setTitle: WindowTitleOperation = setMacOSWindowTitle;
   return WindowBackend({
     create,
     show,
+    focus,
     hide,
     close,
     setTitle,

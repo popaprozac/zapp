@@ -753,10 +753,15 @@ application menu. Its icon is a new embedded monochrome note glyph, independent
 of earlier Zapp branding.
 
 The demo sets `application.quitOnLastWindowClosed: false`: closing the last
-window leaves the app and workers running. **Show Z Notes** reveals a remaining
-window or creates a fresh one. **Quit Z Notes** follows the normal cancellable
+window leaves the app and workers running. **Show Z Notes** focuses a remaining
+window (revealing/restoring it if hidden or minimized), or creates and focuses
+a fresh one when all windows are closed. **Quit Z Notes** follows the normal cancellable
 application shutdown path. Use that command or the application menu to end the
 demo and let the dev launcher shut Vite down.
 
 The implementation is in [`zapp/notes-tray.zs`](zapp/notes-tray.zs). See
 [tray documentation](../../docs/trays.md) for lifetime rules and current limits.
+
+To check focus, put another app in front, hide Z Notes with Command-H, minimize
+it with the yellow button, or close every window. Then select **Show Z Notes**.
+See [window visibility and focus](../../docs/windows.md) for request/event semantics.

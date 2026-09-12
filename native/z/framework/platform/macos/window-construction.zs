@@ -89,7 +89,8 @@ internal function createMacOSWindowRuntime(
     configuration: configuration
   );
   let style = WebKit.NSWindowStyleMaskTitled
-    | WebKit.NSWindowStyleMaskClosable;
+    | WebKit.NSWindowStyleMaskClosable
+    | WebKit.NSWindowStyleMaskMiniaturizable;
   if (options.resizable) {
     style = style | WebKit.NSWindowStyleMaskResizable;
   }

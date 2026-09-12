@@ -11,12 +11,12 @@ const ICON = embed.bytes("./assets/tray.png");
 function showNotes(in invocation: CommandInvocation): void on thread.main {
   const app = Application.current();
   const windows = app.windows.all();
-  for (const window of windows) { window.show(); return; }
+  for (const window of windows) { window.focus(); return; }
   match (attempt app.windows.create(WindowOptions({
     title: "Z Notes", url: "/notes", inject: Array<String>("base"),
     width: 720, height: 460,
   }))) {
-    success(_) => {}
+    success(window) => window.focus();
     failure(error) => console.error(`could not reopen Z Notes: ${error.message}`);
   }
 }

@@ -1,4 +1,5 @@
 import WebKit from "WebKit/WebKit.h";
+import { showMacOSNativeWindow, focusMacOSNativeWindow } from "./window-activation.zs";
 import { configuredApplicationQuitOnLastWindowClosed } from "../../configured-application.zs";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
@@ -273,11 +274,20 @@ internal class MacOSApplicationRuntime {
   }
 
   function showWindow(in id: String): void on thread.main {
-    for (const entry of this.nativeWindows) {
-      if (entry.value.id == id) {
-        entry.value.window.makeKeyAndOrderFront(null);
-        return;
-      }
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => showMacOSNativeWindow(in window.window);
+      none => {}
+    }
+  }
+
+  function focusWindow(in id: String): void on thread.main {
+    // Keep an owned runtime reference, not a live Map iteration/view, across
+    // AppKit's synchronous focus callbacks, which may close this window.
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => focusMacOSNativeWindow(in window.window);
+      none => {}
     }
   }
 
@@ -325,7 +335,7 @@ internal class MacOSApplicationRuntime {
     };
   }
 
-  function contextMenuWindow(in id: String): Option<MacOSWindowRuntime> on thread.main {
+  function nativeWindow(in id: String): Option<MacOSWindowRuntime> on thread.main {
     for (const entry of this.nativeWindows) {
       if (entry.value.id == id) return Option.some(entry.value);
     }

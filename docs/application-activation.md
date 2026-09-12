@@ -46,7 +46,7 @@ import {
 
 const reopen = try app.events.reopenRequested.subscribe(
   move (in event: ApplicationReopenRequestedEvent): void => {
-    window.show();
+    window.focus();
   }
 );
 

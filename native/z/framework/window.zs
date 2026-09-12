@@ -42,6 +42,7 @@ internal type WindowTitleOperation = (
 internal struct WindowBackend {
   create: WindowCreateOperation;
   show: WindowOperation;
+  focus: WindowOperation;
   hide: WindowOperation;
   close: WindowOperation;
   setTitle: WindowTitleOperation;
@@ -78,6 +79,7 @@ function inactiveWindowBackend(): WindowBackend on thread.main {
   return WindowBackend({
     create: ignoreWindowCreate,
     show: ignoreWindowOperation,
+    focus: ignoreWindowOperation,
     hide: ignoreWindowOperation,
     close: ignoreWindowOperation,
     setTitle: ignoreWindowTitle,
@@ -134,6 +136,17 @@ export readonly class Window on thread.main {
     }
   }
 
+  // Reveal/restore this window and request foreground keyboard focus. The OS
+  // decides activation; the native delegate, not this request, emits focused.
+  function focus(): void on thread.main {
+    const id = copy this.id;
+    const current = attempt this.manager.upgrade();
+    match (current) {
+      success(manager) => manager.focus(in id);
+      failure(_) => {}
+    }
+  }
+
   function close(): void on thread.main {
     const id = copy this.id;
     const current = attempt this.manager.upgrade();
@@ -158,6 +171,7 @@ class WindowManagerState on thread.main {
   nextId: u64;
   backend: WindowBackend;
   active: boolean;
+  pendingFocus: String;
 
   function create(
     inout this,
@@ -201,8 +215,8 @@ class WindowManagerState on thread.main {
       some(record) => {
         let current = record;
         current.options.visible = true;
-        if (this.active) this.backend.show(in id);
         this.windows.set(copy id, move current);
+        if (this.active) this.backend.show(in id);
       }
       none => {}
     }
@@ -214,8 +228,25 @@ class WindowManagerState on thread.main {
       some(record) => {
         let current = record;
         current.options.visible = false;
-        if (this.active) this.backend.hide(in id);
         this.windows.set(copy id, move current);
+        if (this.pendingFocus == id) this.pendingFocus = "";
+        if (this.active) this.backend.hide(in id);
+      }
+      none => {}
+    }
+  }
+
+  function focus(inout this, in id: String): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.options.visible = true;
+        // Native focus can synchronously deliver events (and user callbacks).
+        // Restore the record first; never overwrite callback changes afterward.
+        this.windows.set(copy id, move current);
+        if (this.active) this.backend.focus(in id);
+        else this.pendingFocus = copy id;
       }
       none => {}
     }
@@ -244,6 +275,7 @@ class WindowManagerState on thread.main {
   }
 
   function closedNative(inout this, in id: String): void {
+    if (this.pendingFocus == id) this.pendingFocus = "";
     const removed = this.windows.remove(id);
     match (removed) {
       some(record) => {
@@ -352,10 +384,14 @@ class WindowManagerState on thread.main {
       const options = copy entry.value.options;
       try this.backend.create(in id, in options);
     }
+    const requestedFocus = copy this.pendingFocus;
+    this.pendingFocus = "";
+    if (this.windows.has(requestedFocus)) this.backend.focus(in requestedFocus);
   }
 
   function stop(inout this): void {
     this.active = false;
+    this.pendingFocus = "";
     this.backend = inactiveWindowBackend();
   }
 }
@@ -366,6 +402,7 @@ function createWindowManagerState(): WindowManagerState on thread.main {
     nextId: 1,
     backend: inactiveWindowBackend(),
     active: false,
+    pendingFocus: "",
   });
 }
 
@@ -405,6 +442,10 @@ export readonly class WindowManager on thread.main {
 
   internal function show(inout this, in id: String): void on thread.main {
     this.state.show(in id);
+  }
+
+  internal function focus(inout this, in id: String): void on thread.main {
+    this.state.focus(in id);
   }
 
   internal function hide(inout this, in id: String): void on thread.main {

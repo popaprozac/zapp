@@ -68,7 +68,10 @@ export default defineConfig({
 The default is `true`. With `false`, closing the last window leaves services,
 workers, and trays running; reopening a window remains possible. A windowless
 application can also call `app.run()`—no hidden WebView is created. Ensure users
-have an obvious Quit command. `Application.current().quit()` uses the ordinary
+have an obvious Quit command. A tray's Show action should call `window.focus()`
+to reveal/restore an existing window and request foreground focus; `show()`
+only requests visibility. See [window visibility and focus](windows.md).
+`Application.current().quit()` uses the ordinary
 cancellable application-quit path; it does not bypass shutdown.
 
 See [Z Notes](../spikes/z-notes/README.md#tray-menu) for a runnable example and

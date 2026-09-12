@@ -35,7 +35,10 @@ function openRequestedNote(
       height: 460,
     }));
     match (opened) {
-      success(window) => console.log(`deep link opened note ${id} in ${window.id}`);
+      success(window) => {
+        window.focus();
+        console.log(`deep link opened note ${id} in ${window.id}`);
+      }
       failure(error) => console.error(`could not open requested note: ${error.message}`);
     }
     return;
@@ -60,7 +63,7 @@ export function observeNoteActivation(
     };
   const reopenHandler: (in event: ApplicationReopenRequestedEvent) => void on thread.main =
     move (in event: ApplicationReopenRequestedEvent): void => {
-      window.show();
+      window.focus();
       console.log("Z Notes handled an application reopen request");
     };
   const links = try app.events.openURLRequested.subscribe(linkHandler);
@@ -69,7 +72,7 @@ export function observeNoteActivation(
     move (in event: ApplicationSecondInstanceLaunchedEvent): void => {
       // A launch is an app-authored request, not an automatic URL/file action.
       // Keep argument contents private; a real CLI route would validate them.
-      window.show();
+      window.focus();
       console.log(`Z Notes handled a secondary launch (${event.arguments.length} arguments)`);
     };
   const launches = try app.events.secondInstanceLaunched.subscribe(launchHandler);

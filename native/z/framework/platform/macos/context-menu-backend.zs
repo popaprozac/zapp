@@ -55,7 +55,7 @@ internal function showMacOSContextMenu(
   options: ContextMenuOptions
 ): void throws MenuError on thread.main {
   const runtime = currentMacOSApplication();
-  const found = runtime.contextMenuWindow(in id);
+  const found = runtime.nativeWindow(in id);
   const window = match (found) {
     some(value) => value;
     none => throw MenuError({ message: "context menu window is no longer available" });
@@ -103,7 +103,7 @@ internal function showMacOSFrontendContextMenu(
   options: ContextMenuOptions
 ): void throws MenuError on thread.main {
   const application = currentMacOSApplication();
-  const found = application.contextMenuWindow(in id);
+  const found = application.nativeWindow(in id);
   const zoom = match (found) {
     some(window) => window.webView.pageZoom;
     none => throw MenuError({ message: "context menu window is no longer available" });
