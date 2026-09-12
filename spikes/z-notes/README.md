@@ -774,3 +774,11 @@ the window forward. The event panel counts AppKit-confirmed minimized and
 unminimized transitions, including those initiated through the yellow button
 or Dock. Background WebView timers may be throttled; the native tray can always
 request restoration independently.
+
+The same panel includes **Maximize**, **Unmaximize**, **Enter fullscreen**, and
+**Exit fullscreen**. Maximize uses macOS's native standard window size, not
+fullscreen or forced screen fill; Unmaximize restores the ordinary frame.
+Repeated requests are idempotent. Fullscreen changes finish asynchronously and
+the event counters update only after native confirmation. Try requesting exit
+while entry is still animating: the latest requested state is applied after
+the current native transition completes.

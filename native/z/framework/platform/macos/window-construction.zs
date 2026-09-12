@@ -31,6 +31,7 @@ import {
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { observeWindowPresentation } from "./window-presentation.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 
 internal function createMacOSWindowRuntime(
@@ -126,6 +127,7 @@ internal function createMacOSWindowRuntime(
     didCloseNativeWindow
   );
   window.delegate = windowDelegate;
+  const presentationObserver = observeWindowPresentation(copy id, window, webView, windowManager);
   startConfiguredWindowSmokeSupport(
     in id,
     nativeId,
@@ -147,6 +149,7 @@ internal function createMacOSWindowRuntime(
     schemeHandler,
     navigationDelegate,
     windowDelegate,
+    presentationObserver,
     registration,
     pendingRequests: createPendingRequests(),
     capabilitySelection,

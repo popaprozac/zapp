@@ -3,7 +3,7 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import { macOSContentDimension } from "./window-geometry.zs";
-import { MacOSWindow } from "./window-resize.zs";
+import { MacOSWindow, queueWindowPresentation, queueWindowFullscreen } from "./window-resize.zs";
 import {
   deliverWebViewWindowEvent,
   deliverWebViewWindowResize,
@@ -121,6 +121,9 @@ class DesktopWindowDelegate on thread.main
         const width = macOSContentDimension(contentView.bounds.size.width);
         const height = macOSContentDimension(contentView.bounds.size.height);
         windows.resizedNative(in id, width, height);
+        // Coalesced observation outside the native geometry entry, including
+        // user resizing a previously zoomed window back to an ordinary frame.
+        queueWindowPresentation(window);
         deliverWebViewWindowResize(
           in webView,
           in id,
@@ -144,22 +147,40 @@ class DesktopWindowDelegate on thread.main
 
   function willEnterFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowWillEnterFullScreen:" {
     this.window.setSystemResize(true);
+    match (attempt this.windows.upgrade()) {
+      success(windows) => windows.fullscreenWillChangeNative(in this.id);
+      failure(_) => {}
+    }
   }
 
   function willExitFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowWillExitFullScreen:" {
     this.window.setSystemResize(true);
+    match (attempt this.windows.upgrade()) {
+      success(windows) => windows.fullscreenWillChangeNative(in this.id);
+      failure(_) => {}
+    }
+  }
+
+  function didEnterFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowDidEnterFullScreen:" {
+    this.window.setSystemResize(true);
+    queueWindowFullscreen(this.window);
   }
 
   function didExitFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowDidExitFullScreen:" {
     this.window.setSystemResize(false);
+    queueWindowFullscreen(this.window);
+    queueWindowPresentation(this.window);
   }
 
   function didFailToEnterFullScreen(inout this, in window: WebKit.NSWindow): void as "windowDidFailToEnterFullScreen:" {
     this.window.setSystemResize(false);
+    queueWindowFullscreen(this.window);
+    queueWindowPresentation(this.window);
   }
 
   function didFailToExitFullScreen(inout this, in window: WebKit.NSWindow): void as "windowDidFailToExitFullScreen:" {
     this.window.setSystemResize(true);
+    queueWindowFullscreen(this.window);
   }
 }
 

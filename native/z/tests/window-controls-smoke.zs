@@ -62,7 +62,9 @@ function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thr
     if (windows.closeRequestedNative(in id)) windows.closedNative(in id);
   };
   const setTitle: WindowTitleOperation = (in id: String, in title: String): void => {};
-  return WindowBackend({ create, show: noop, hide: noop, focus, minimize, unminimize, close, setTitle });
+  const setState: (in id: String, value: boolean) => void on thread.main = (in id: String, value: boolean): void => {};
+  return WindowBackend({ create, show: noop, hide: noop, focus, minimize, unminimize, close, setTitle,
+    setMaximized: setState, setFullscreen: setState });
 }
 
 function selection(): CapabilitySelection {

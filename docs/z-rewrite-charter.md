@@ -435,8 +435,10 @@ native core was replaced.
 
 Current checkpoint: the Z Notes application creates multiple native windows,
 uses generated typed services with error and cancellation propagation, and
-drives `show`, `hide`, `focus`, `minimize`, `unminimize`, `setTitle`, and `close` through ordinary frontend window
-handles into the Z-owned manager. AppKit focus, blur, resize, and minimization callbacks now
+drives `show`, `hide`, `focus`, `minimize`, `unminimize`, `maximize`, `unmaximize`,
+`setFullscreen`, `setTitle`, and `close` through ordinary frontend window
+handles into the Z-owned manager. AppKit focus, blur, resize, minimization,
+native zoom, and fullscreen callbacks now
 flow through typed Z events into the matching WebView. The focused
 `@zappdev/runtime/window` boundary deliberately exposes only this composed
 surface, talks directly to the narrow bridge, and neither imports nor exposes

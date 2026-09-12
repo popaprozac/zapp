@@ -1,4 +1,5 @@
 import { Map } from "std/collections";
+import { WindowPresentationState } from "./window-presentation.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -24,6 +25,7 @@ struct WindowRecord {
   window: Window;
   options: WindowOptions;
   pendingMinimize: boolean = false;
+  presentation: WindowPresentationState = WindowPresentationState();
 }
 
 internal type WindowCreateOperation = (
@@ -40,12 +42,19 @@ internal type WindowTitleOperation = (
   in title: String
 ) => void on thread.main;
 
+internal type WindowBooleanOperation = (
+  in id: String,
+  value: boolean
+) => void on thread.main;
+
 internal struct WindowBackend {
   create: WindowCreateOperation;
   show: WindowOperation;
   focus: WindowOperation;
   minimize: WindowOperation;
   unminimize: WindowOperation;
+  setMaximized: WindowBooleanOperation;
+  setFullscreen: WindowBooleanOperation;
   hide: WindowOperation;
   close: WindowOperation;
   setTitle: WindowTitleOperation;
@@ -72,6 +81,7 @@ function ignoreWindowCreate(
 ): void throws WindowError on thread.main {}
 
 function ignoreWindowOperation(in id: String): void on thread.main {}
+function ignoreWindowBoolean(in id: String, value: boolean): void on thread.main {}
 
 function ignoreWindowTitle(
   in id: String,
@@ -85,6 +95,8 @@ function inactiveWindowBackend(): WindowBackend on thread.main {
     focus: ignoreWindowOperation,
     minimize: ignoreWindowOperation,
     unminimize: ignoreWindowOperation,
+    setMaximized: ignoreWindowBoolean,
+    setFullscreen: ignoreWindowBoolean,
     hide: ignoreWindowOperation,
     close: ignoreWindowOperation,
     setTitle: ignoreWindowTitle,
@@ -164,6 +176,30 @@ export readonly class Window on thread.main {
     const id = copy this.id;
     match (attempt this.manager.upgrade()) {
       success(manager) => manager.unminimize(in id);
+      failure(_) => {}
+    }
+  }
+
+  function maximize(): void on thread.main {
+    const id = copy this.id;
+    match (attempt this.manager.upgrade()) {
+      success(manager) => manager.setMaximized(in id, true);
+      failure(_) => {}
+    }
+  }
+
+  function unmaximize(): void on thread.main {
+    const id = copy this.id;
+    match (attempt this.manager.upgrade()) {
+      success(manager) => manager.setMaximized(in id, false);
+      failure(_) => {}
+    }
+  }
+
+  function setFullscreen(value: boolean): void on thread.main {
+    const id = copy this.id;
+    match (attempt this.manager.upgrade()) {
+      success(manager) => manager.setFullscreen(in id, value);
       failure(_) => {}
     }
   }
@@ -300,6 +336,105 @@ class WindowManagerState on thread.main {
         if (this.active) this.backend.unminimize(in id);
       }
       none => {}
+    }
+  }
+
+
+  function setMaximized(inout this, in id: String, value: boolean): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.presentation.requestMaximized(value);
+        this.windows.set(copy id, move current);
+        this.drivePresentation(in id);
+      }
+      none => {}
+    }
+  }
+
+  function setFullscreen(inout this, in id: String, value: boolean): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.presentation.requestFullscreen(value);
+        this.windows.set(copy id, move current);
+        this.drivePresentation(in id);
+      }
+      none => {}
+    }
+  }
+
+  function drivePresentation(inout this, in id: String): void {
+    if (!this.active) return;
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        const fullscreen = current.presentation.takeFullscreenRequest();
+        const maximized = current.presentation.takeMaximizedRequest();
+        this.windows.set(copy id, move current);
+        match (fullscreen) {
+          some(value) => { this.backend.setFullscreen(in id, value); return; }
+          none => {}
+        }
+        match (maximized) {
+          some(value) => this.backend.setMaximized(in id, value);
+          none => {}
+        }
+      }
+      none => {}
+    }
+  }
+
+  function fullscreenWillChangeNative(inout this, in id: String): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.presentation.beginFullscreen();
+        this.windows.set(copy id, move current);
+      }
+      none => {}
+    }
+  }
+
+  function fullscreenChangedNative(inout this, in id: String, value: boolean): boolean {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        const changed = current.presentation.completeFullscreen(value);
+        const window = current.window;
+        this.windows.set(copy id, move current);
+        if (changed) {
+          if (value) window.events.publishFullscreenEntered(in id);
+          else window.events.publishFullscreenExited(in id);
+        }
+        // Subscribers can close the window or enqueue a newer desired state.
+        this.drivePresentation(in id);
+        return changed;
+      }
+      none => return false;
+    }
+  }
+
+  function maximizedChangedNative(inout this, in id: String, value: boolean): boolean {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        const changed = current.presentation.observeMaximized(value);
+        const window = current.window;
+        this.windows.set(copy id, move current);
+        if (changed) {
+          if (value) window.events.publishMaximized(in id);
+          else window.events.publishUnmaximized(in id);
+        }
+        return changed;
+      }
+      none => return false;
     }
   }
 
@@ -462,6 +597,7 @@ class WindowManagerState on thread.main {
               current.pendingMinimize = false;
               this.windows.set(copy id, move current);
               if (minimize) this.backend.minimize(in id);
+              this.drivePresentation(in id);
             }
             none => {}
           }
@@ -547,6 +683,26 @@ export readonly class WindowManager on thread.main {
 
   internal function unminimizedNative(inout this, in id: String): void on thread.main {
     this.state.unminimizedNative(in id);
+  }
+
+  internal function setMaximized(inout this, in id: String, value: boolean): void on thread.main {
+    this.state.setMaximized(in id, value);
+  }
+
+  internal function setFullscreen(inout this, in id: String, value: boolean): void on thread.main {
+    this.state.setFullscreen(in id, value);
+  }
+
+  internal function fullscreenWillChangeNative(inout this, in id: String): void on thread.main {
+    this.state.fullscreenWillChangeNative(in id);
+  }
+
+  internal function fullscreenChangedNative(inout this, in id: String, value: boolean): boolean on thread.main {
+    return this.state.fullscreenChangedNative(in id, value);
+  }
+
+  internal function maximizedChangedNative(inout this, in id: String, value: boolean): boolean on thread.main {
+    return this.state.maximizedChangedNative(in id, value);
   }
 
   internal function hide(inout this, in id: String): void on thread.main {

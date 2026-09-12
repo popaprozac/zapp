@@ -48,8 +48,9 @@ function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thr
     if (windows.closeRequestedNative(in id)) windows.closedNative(in id);
   };
   const setTitle: WindowTitleOperation = (in id: String, in title: String): void => {};
+  const setState: (in id: String, value: boolean) => void on thread.main = (in id: String, value: boolean): void => {};
   return WindowBackend({ create, show, focus, hide, close, setTitle,
-    minimize: hide, unminimize: hide });
+    minimize: hide, unminimize: hide, setMaximized: setState, setFullscreen: setState });
 }
 
 function verify(): i32 throws WindowError on thread.main {

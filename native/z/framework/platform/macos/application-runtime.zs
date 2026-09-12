@@ -1,6 +1,7 @@
 import WebKit from "WebKit/WebKit.h";
 import { showMacOSNativeWindow, focusMacOSNativeWindow,
-  minimizeMacOSNativeWindow, unminimizeMacOSNativeWindow } from "./window-activation.zs";
+  minimizeMacOSNativeWindow, unminimizeMacOSNativeWindow,
+  setMacOSNativeWindowMaximized, setMacOSNativeWindowFullscreen } from "./window-activation.zs";
 import { configuredApplicationQuitOnLastWindowClosed } from "../../configured-application.zs";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
@@ -306,6 +307,32 @@ internal class MacOSApplicationRuntime {
     const found = this.nativeWindow(in id);
     match (found) {
       some(window) => unminimizeMacOSNativeWindow(in window.window);
+      none => {}
+    }
+  }
+
+  function setWindowMaximized(in id: String, value: boolean): void on thread.main {
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => setMacOSNativeWindowMaximized(in window.window, value);
+      none => {}
+    }
+  }
+
+  function setWindowFullscreen(in id: String, value: boolean): void on thread.main {
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => {
+        const current = usize(window.window.styleMask & WebKit.NSWindowStyleMaskFullScreen) != 0;
+        // Refusal/no-op must release the logical transition rather than leave
+        // later requests waiting for a delegate notification that cannot fire.
+        if (current == value || usize(window.window.styleMask & WebKit.NSWindowStyleMaskResizable) == 0) {
+          let windows = this.windowManager;
+          windows.fullscreenChangedNative(in id, current);
+          return;
+        }
+        setMacOSNativeWindowFullscreen(in window.window, value);
+      }
       none => {}
     }
   }

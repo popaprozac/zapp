@@ -93,6 +93,22 @@ export readonly struct WindowUnminimizedEvent {
   windowId: String;
 }
 
+export readonly struct WindowMaximizedEvent {
+  windowId: String;
+}
+
+export readonly struct WindowUnmaximizedEvent {
+  windowId: String;
+}
+
+export readonly struct WindowFullscreenEnteredEvent {
+  windowId: String;
+}
+
+export readonly struct WindowFullscreenExitedEvent {
+  windowId: String;
+}
+
 export readonly struct WindowSize {
   width: u32;
   height: u32;
@@ -163,6 +179,10 @@ export enum WindowEvent {
   blurred WindowBlurredEvent,
   minimized WindowMinimizedEvent,
   unminimized WindowUnminimizedEvent,
+  maximized WindowMaximizedEvent,
+  unmaximized WindowUnmaximizedEvent,
+  fullscreenEntered WindowFullscreenEnteredEvent,
+  fullscreenExited WindowFullscreenExitedEvent,
   resized WindowResizedEvent,
   navigationRequested WindowNavigationRequestedEvent,
   closeRequested WindowCloseRequestedEvent,

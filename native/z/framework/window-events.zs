@@ -10,6 +10,10 @@ import {
   WindowFocusedEvent,
   WindowMinimizedEvent,
   WindowUnminimizedEvent,
+  WindowMaximizedEvent,
+  WindowUnmaximizedEvent,
+  WindowFullscreenEnteredEvent,
+  WindowFullscreenExitedEvent,
   WindowNavigationRequestedEvent,
   WindowResizedEvent,
   WindowSize,
@@ -24,6 +28,10 @@ export readonly class WindowEvents on thread.main {
   readonly blurred: Event<WindowBlurredEvent>;
   readonly minimized: Event<WindowMinimizedEvent>;
   readonly unminimized: Event<WindowUnminimizedEvent>;
+  readonly maximized: Event<WindowMaximizedEvent>;
+  readonly unmaximized: Event<WindowUnmaximizedEvent>;
+  readonly fullscreenEntered: Event<WindowFullscreenEnteredEvent>;
+  readonly fullscreenExited: Event<WindowFullscreenExitedEvent>;
   readonly resized: Event<WindowResizedEvent>;
   readonly navigationRequested: Event<WindowNavigationRequestedEvent>;
   readonly closeRequested: Event<WindowCloseRequestedEvent>;
@@ -35,6 +43,10 @@ export readonly class WindowEvents on thread.main {
     this.blurred = new Event<WindowBlurredEvent>();
     this.minimized = new Event<WindowMinimizedEvent>();
     this.unminimized = new Event<WindowUnminimizedEvent>();
+    this.maximized = new Event<WindowMaximizedEvent>();
+    this.unmaximized = new Event<WindowUnmaximizedEvent>();
+    this.fullscreenEntered = new Event<WindowFullscreenEnteredEvent>();
+    this.fullscreenExited = new Event<WindowFullscreenExitedEvent>();
     this.resized = new Event<WindowResizedEvent>();
     this.navigationRequested = new Event<WindowNavigationRequestedEvent>();
     this.closeRequested = new Event<WindowCloseRequestedEvent>();
@@ -73,6 +85,42 @@ export readonly class WindowEvents on thread.main {
     let unminimized = this.unminimized;
     unminimized.publish(in event);
     const aggregate = WindowEvent.unminimized(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishMaximized(in windowId: String): void {
+    const event = WindowMaximizedEvent({ windowId: copy windowId });
+    let source = this.maximized;
+    source.publish(in event);
+    const aggregate = WindowEvent.maximized(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishUnmaximized(in windowId: String): void {
+    const event = WindowUnmaximizedEvent({ windowId: copy windowId });
+    let source = this.unmaximized;
+    source.publish(in event);
+    const aggregate = WindowEvent.unmaximized(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishFullscreenEntered(in windowId: String): void {
+    const event = WindowFullscreenEnteredEvent({ windowId: copy windowId });
+    let source = this.fullscreenEntered;
+    source.publish(in event);
+    const aggregate = WindowEvent.fullscreenEntered(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishFullscreenExited(in windowId: String): void {
+    const event = WindowFullscreenExitedEvent({ windowId: copy windowId });
+    let source = this.fullscreenExited;
+    source.publish(in event);
+    const aggregate = WindowEvent.fullscreenExited(copy event);
     let all = this.all;
     all.publish(in aggregate);
   }
@@ -152,6 +200,14 @@ export readonly class WindowEvents on thread.main {
     let unminimized = this.unminimized;
     minimized.finish();
     unminimized.finish();
+    let maximized = this.maximized;
+    maximized.finish();
+    let unmaximized = this.unmaximized;
+    unmaximized.finish();
+    let fullscreenEntered = this.fullscreenEntered;
+    fullscreenEntered.finish();
+    let fullscreenExited = this.fullscreenExited;
+    fullscreenExited.finish();
     resized.finish();
     navigationRequested.finish();
     closeRequested.finish();

@@ -1,4 +1,4 @@
-# Window visibility, focus, and minimization
+# Window visibility, focus, and presentation
 
 Z windows are application-owned handles. Their UI operations run on
 `thread.main`; keeping a handle does not keep a closed native window alive.
@@ -9,6 +9,10 @@ window.focus();  // Reveal/restore, then request foreground keyboard focus.
 window.hide();   // Hide without closing or destroying the window.
 window.minimize();   // Minimize through the platform's normal window behavior.
 window.unminimize(); // Undo minimization; no explicit activation/focus request.
+window.maximize();   // Request the platform's standard enlarged frame.
+window.unmaximize(); // Restore from that enlarged frame.
+window.setFullscreen(true);  // Request native fullscreen.
+window.setFullscreen(false); // Request exit from native fullscreen.
 window.close();  // Follow the cancellable closeRequested lifecycle.
 ```
 
@@ -29,8 +33,27 @@ for interaction. The operating system still controls its normal restoration
 and focus policy. Hiding and minimizing keep the native window, WebView, and
 window-owned work alive; neither counts as closing the last window.
 
-Maximize/zoom and fullscreen are not aliases for these operations and remain
-separate API-design work.
+## Maximize and fullscreen
+
+`maximize()` uses the platform's standard enlarged state. On macOS this is
+AppKit's native zoom target, including its sizing constraints and delegate
+decisions—not a forced frame covering the entire work area. `unmaximize()`
+restores the prior ordinary frame. The display-driven resize controller keeps
+the WebView viewport responsive during this transition. Hidden or fully
+occluded windows apply the target immediately because their native display
+links may be paused; reduced-motion settings also bypass the animation.
+
+`setFullscreen(boolean)` requests native fullscreen independently of zoom.
+These are desired-state operations: repeating `maximize()` does not unmaximize,
+and repeating `setFullscreen(true)` does not exit fullscreen. During a native
+fullscreen transition, the latest requested fullscreen state wins and is
+applied after AppKit confirms completion or failure. A failed request does not
+retry indefinitely or fabricate a completion event.
+
+A maximize/unmaximize request made while fullscreen (or transitioning) waits
+until the window returns to ordinary presentation. It does not implicitly exit
+fullscreen. Non-resizable windows ignore these requests. None of these methods
+implicitly calls `focus()` or creates a replacement for a closed window.
 
 ## TypeScript window handles
 
@@ -43,6 +66,9 @@ const window = currentWindow();
 window.minimize();
 window.unminimize();
 window.focus();
+window.maximize();
+window.unmaximize();
+window.setFullscreen(true);
 
 const subscription = window.subscribe(WindowEvent.MINIMIZED, event => {
   console.log("Minimized", event.windowId);
@@ -72,6 +98,22 @@ publishes them from AppKit's
 and [unminimized](https://developer.apple.com/documentation/appkit/nswindow/diddeminiaturizenotification)
 notifications, not optimistically from method calls. Notifications describe
 native state; they are not a promise that every compositor animation has ended.
+
+Presentation state is also native-confirmed. Each payload contains `windowId`:
+
+| Z event stream | TypeScript event |
+| --- | --- |
+| `window.events.maximized` | `WindowEvent.MAXIMIZED` |
+| `window.events.unmaximized` | `WindowEvent.UNMAXIMIZED` |
+| `window.events.fullscreenEntered` | `WindowEvent.FULLSCREEN_ENTERED` |
+| `window.events.fullscreenExited` | `WindowEvent.FULLSCREEN_EXITED` |
+
+They also appear as matching cases in `window.events.all`. Repeated native
+observations are deduplicated. Intermediate animated geometry and fullscreen
+geometry do not masquerade as maximize/unmaximize events. Native Z subscribers
+may close their window from a callback; pending work and frontend delivery will
+not resurrect it. Native observation tokens are owned by the window runtime and
+unregistered when it is destroyed.
 
 The current macOS backend uses `NSApplication.activate()`, whose success is
 [subject to macOS activation policy](https://developer.apple.com/documentation/appkit/nsapplication/activate()).
@@ -113,6 +155,12 @@ the minimized/unminimized counters, and also try the native yellow button and
 Dock restoration. Demo timers run in the WebView and may be throttled while
 backgrounded; the tray's **Show Z Notes** action remains a native way back.
 
+**Maximize**, **Unmaximize**, **Enter fullscreen**, and **Exit fullscreen** use
+the same controls as native Z. Watch their individual event counters. Try
+repeating a request during animation, requesting the opposite state before it
+finishes, and using the native green button. Fullscreen animation and Spaces
+behavior still need visual validation on your macOS setup.
+
 Contributor checks:
 
 ```sh
@@ -126,6 +174,12 @@ malformed and stale bridge targets, and native-only event publication. The
 AppKit probe also checks repeated minimization requests and actual delegate
 notifications. It separates animation cycles instead of treating notification
 delivery as compositor completion.
+The presentation probe additionally checks repeated zoom requests, the native
+standard frame, exact restoration, delegate veto, opposite desired-state
+requests, and deferred observation outside guarded native geometry calls.
+Unattended probes may be occluded and therefore use immediate geometry;
+visible animation reversal and fullscreen Spaces behavior need the visual
+checks above.
 The native probe checks visibility and minimized-window restoration, reporting
 actual key/activation state without assuming unattended processes can take
 focus. User-initiated foreground activation still needs the visual check above.

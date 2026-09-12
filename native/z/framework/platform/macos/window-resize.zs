@@ -4,6 +4,19 @@ import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 
+internal const windowPresentationNotification: String = "ZappWindowPresentationChanged";
+internal const windowFullscreenNotification: String = "ZappWindowFullscreenCompleted";
+
+internal function queueWindowPresentation(in window: WebKit.NSWindow): void on thread.main {
+  const notification = WebKit.NSNotification.notificationWithName(windowPresentationNotification, object: window);
+  WebKit.NSNotificationQueue.defaultQueue.enqueueNotification(notification, postingStyle: WebKit.NSPostASAP);
+}
+
+internal function queueWindowFullscreen(in window: WebKit.NSWindow): void on thread.main {
+  const notification = WebKit.NSNotification.notificationWithName(windowFullscreenNotification, object: window);
+  WebKit.NSNotificationQueue.defaultQueue.enqueueNotification(notification, postingStyle: WebKit.NSPostASAP);
+}
+
 function interpolateFrame(start: WebKit.CGRect, target: WebKit.CGRect, progress: f64): WebKit.CGRect {
   if (progress <= 0) return start;
   if (progress >= 1) return target;
@@ -90,6 +103,10 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     return super.isZoomed();
   }
 
+  function presentationStable(): boolean as "zappPresentationStable" {
+    return !this.animating && !this.preparingZoom && !this.systemResize && !this.shuttingDown;
+  }
+
   override function animationResizeTime(frame: WebKit.CGRect): f64 as "animationResizeTime:" {
     if (this.preparingZoom) return 0;
     return super.animationResizeTime(frame);
@@ -114,7 +131,8 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     const updateRestore = this.hasRestoreFrame && !wasZoomed && !equalSizes(start, frame);
     const duration = super.animationResizeTime(frame);
     const screen = this.screen;
-    if (!animate || this.shuttingDown || WebKit.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion || duration <= 0 || screen == null || equalFrames(start, frame)) {
+    if (!animate || this.shuttingDown || WebKit.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion || duration <= 0 || screen == null
+      || usize(this.occlusionState & WebKit.NSWindowOcclusionStateVisible) == 0 || equalFrames(start, frame)) {
       this.applyingFrame = true;
       super.setFrame(frame, display: display);
       this.applyingFrame = false;
@@ -172,7 +190,10 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     let targetZoomed = super.isZoomed();
     // An unchanged target includes a delegate veto. Never manufacture a
     // restore transition after AppKit declined the operation.
-    if (equalFrames(start, target)) return;
+    if (equalFrames(start, target)) {
+      queueWindowPresentation(this);
+      return;
+    }
     if (targetZoomed) {
       if (!this.hasRestoreFrame) {
         this.restoreFrame = start;
@@ -181,11 +202,15 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     } else if (this.hasRestoreFrame) target = this.restoreFrame;
 
     const screen = this.screen;
-    if (this.shuttingDown || WebKit.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion || screen == null) {
+    // Window display links pause while occluded/hidden. Such a request must
+    // still reach its native target; there is no visible animation to smooth.
+    if (this.shuttingDown || WebKit.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion || screen == null
+      || usize(this.occlusionState & WebKit.NSWindowOcclusionStateVisible) == 0) {
       this.applyingFrame = true;
       super.setFrame(target, display: true);
       this.applyingFrame = false;
       if (!targetZoomed) this.hasRestoreFrame = false;
+      queueWindowPresentation(this);
       return;
     }
     this.applyingFrame = true;
@@ -199,6 +224,7 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
       super.setFrame(target, display: true);
       this.applyingFrame = false;
       if (!targetZoomed) this.hasRestoreFrame = false;
+      queueWindowPresentation(this);
       return;
     }
     this.startFrame = start;
@@ -236,6 +262,7 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     super.setFrame(frame, display: display);
     this.applyingFrame = false;
     if (progress >= 1 && this.updateRestoreOnCompletion) this.restoreFrame = this.frame;
+    if (progress >= 1) queueWindowPresentation(this);
   }
 
   override function close(inout this): void as "close" {
@@ -257,6 +284,7 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.zoomTransition = false;
     invalidateDisplay(this.displayLink);
     this.displayLink = null;
+    if (!this.systemResize && !this.shuttingDown) queueWindowPresentation(this);
   }
 
   function setSystemResize(inout this, active: boolean): void as "zappSetSystemResize:" {

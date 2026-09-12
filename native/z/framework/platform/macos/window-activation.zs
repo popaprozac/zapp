@@ -24,3 +24,14 @@ internal function unminimizeMacOSNativeWindow(in window: AppKit.NSWindow): void 
   // Undo minimization only. No explicit app activation or key-window request.
   if (window.miniaturized) window.deminiaturize(null);
 }
+
+internal function setMacOSNativeWindowMaximized(in window: AppKit.NSWindow, value: boolean): void on thread.main {
+  if (usize(window.styleMask & AppKit.NSWindowStyleMaskFullScreen) != 0) return;
+  if (usize(window.styleMask & AppKit.NSWindowStyleMaskResizable) == 0) return;
+  if (window.zoomed != value) window.zoom(null);
+}
+
+internal function setMacOSNativeWindowFullscreen(in window: AppKit.NSWindow, value: boolean): void on thread.main {
+  const current = usize(window.styleMask & AppKit.NSWindowStyleMaskFullScreen) != 0;
+  if (current != value) window.toggleFullScreen(null);
+}

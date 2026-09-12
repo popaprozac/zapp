@@ -41,6 +41,11 @@ readonly struct FrontendWindowTitleAction {
   title: String;
 }
 
+readonly struct FrontendWindowFullscreenAction {
+  windowId: String;
+  fullscreen: boolean;
+}
+
 readonly struct FrontendWindowList {
   ids: Array<String>;
 }
@@ -193,14 +198,24 @@ function routeWindowAction(
     return true;
   }
   if (message.method == "focus" || message.method == "minimize"
-    || message.method == "unminimize") {
+    || message.method == "unminimize" || message.method == "maximize"
+    || message.method == "unmaximize") {
     const decoded = attempt json.decode<FrontendWindowAction>(in message.arguments);
     match (decoded) {
       success(action) => {
         if (message.method == "focus") windows.focus(in action.windowId);
         else if (message.method == "minimize") windows.minimize(in action.windowId);
-        else windows.unminimize(in action.windowId);
+        else if (message.method == "unminimize") windows.unminimize(in action.windowId);
+        else windows.setMaximized(in action.windowId, message.method == "maximize");
       }
+      failure(_) => {}
+    }
+    return true;
+  }
+  if (message.method == "setFullscreen") {
+    const decoded = attempt json.decode<FrontendWindowFullscreenAction>(in message.arguments);
+    match (decoded) {
+      success(action) => windows.setFullscreen(in action.windowId, action.fullscreen);
       failure(_) => {}
     }
     return true;

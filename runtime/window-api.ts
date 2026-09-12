@@ -54,6 +54,11 @@ export interface WindowUnminimizedEvent {
   readonly windowId: string;
 }
 
+export interface WindowMaximizedEvent { readonly windowId: string; }
+export interface WindowUnmaximizedEvent { readonly windowId: string; }
+export interface WindowFullscreenEnteredEvent { readonly windowId: string; }
+export interface WindowFullscreenExitedEvent { readonly windowId: string; }
+
 export interface WindowResizedEvent {
   readonly windowId: string;
   readonly size: WindowSize;
@@ -79,6 +84,10 @@ export const WindowEvent = {
   NAVIGATION_REQUESTED: 4,
   MINIMIZED: 5,
   UNMINIMIZED: 6,
+  MAXIMIZED: 7,
+  UNMAXIMIZED: 8,
+  FULLSCREEN_ENTERED: 9,
+  FULLSCREEN_EXITED: 10,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
@@ -112,6 +121,22 @@ export interface WindowHandle {
     handler: (event: WindowUnminimizedEvent) => void,
   ): WindowEventSubscription;
   subscribe(
+    event: typeof WindowEvent.MAXIMIZED,
+    handler: (event: WindowMaximizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.UNMAXIMIZED,
+    handler: (event: WindowUnmaximizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.FULLSCREEN_ENTERED,
+    handler: (event: WindowFullscreenEnteredEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.FULLSCREEN_EXITED,
+    handler: (event: WindowFullscreenExitedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
@@ -127,6 +152,12 @@ export interface WindowHandle {
   minimize(): void;
   /** Undo minimization without explicitly requesting app activation or focus. */
   unminimize(): void;
+  /** Request the platform's native standard enlarged frame (not fullscreen). */
+  maximize(): void;
+  /** Restore the ordinary frame. Deferred while native fullscreen is active. */
+  unmaximize(): void;
+  /** Request a desired fullscreen state; native completion events confirm it. */
+  setFullscreen(value: boolean): void;
   hide(): void;
   close(): void;
   setTitle(title: string): void;
@@ -137,6 +168,10 @@ type FocusedEventHandler =
   | ((event: WindowBlurredEvent) => void)
   | ((event: WindowMinimizedEvent) => void)
   | ((event: WindowUnminimizedEvent) => void)
+  | ((event: WindowMaximizedEvent) => void)
+  | ((event: WindowUnmaximizedEvent) => void)
+  | ((event: WindowFullscreenEnteredEvent) => void)
+  | ((event: WindowFullscreenExitedEvent) => void)
   | ((event: WindowResizedEvent) => void)
   | ((event: WindowNavigationRequestedEvent) => void);
 
@@ -149,6 +184,10 @@ const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
   [WindowEvent.BLUR]: "window:blur",
   [WindowEvent.MINIMIZED]: "window:minimized",
   [WindowEvent.UNMINIMIZED]: "window:unminimized",
+  [WindowEvent.MAXIMIZED]: "window:maximized",
+  [WindowEvent.UNMAXIMIZED]: "window:unmaximized",
+  [WindowEvent.FULLSCREEN_ENTERED]: "window:fullscreen-entered",
+  [WindowEvent.FULLSCREEN_EXITED]: "window:fullscreen-exited",
   [WindowEvent.RESIZE]: "window:resize",
   [WindowEvent.NAVIGATION_REQUESTED]: "window:navigation-requested",
 };
@@ -214,6 +253,22 @@ class FocusedWindowHandle implements WindowHandle {
     handler: (event: WindowUnminimizedEvent) => void,
   ): WindowEventSubscription;
   subscribe(
+    event: typeof WindowEvent.MAXIMIZED,
+    handler: (event: WindowMaximizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.UNMAXIMIZED,
+    handler: (event: WindowUnmaximizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.FULLSCREEN_ENTERED,
+    handler: (event: WindowFullscreenEnteredEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.FULLSCREEN_EXITED,
+    handler: (event: WindowFullscreenExitedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
@@ -260,7 +315,8 @@ class FocusedWindowHandle implements WindowHandle {
       }
 
       const receive = handler as (
-        event: WindowFocusedEvent | WindowBlurredEvent | WindowMinimizedEvent | WindowUnminimizedEvent,
+        event: WindowFocusedEvent | WindowBlurredEvent | WindowMinimizedEvent | WindowUnminimizedEvent
+          | WindowMaximizedEvent | WindowUnmaximizedEvent | WindowFullscreenEnteredEvent | WindowFullscreenExitedEvent,
       ) => void;
       receive({ windowId: this.id });
     });
@@ -271,6 +327,11 @@ class FocusedWindowHandle implements WindowHandle {
   focus(): void { windowAction("focus", { windowId: this.id }); }
   minimize(): void { windowAction("minimize", { windowId: this.id }); }
   unminimize(): void { windowAction("unminimize", { windowId: this.id }); }
+  maximize(): void { windowAction("maximize", { windowId: this.id }); }
+  unmaximize(): void { windowAction("unmaximize", { windowId: this.id }); }
+  setFullscreen(value: boolean): void {
+    windowAction("setFullscreen", { windowId: this.id, fullscreen: value });
+  }
   hide(): void { windowAction("hide", { windowId: this.id }); }
   close(): void { windowAction("close", { windowId: this.id }); }
   setTitle(title: string): void {

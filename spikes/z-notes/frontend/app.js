@@ -370,6 +370,10 @@ let focusedEvents = 0;
 let blurredEvents = 0;
 let minimizedEvents = 0;
 let unminimizedEvents = 0;
+let maximizedEvents = 0;
+let unmaximizedEvents = 0;
+let fullscreenEnteredEvents = 0;
+let fullscreenExitedEvents = 0;
 let resizedEvents = 0;
 let latestSize = "waiting";
 
@@ -380,6 +384,10 @@ function renderWindowEvents() {
     `Blurred: ${blurredEvents}`,
     `Minimized: ${minimizedEvents}`,
     `Unminimized: ${unminimizedEvents}`,
+    `Maximized: ${maximizedEvents}`,
+    `Unmaximized: ${unmaximizedEvents}`,
+    `Fullscreen entered: ${fullscreenEnteredEvents}`,
+    `Fullscreen exited: ${fullscreenExitedEvents}`,
     `Resized: ${resizedEvents}`,
     `Latest size: ${latestSize}`,
   ].join("\n");
@@ -404,6 +412,22 @@ windowHandle.subscribe(WindowEvent.UNMINIMIZED, () => {
 windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
   resizedEvents += 1;
   latestSize = `${event.size.width} × ${event.size.height}`;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.MAXIMIZED, () => {
+  maximizedEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.UNMAXIMIZED, () => {
+  unmaximizedEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.FULLSCREEN_ENTERED, () => {
+  fullscreenEnteredEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.FULLSCREEN_EXITED, () => {
+  fullscreenExitedEvents += 1;
   renderWindowEvents();
 });
 renderWindowEvents();
@@ -664,6 +688,11 @@ document.querySelector("#minimize-focus-window").addEventListener("click", () =>
   windowHandle.minimize();
   setTimeout(() => windowHandle.focus(), 2000);
 });
+
+document.querySelector("#maximize-window").addEventListener("click", () => windowHandle.maximize());
+document.querySelector("#unmaximize-window").addEventListener("click", () => windowHandle.unmaximize());
+document.querySelector("#fullscreen-window").addEventListener("click", () => windowHandle.setFullscreen(true));
+document.querySelector("#exit-fullscreen-window").addEventListener("click", () => windowHandle.setFullscreen(false));
 
 async function verifyTypedServiceError() {
   try {

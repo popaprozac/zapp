@@ -2,6 +2,7 @@ import { WindowError } from "../../application-error.zs";
 import {
   WindowBackend,
   WindowCreateOperation,
+  WindowBooleanOperation,
   WindowOperation,
   WindowOptions,
   WindowTitleOperation,
@@ -43,6 +44,16 @@ function unminimizeMacOSWindow(in id: String): void on thread.main {
   current.unminimizeWindow(in id);
 }
 
+function setMacOSWindowMaximized(in id: String, value: boolean): void on thread.main {
+  const current = currentMacOSApplication();
+  current.setWindowMaximized(in id, value);
+}
+
+function setMacOSWindowFullscreen(in id: String, value: boolean): void on thread.main {
+  const current = currentMacOSApplication();
+  current.setWindowFullscreen(in id, value);
+}
+
 function closeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
   current.requestWindowClose(in id);
@@ -62,6 +73,8 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
   const focus: WindowOperation = focusMacOSWindow;
   const minimize: WindowOperation = minimizeMacOSWindow;
   const unminimize: WindowOperation = unminimizeMacOSWindow;
+  const setMaximized: WindowBooleanOperation = setMacOSWindowMaximized;
+  const setFullscreen: WindowBooleanOperation = setMacOSWindowFullscreen;
   const hide: WindowOperation = hideMacOSWindow;
   const close: WindowOperation = closeMacOSWindow;
   const setTitle: WindowTitleOperation = setMacOSWindowTitle;
@@ -71,6 +84,8 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
     focus,
     minimize,
     unminimize,
+    setMaximized,
+    setFullscreen,
     hide,
     close,
     setTitle,

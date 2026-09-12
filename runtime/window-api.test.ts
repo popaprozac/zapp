@@ -26,6 +26,10 @@ test("focused window package exports only composed runtime values", () => {
     NAVIGATION_REQUESTED: 4,
     MINIMIZED: 5,
     UNMINIMIZED: 6,
+    MAXIMIZED: 7,
+    UNMAXIMIZED: 8,
+    FULLSCREEN_ENTERED: 9,
+    FULLSCREEN_EXITED: 10,
   });
   expect("Window" in windowAPI).toBe(false);
 });
@@ -166,6 +170,10 @@ test("focused handles send only narrow window actions", () => {
     window.focus();
     window.minimize();
     window.unminimize();
+    window.maximize();
+    window.unmaximize();
+    window.setFullscreen(true);
+    window.setFullscreen(false);
     window.setTitle("Focused");
     window.close();
     expect(posted.map((message) => JSON.parse(message))).toEqual([
@@ -174,6 +182,10 @@ test("focused handles send only narrow window actions", () => {
       { t: 4, m: "focus", a: { windowId: "win-actions" } },
       { t: 4, m: "minimize", a: { windowId: "win-actions" } },
       { t: 4, m: "unminimize", a: { windowId: "win-actions" } },
+      { t: 4, m: "maximize", a: { windowId: "win-actions" } },
+      { t: 4, m: "unmaximize", a: { windowId: "win-actions" } },
+      { t: 4, m: "setFullscreen", a: { windowId: "win-actions", fullscreen: true } },
+      { t: 4, m: "setFullscreen", a: { windowId: "win-actions", fullscreen: false } },
       {
         t: 4,
         m: "setTitle",
@@ -267,6 +279,50 @@ test("minimization subscriptions observe native transitions only and dispose ind
   }
 });
 
+test("presentation events wait for native delivery, filter identity, and unsubscribe", () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
+  const listeners = new Map<string, Set<(value: unknown) => void>>();
+  (globalThis as any)[BRIDGE_KEY] = {
+    on(name: string, receive: (value: unknown) => void) {
+      const group = listeners.get(name) ?? new Set();
+      group.add(receive);
+      listeners.set(name, group);
+      return () => group.delete(receive);
+    },
+    post() {},
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "presentation";
+  try {
+    const window = currentWindow();
+    const events: unknown[] = [];
+    const subscriptions = [
+      window.subscribe(WindowEvent.MAXIMIZED, e => events.push(["maximized", e])),
+      window.subscribe(WindowEvent.UNMAXIMIZED, e => events.push(["unmaximized", e])),
+      window.subscribe(WindowEvent.FULLSCREEN_ENTERED, e => events.push(["fullscreen-entered", e])),
+      window.subscribe(WindowEvent.FULLSCREEN_EXITED, e => events.push(["fullscreen-exited", e])),
+    ];
+    window.maximize(); window.unmaximize(); window.setFullscreen(true); window.setFullscreen(false);
+    expect(events).toEqual([]);
+    const names = ["maximized", "unmaximized", "fullscreen-entered", "fullscreen-exited"];
+    for (const name of names) {
+      for (const receive of listeners.get(`window:${name}`) ?? []) {
+        receive(null);
+        receive({ windowId: "other" });
+        receive({ windowId: "presentation", ignored: true });
+      }
+    }
+    expect(events).toEqual(names.map(name => [name, { windowId: "presentation" }]));
+    for (const subscription of subscriptions) {
+      subscription.unsubscribe(); subscription.unsubscribe();
+    }
+    expect([...listeners.values()].every(group => group.size === 0)).toBe(true);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
+  }
+});
+
 test("window controls preserve the bridge emit fallback without invoking services", () => {
   const previousBridge = (globalThis as any)[BRIDGE_KEY];
   const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
@@ -279,10 +335,14 @@ test("window controls preserve the bridge emit fallback without invoking service
   try {
     const window = currentWindow();
     window.focus(); window.minimize(); window.unminimize();
+    window.maximize(); window.unmaximize(); window.setFullscreen(false);
     expect(emitted).toEqual([
       ["__window_action:focus", { windowId: "win-fallback" }],
       ["__window_action:minimize", { windowId: "win-fallback" }],
       ["__window_action:unminimize", { windowId: "win-fallback" }],
+      ["__window_action:maximize", { windowId: "win-fallback" }],
+      ["__window_action:unmaximize", { windowId: "win-fallback" }],
+      ["__window_action:setFullscreen", { windowId: "win-fallback", fullscreen: false }],
     ]);
   } finally {
     (globalThis as any)[BRIDGE_KEY] = previousBridge;
