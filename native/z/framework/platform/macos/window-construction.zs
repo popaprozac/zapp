@@ -2,6 +2,8 @@ import Foundation from "Foundation/Foundation.h";
 import WebKit from "WebKit/WebKit.h";
 import { WindowError } from "../../application-error.zs";
 import { CapabilitySelection } from "../../application-capabilities.zs";
+import { ContextMenuSessions } from "../../context-menu.zs";
+import { ApplicationMenu } from "../../application-menu.zs";
 import { createPendingRequests } from "../../pending-requests.zs";
 import {
   WindowManager,
@@ -40,7 +42,9 @@ internal function createMacOSWindowRuntime(
   windowManager: Weak<WindowManager>,
   routeMessage: DesktopRouteMessageOperation,
   deliverResponse: DesktopDeliverResponseOperation,
-  didCloseNativeWindow: NativeWindowClosedOperation
+  didCloseNativeWindow: NativeWindowClosedOperation,
+  contextMenus: ContextMenuSessions,
+  menu: ApplicationMenu
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = WebKit.WKUserContentController.alloc().init();
   const handler = new DesktopMessageHandler({
@@ -107,7 +111,9 @@ internal function createMacOSWindowRuntime(
     copy options.navigation,
     window,
     webView,
-    windowManager
+    windowManager,
+    contextMenus,
+    menu
   );
   webView.navigationDelegate = navigationDelegate;
   const windowDelegate = createDesktopWindowDelegate(

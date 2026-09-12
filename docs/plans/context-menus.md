@@ -4,7 +4,7 @@ Approved public direction: present the existing `Menu` / `Command` model through
 `window.showContextMenu(...)`. A context menu is another presentation, not a
 second command system.
 
-## Public contract (implementation in progress)
+## Public contract
 
 ```zs
 try await window.showContextMenu(
@@ -71,5 +71,20 @@ the source-current native emitter, strict Clang at `-O0` / `-O2`, and UBSan.
 Compiler and executable processes have hard deadlines and process-tree cleanup.
 It opens no windows and is not evidence for AppKit tracking-loop behavior.
 
-This checkpoint does not expose `showContextMenu` yet. Native presentation,
-bridge routing, lifecycle hooks, public exports, and the Z Notes UI follow.
+`Window.showContextMenu` and `WindowHandle.showContextMenu` now connect through
+the authorized bridge to AppKit. Z Notes exposes note actions by right-click
+and through its Actions button. The renderer owns independent command
+connections/subscriptions, disables AppKit automatic enabling, converts
+top-left coordinates (including WebView page zoom), and delivers selection in
+the completion response. Closing, hiding, accepted navigation, and shutdown
+invalidate tracking. Native role items remain explicitly unsupported.
+
+The route and session fixtures run through both compilers at `-O0` and `-O2`
+under UBSan. The standard Z Notes desktop smoke also passes. The native tracking
+loop is synchronous internally, like the first native dialog tier; this is not
+a promise of general cooperative Z scheduling while a menu tracks.
+
+The interactive build launched successfully. Computer-use permission was not
+granted for a visual selection/dismissal check; that final manual check remains
+for the user. The bounded launch exited at its deadline without leftover
+processes.

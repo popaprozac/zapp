@@ -84,6 +84,13 @@ describe("WebView service cancellation", () => {
       const countBeforeLateAbort = messages.length;
       completedController.abort();
       expect(messages).toHaveLength(countBeforeLateAbort);
+
+      const popup = bridge.invoke("__zapp:menu:popup", {}, { timeout: 0 });
+      const popupInvoke = messages.at(-1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(messages.at(-1)).toBe(popupInvoke);
+      bridge._onInvokeResult(popupInvoke.id, true, '{"commandId":""}');
+      expect(await popup).toEqual({ commandId: "" });
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;

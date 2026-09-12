@@ -55,14 +55,65 @@ readonly class StoredApplicationMenu on thread.main {
   menu: Menu;
 }
 
+readonly class FrontendMenuPresentation on thread.main {
+  token: String;
+  windowId: String;
+  commands: Map<String, Command>;
+}
+
 class ApplicationMenuState on thread.main {
   current: StoredApplicationMenu;
   configured: boolean;
   frontendOwnerToken: String;
   frontendWindowId: String;
   frontendCommands: Map<String, Command>;
+  popup: Option<FrontendMenuPresentation>;
   backend: ApplicationMenuBackend;
   active: boolean;
+
+  function beginPresentation(
+    inout this, token: String, windowId: String, commands: Map<String, Command>
+  ): void throws MenuError {
+    if (token.byteLength == 0 || token == this.frontendOwnerToken) {
+      throw MenuError({ message: "context menus require a distinct opaque presentation identity" });
+    }
+    match (in this.popup) {
+      some(_) => throw MenuError({ message: "another context menu is already being presented" });
+      none => {}
+    }
+    this.popup = Option.some(new FrontendMenuPresentation({ token, windowId, commands }));
+  }
+
+  function finishPresentation(inout this): void {
+    this.popup = Option<FrontendMenuPresentation>.none;
+  }
+
+  function frontendCommand(
+    in ownerToken: String,
+    in windowId: String,
+    in commandId: String
+  ): Command throws MenuError {
+    if (ownerToken == this.frontendOwnerToken && windowId == this.frontendWindowId) {
+      const found = this.frontendCommands.get(commandId);
+      match (in found) {
+        some(command) => return command;
+        none => throw MenuError({ message: "unknown frontend menu command" });
+      }
+    }
+    match (in this.popup) {
+      some(presentation) => {
+        if (ownerToken == presentation.token && windowId == presentation.windowId) {
+          const found = presentation.commands.get(commandId);
+          match (in found) {
+            some(command) => return command;
+            none => throw MenuError({ message: "unknown frontend context-menu command" });
+          }
+        }
+      }
+      none => {}
+    }
+    throw MenuError({ message: "frontend menu registration is no longer active" });
+  }
 
   function set(
     inout this,
@@ -102,20 +153,8 @@ class ApplicationMenuState on thread.main {
     in commandId: String,
     enabled: boolean
   ): void throws MenuError {
-    if (
-      ownerToken != this.frontendOwnerToken
-      || windowId != this.frontendWindowId
-    ) {
-      throw MenuError({ message: "frontend menu registration is no longer active" });
-    }
-    const found = this.frontendCommands.get(commandId);
-    match (in found) {
-      some(command) => {
-        let current = command;
-        current.setEnabled(enabled);
-      }
-      none => throw MenuError({ message: "unknown frontend menu command" });
-    }
+    const command = try this.frontendCommand(in ownerToken, in windowId, in commandId);
+    command.setEnabled(enabled);
   }
 
   function setFrontendCommandState(
@@ -125,23 +164,19 @@ class ApplicationMenuState on thread.main {
     in commandId: String,
     state: CommandState
   ): void throws MenuError {
-    if (
-      ownerToken != this.frontendOwnerToken
-      || windowId != this.frontendWindowId
-    ) {
-      throw MenuError({ message: "frontend menu registration is no longer active" });
-    }
-    const found = this.frontendCommands.get(commandId);
-    match (in found) {
-      some(command) => command.setState(state);
-      none => throw MenuError({ message: "unknown frontend menu command" });
-    }
+    const command = try this.frontendCommand(in ownerToken, in windowId, in commandId);
+    command.setState(state);
   }
 
   function invalidateFrontendOwner(
     inout this,
     in windowId: String
   ): void {
+    const ownsPopup = match (in this.popup) {
+      some(presentation) => windowId == presentation.windowId;
+      none => false;
+    };
+    if (ownsPopup) this.popup = Option<FrontendMenuPresentation>.none;
     if (windowId != this.frontendWindowId) return;
     this.frontendOwnerToken = "";
     this.frontendWindowId = "";
@@ -177,6 +212,7 @@ function createApplicationMenuState(
     frontendOwnerToken: "",
     frontendWindowId: "",
     frontendCommands: Map<String, Command>(),
+    popup: Option<FrontendMenuPresentation>.none,
     backend: inactiveApplicationMenuBackend(),
     active: false,
   });
@@ -189,6 +225,19 @@ export readonly class ApplicationMenu on thread.main {
 
   internal constructor() {
     this.state = createApplicationMenuState();
+  }
+
+  internal function beginFrontendPresentation(
+    inout this,
+    token: String,
+    windowId: String,
+    commands: Map<String, Command>
+  ): void throws MenuError on thread.main {
+    try this.state.beginPresentation(move token, move windowId, move commands);
+  }
+
+  internal function finishFrontendPresentation(inout this): void on thread.main {
+    this.state.finishPresentation();
   }
 
   function set(

@@ -18,6 +18,7 @@ test("focused menu package exposes typed commands, roles, and errors", () => {
     "MenuError",
     "MenuRole",
     "applicationMenu",
+    "showWindowContextMenu",
   ]);
   expect(MenuRole).toMatchObject({
     Application: "application",

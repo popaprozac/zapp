@@ -441,6 +441,45 @@ replacement or application shutdown, where teardown clears the native menu and
 releases the graph deterministically. No JSON or legacy Objective-C menu shim
 sits between application Z and AppKit.
 
+Context menus reuse these same `Menu` and `Command` values:
+
+```zs
+import { ContextMenuOptions } from "zapp/menu";
+
+const context = Menu({ items: Array<MenuItem>(MenuItem.command(save)) });
+try await window.showContextMenu(in context, ContextMenuOptions({ x: 120.0, y: 80.0 }));
+```
+
+Native coordinates are logical content-area units from the top-left. The
+method requires `thread.main`; completion means selection or dismissal, not
+completion of additional asynchronous work started by an action. A popup owns
+its connections independently of the application menu. One popup may track at
+a time; closing, hiding, or navigating its window invalidates it. Invalid
+coordinates, unavailable windows, and conflicting popups produce `MenuError`.
+
+The WebView equivalent uses viewport CSS coordinates:
+
+```ts
+import { currentWindow } from "@zappdev/runtime/window";
+
+element.addEventListener("contextmenu", async (event) => {
+  event.preventDefault();
+  await currentWindow().showContextMenu([
+    { label: "Edit", action: () => editNote() },
+    { type: "separator" },
+    { label: "Delete", action: () => deleteNote() },
+  ], { x: event.clientX, y: event.clientY });
+});
+```
+
+Both application-wide and selected-profile `menu` permission are required.
+Web content can only target its originating window, even if it holds another
+`WindowHandle`. Submenus and shared `{ command }` entries work too; native role
+items are not yet supported in context menus. Promise-returning TS actions run
+independently of menu completion. There is no arbitrary timeout while the user
+is deciding. AppKit currently tracks synchronously in its native nested event
+loop; general cooperative Z scheduling during tracking is not guaranteed.
+
 Trusted WebView code uses the same logical command model through focused
 package exports:
 

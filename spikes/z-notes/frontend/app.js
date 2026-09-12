@@ -218,7 +218,39 @@ function renderNotes(items) {
       id: note.id,
     })));
 
-    actions.append(save, archive, remove);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.textContent = "Actions…";
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-label", `Actions for note ${note.id}`);
+    const showActions = async (x, y) => {
+      try {
+        await currentWindow().showContextMenu([
+          { label: "Edit title", action: () => { titleInput.focus(); titleInput.select(); } },
+          { label: "Save title", action: () => mutate(() => notes.edit({
+            id: note.id, title: titleInput.value.trim(), subtitle: note.subtitle,
+          })) },
+          { type: "separator" },
+          { label: "Archive", enabled: note.state !== "archived",
+            action: () => mutate(() => notes.archive({ id: note.id })) },
+          { label: "Delete", action: () => mutate(() => notes.delete({ id: note.id })) },
+        ], { x, y });
+      } catch (error) {
+        status.textContent = `Could not show note actions\n${String(error)}`;
+      }
+    };
+    more.addEventListener("click", () => {
+      const anchor = more.getBoundingClientRect();
+      void showActions(anchor.left, Math.min(anchor.bottom, window.innerHeight - 1));
+    });
+    item.addEventListener("contextmenu", (event) => {
+      // Keep WebKit's editing menu in text fields.
+      if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable]")) return;
+      event.preventDefault();
+      void showActions(event.clientX, event.clientY);
+    });
+
+    actions.append(save, archive, remove, more);
     item.append(title, details, titleInput, actions);
     return item;
   }));

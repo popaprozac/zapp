@@ -736,3 +736,11 @@ The bounded sanitizer pass remains available as:
 ```sh
 bun run spike:z-webview:sanitize
 ```
+
+## Note context menus
+
+Run `bun run spike:z-notes` (or `bun run spike:z-notes:dev`). Right-click a note
+outside its text field, or choose **Actions…**, to open its native context menu:
+Edit title, Save title, Archive, and Delete. Archive is disabled for archived
+notes. Escape or clicking outside dismisses the menu without changing a note.
+Text fields retain WebKit's normal editing menu.

@@ -1,7 +1,7 @@
 import { thread } from "std/thread";
 import { Menu, MenuError, MenuItem } from "./menu.zs";
 
-// Public placement shape; window presentation is wired in the next checkpoint.
+// Top-left window content coordinates in native logical units.
 export readonly struct ContextMenuOptions {
   x: f64;
   y: f64;

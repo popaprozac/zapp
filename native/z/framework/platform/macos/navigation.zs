@@ -10,6 +10,8 @@ import {
   configuredNavigationOriginAtIndex,
 } from "./configured-webview.zs";
 import { WindowManager } from "../../window.zs";
+import { ContextMenuSessions } from "../../context-menu.zs";
+import { ApplicationMenu } from "../../application-menu.zs";
 import {
   deliverWebViewWindowNavigationRequested,
 } from "./response-delivery.zs";
@@ -133,6 +135,8 @@ internal class DesktopNavigationDelegate on thread.main
   readonly window: WebKit.NSWindow;
   readonly webView: WebKit.WKWebView;
   readonly windows: Weak<WindowManager>;
+  readonly contextMenus: ContextMenuSessions;
+  readonly menu: ApplicationMenu;
 
   function didFailProvisionalNavigation(
     in webView: WebKit.WKWebView,
@@ -191,6 +195,12 @@ internal class DesktopNavigationDelegate on thread.main
     }
     const allowed: boolean = allowedByProfile && acceptedByNative;
     if (allowed) {
+      if (mainFrame) {
+        let sessions = this.contextMenus;
+        sessions.invalidateWindow(in this.id);
+        let menu = this.menu;
+        menu.invalidateFrontendOwner(in this.id);
+      }
       decisionHandler(WebKit.WKNavigationActionPolicyAllow);
     } else {
       console.error(`blocked navigation by window policy: ${address}`);
@@ -215,7 +225,9 @@ internal function createDesktopNavigationDelegate(
   profile: String,
   in window: WebKit.NSWindow,
   in webView: WebKit.WKWebView,
-  windows: Weak<WindowManager>
+  windows: Weak<WindowManager>,
+  contextMenus: ContextMenuSessions,
+  menu: ApplicationMenu
 ): objc.Adapter<WebKit.WKNavigationDelegate> on thread.main {
   const delegate = new DesktopNavigationDelegate({
     id,
@@ -223,6 +235,8 @@ internal function createDesktopNavigationDelegate(
     window,
     webView,
     windows,
+    contextMenus,
+    menu,
   });
   return objc.adapt<WebKit.WKNavigationDelegate>(delegate);
 }

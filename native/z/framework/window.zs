@@ -1,6 +1,8 @@
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
+import { Menu, MenuError } from "./menu.zs";
+import { ContextMenuOptions } from "./context-menu.zs";
 import {
   WindowEvents,
   createWindowEvents,
@@ -43,6 +45,21 @@ internal struct WindowBackend {
   hide: WindowOperation;
   close: WindowOperation;
   setTitle: WindowTitleOperation;
+  showContextMenu: WindowContextMenuOperation = unavailableContextMenu;
+}
+
+internal type WindowContextMenuOperation = (
+  in id: String,
+  in menu: Menu,
+  options: ContextMenuOptions
+) => void throws MenuError on thread.main;
+
+function unavailableContextMenu(
+  in id: String,
+  in menu: Menu,
+  options: ContextMenuOptions
+): void throws MenuError on thread.main {
+  throw MenuError({ message: "context menus require an active native window" });
 }
 
 function ignoreWindowCreate(
@@ -71,6 +88,24 @@ export readonly class Window on thread.main {
   readonly id: String;
   readonly events: WindowEvents;
   internal readonly manager: Weak<WindowManager>;
+
+  async function showContextMenu(
+    in menu: Menu,
+    options: ContextMenuOptions
+  ): void throws MenuError on thread.main {
+    try this.presentContextMenu(in menu, options);
+  }
+
+  internal function presentContextMenu(
+    in menu: Menu,
+    options: ContextMenuOptions
+  ): void throws MenuError on thread.main {
+    const owner = attempt this.manager.upgrade();
+    match (owner) {
+      success(manager) => try manager.showContextMenu(in this.id, in menu, options);
+      failure(_) => throw MenuError({ message: "context menu window is no longer available" });
+    }
+  }
 
   internal constructor(
     id: String,
@@ -351,6 +386,17 @@ export readonly class WindowManager on thread.main {
 
   function get(in id: String): Option<Window> on thread.main {
     return this.state.get(in id);
+  }
+
+  internal function showContextMenu(
+    in id: String,
+    in menu: Menu,
+    options: ContextMenuOptions
+  ): void throws MenuError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw MenuError({ message: "context menu window is no longer available" });
+    }
+    try this.state.backend.showContextMenu(in id, in menu, options);
   }
 
   function all(): Array<Window> on thread.main {

@@ -212,10 +212,25 @@ function createMacOSCommandItem(
   inout subscriptions: Array<EventSubscription>
 ): AppKit.NSMenuItem throws MenuError on thread.main {
   const retainedCommand = command;
+  const action: () => void on thread.main = move (): void => retainedCommand.invoke();
+  return try createMacOSCommandItemWithAction(
+    command,
+    action,
+    inout connections,
+    inout subscriptions
+  );
+}
+
+internal function createMacOSCommandItemWithAction(
+  command: Command,
+  action: () => void on thread.main,
+  inout connections: Array<objc.Connection>,
+  inout subscriptions: Array<EventSubscription>
+): AppKit.NSMenuItem throws MenuError on thread.main {
   const item = try createMacOSActionItem(
     copy command.label,
     copy command.shortcut,
-    move (): void => retainedCommand.invoke(),
+    action,
     inout connections
   );
   item.enabled = command.isEnabled();

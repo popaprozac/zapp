@@ -11,6 +11,7 @@ import {
   MenuRole as FrameworkMenuRole,
 } from "../../framework/menu.zs";
 import { thread } from "std/thread";
+import { ContextMenuOptions as FrameworkContextMenuOptions } from "../../framework/context-menu.zs";
 
 export type Command = FrameworkCommand;
 export type CommandAction = FrameworkCommandAction;
@@ -22,3 +23,4 @@ export type MenuError = FrameworkMenuError;
 export type MenuGroup = FrameworkMenuGroup;
 export type MenuItem = FrameworkMenuItem;
 export type MenuRole = FrameworkMenuRole;
+export type ContextMenuOptions = FrameworkContextMenuOptions;

@@ -133,13 +133,16 @@
         }
         pending[id] = entry;
         post(JSON.stringify({ t: 1, id, m: method, a: args || {} }));
-        const timer = setTimeout(() => {
-          const timedOut = takePending(id);
-          if (!timedOut) return;
-          timedOut.reject(new Error("Timeout"));
-          post(JSON.stringify({ t: 7, id }));
-        }, timeout);
-        entry.timer = timer;
+        // Native user interactions (e.g. menu tracking) have no arbitrary
+        // expiry. Explicit cancellation and document teardown still retire it.
+        if (timeout !== 0) {
+          entry.timer = setTimeout(() => {
+            const timedOut = takePending(id);
+            if (!timedOut) return;
+            timedOut.reject(new Error("Timeout"));
+            post(JSON.stringify({ t: 7, id }));
+          }, timeout);
+        }
       });
 
       p.cancel = () => {

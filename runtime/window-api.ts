@@ -8,6 +8,13 @@
 import { getBridge } from "./bridge";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
+import { showWindowContextMenu, type MenuItem } from "./menu-api";
+
+/** Explicit top-left viewport CSS coordinates, e.g. MouseEvent.clientX/Y. */
+export interface ContextMenuOptions {
+  readonly x: number;
+  readonly y: number;
+}
 
 export { WindowError } from "./window-errors";
 export type {
@@ -75,6 +82,8 @@ export interface WindowEventSubscription {
 /** Identity-bearing frontend proxy for one native Zapp window. */
 export interface WindowHandle {
   readonly id: string;
+  /** Present a native menu in this WebView; resolves on selection or dismissal. */
+  showContextMenu(items: readonly MenuItem[], options: ContextMenuOptions): Promise<void>;
 
   subscribe(
     event: typeof WindowEvent.FOCUS,
@@ -155,6 +164,10 @@ function subscription(cleanup: () => void): WindowEventSubscription {
 
 class FocusedWindowHandle implements WindowHandle {
   constructor(readonly id: string) {}
+
+  showContextMenu(items: readonly MenuItem[], options: ContextMenuOptions): Promise<void> {
+    return showWindowContextMenu(this.id, items, options);
+  }
 
   subscribe(
     event: typeof WindowEvent.FOCUS,

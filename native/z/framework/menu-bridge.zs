@@ -3,6 +3,8 @@ import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { CapabilitySelection } from "./application-capabilities.zs";
 import { ApplicationMenu } from "./application-menu.zs";
+import { ContextMenuOptions } from "./context-menu.zs";
+import { WindowContextMenuOperation } from "./window.zs";
 import { ApplicationPermissions } from "./application-permissions.zs";
 import {
   BridgeMessage,
@@ -46,6 +48,89 @@ readonly struct FrontendMenuItem {
 readonly struct FrontendMenuDefinition {
   ownerToken: String;
   items: Array<FrontendMenuItem>;
+}
+
+readonly struct FrontendContextMenuDefinition {
+  ownerToken: String;
+  windowId: String;
+  items: Array<FrontendMenuItem>;
+  x: f64;
+  y: f64;
+}
+
+class FrontendContextMenuSelection on thread.main {
+  commandId: String;
+}
+
+readonly struct FrontendContextMenuResult {
+  commandId: String;
+}
+
+function presentFrontendContextMenu(
+  in definition: FrontendContextMenuDefinition,
+  nativeWindowId: i32,
+  in logicalWindowId: String,
+  applicationMenu: ApplicationMenu,
+  show: WindowContextMenuOperation
+): String throws MenuError on thread.main {
+  if (definition.windowId != logicalWindowId) {
+    throw MenuError({ message: "a frontend context menu may only target its originating window" });
+  }
+  const selection = new FrontendContextMenuSelection({ commandId: "" });
+  const selected = selection;
+  const dispatch: FrontendMenuCommandDispatch = move (
+    nativeId: i32, in token: String, in commandId: String
+  ): void => { selected.commandId = copy commandId; };
+  let commands = Map<String, Command>();
+  const items = try frontendMenuItems(
+    in definition.items, nativeWindowId, in definition.ownerToken, dispatch, inout commands
+  );
+  const menu = Menu({ items: move items });
+  try applicationMenu.beginFrontendPresentation(
+    copy definition.ownerToken, copy logicalWindowId, move commands
+  );
+  const presented = attempt show(in logicalWindowId, in menu, ContextMenuOptions({
+    x: definition.x, y: definition.y,
+  }));
+  applicationMenu.finishFrontendPresentation();
+  match (presented) {
+    failure(error) => throw error;
+    success => {}
+  }
+  const result = FrontendContextMenuResult({ commandId: copy selection.commandId });
+  return json.encode(in result);
+}
+
+internal function routeContextMenuBridgeMessage(
+  in message: BridgeMessage,
+  in permissions: ApplicationPermissions,
+  capabilities: CapabilitySelection,
+  nativeWindowId: i32,
+  in logicalWindowId: String,
+  applicationMenu: ApplicationMenu,
+  show: WindowContextMenuOperation
+): MenuBridgeRoute on thread.main {
+  if (message.kind != BridgeMessageKind.invoke || message.method != "__zapp:menu:popup") {
+    return MenuBridgeRoute.unhandled;
+  }
+  if (!permissions.menu) return MenuBridgeRoute.response(bridgePermissionFailure(message.id, "menu"));
+  if (!capabilities.allowsPermission("menu")) {
+    return MenuBridgeRoute.response(bridgeCapabilityFailure(message.id, "menu"));
+  }
+  const decoded = attempt json.decode<FrontendContextMenuDefinition>(in message.arguments);
+  const response = match (decoded) {
+    failure(error) => bridgeFailure(message.id, "MENU_ERROR", `invalid context menu: ${error.message}`);
+    success(definition) => {
+      const shown = attempt presentFrontendContextMenu(
+        in definition, nativeWindowId, in logicalWindowId, applicationMenu, show
+      );
+      select match (shown) {
+        success(result) => bridgeSuccess(message.id, move result);
+        failure(error) => frontendMenuFailure(message.id, in error);
+      };
+    }
+  };
+  return MenuBridgeRoute.response(move response);
 }
 
 readonly struct FrontendMenuCommandUpdate {

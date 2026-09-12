@@ -48,7 +48,10 @@ import {
   FrontendMenuCommandDispatch,
   MenuBridgeRoute,
   routeMenuBridgeMessage,
+  routeContextMenuBridgeMessage,
 } from "../../menu-bridge.zs";
+import { showMacOSFrontendContextMenu } from "./context-menu-backend.zs";
+import { WindowContextMenuOperation } from "../../window.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
 import { navigationProfileAllowsExternalURL } from "./navigation.zs";
 import { requestMacOSHostQuit } from "./application-host.zs";
@@ -412,6 +415,15 @@ function selectWindowMessageRouteWithCapabilities(
     unhandled => {}
   }
   const dispatch: FrontendMenuCommandDispatch = deliverFrontendMenuCommand;
+  const showContextMenu: WindowContextMenuOperation = showMacOSFrontendContextMenu;
+  const popupRoute = routeContextMenuBridgeMessage(
+    in message, in permissions, selectedCapabilities, nativeWindowId,
+    in logicalWindowId, menu, showContextMenu
+  );
+  match (popupRoute) {
+    response(value) => return WindowMessageRoute.framework(value);
+    unhandled => {}
+  }
   const menuRoute = routeMenuBridgeMessage(
     in message,
     in permissions,

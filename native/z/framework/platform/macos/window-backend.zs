@@ -8,6 +8,7 @@ import {
 } from "../../window.zs";
 import { thread } from "std/thread";
 import { currentMacOSApplication } from "./application-runtime.zs";
+import { showMacOSContextMenu } from "./context-menu-backend.zs";
 
 function createMacOSWindowDeferred(
   in id: String,
@@ -52,5 +53,6 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
     hide,
     close,
     setTitle,
+    showContextMenu: showMacOSContextMenu,
   });
 }

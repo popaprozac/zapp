@@ -7,6 +7,7 @@ import {
 } from "../../application-capabilities.zs";
 import { AsyncServices } from "../../async-services.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
+import { ContextMenuSessions, createContextMenuSessions } from "../../context-menu.zs";
 import { ClipboardManager } from "../../clipboard.zs";
 import { NotificationManager } from "../../notifications.zs";
 import { ShellManager } from "../../shell.zs";
@@ -86,6 +87,7 @@ internal class MacOSApplicationRuntime {
   readonly shell: ShellManager on thread.main;
   readonly files: FileManager on thread.main;
   readonly menu: ApplicationMenu on thread.main;
+  readonly contextMenus: ContextMenuSessions on thread.main;
   readonly routeMessage: DesktopRouteMessageOperation on thread.main;
   readonly deliverMessageResponse: DesktopDeliverResponseOperation on thread.main;
   applicationWorkers: ApplicationWorkers on thread.main;
@@ -158,7 +160,9 @@ internal class MacOSApplicationRuntime {
       windowManagerOwner,
       this.routeMessage,
       this.deliverMessageResponse,
-      didClose
+      didClose,
+      this.contextMenus,
+      this.menu
     );
     this.nativeWindows.set(nativeId, runtime);
   }
@@ -171,6 +175,7 @@ internal class MacOSApplicationRuntime {
     match (found) {
       some(value) => {
         let window = value;
+        this.contextMenus.invalidateWindow(in window.id);
         window.pendingRequests.cancelAll();
         let menu = this.menu;
         menu.invalidateFrontendOwner(in window.id);
@@ -184,6 +189,7 @@ internal class MacOSApplicationRuntime {
   }
 
   function closeAllNativeWindows(inout this): void on thread.main {
+    this.contextMenus.invalidateAll();
     // Teardown is already committed, so it bypasses cancellable user close
     // requests. Snapshot the native windows first because close callbacks
     // synchronously remove entries from the live registry.
@@ -275,6 +281,8 @@ internal class MacOSApplicationRuntime {
   }
 
   function hideWindow(in id: String): void on thread.main {
+    let sessions = this.contextMenus;
+    sessions.invalidateWindow(in id);
     for (const entry of this.nativeWindows) {
       if (entry.value.id == id) {
         entry.value.window.orderOut(null);
@@ -314,6 +322,13 @@ internal class MacOSApplicationRuntime {
       some(window) => Option.some(window.capabilitySelection);
       none => Option.none;
     };
+  }
+
+  function contextMenuWindow(in id: String): Option<MacOSWindowRuntime> on thread.main {
+    for (const entry of this.nativeWindows) {
+      if (entry.value.id == id) return Option.some(entry.value);
+    }
+    return Option.none;
   }
 
   function logicalWindowId(
@@ -642,6 +657,7 @@ internal function initializeMacOSApplicationRuntimeState(
     cancelWorkerServiceRequest,
     cancelAllWorkerServiceRequests,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
+    contextMenus: createContextMenuSessions(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,
   });
