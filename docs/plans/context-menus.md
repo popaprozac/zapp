@@ -84,7 +84,11 @@ under UBSan. The standard Z Notes desktop smoke also passes. The native tracking
 loop is synchronous internally, like the first native dialog tier; this is not
 a promise of general cooperative Z scheduling while a menu tracks.
 
-The interactive build launched successfully. Computer-use permission was not
-granted for a visual selection/dismissal check; that final manual check remains
-for the user. The bounded launch exited at its deadline without leftover
-processes.
+The interactive build launched successfully, and the user confirmed that the
+native context menu looks and works correctly. Automated launch and native
+fixtures use bounded processes with cleanup; no computer-use permission was
+needed for the user's manual verification.
+
+The bridge now constructs its response directly around the selecting `match`.
+Z's compiler regression covers the formerly unsupported nested enum payload,
+including owned data, early return, and typed-error cleanup.

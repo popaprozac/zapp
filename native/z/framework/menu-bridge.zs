@@ -118,7 +118,7 @@ internal function routeContextMenuBridgeMessage(
     return MenuBridgeRoute.response(bridgeCapabilityFailure(message.id, "menu"));
   }
   const decoded = attempt json.decode<FrontendContextMenuDefinition>(in message.arguments);
-  const response = match (decoded) {
+  return MenuBridgeRoute.response(match (decoded) {
     failure(error) => bridgeFailure(message.id, "MENU_ERROR", `invalid context menu: ${error.message}`);
     success(definition) => {
       const shown = attempt presentFrontendContextMenu(
@@ -129,8 +129,7 @@ internal function routeContextMenuBridgeMessage(
         failure(error) => frontendMenuFailure(message.id, in error);
       };
     }
-  };
-  return MenuBridgeRoute.response(move response);
+  });
 }
 
 readonly struct FrontendMenuCommandUpdate {
