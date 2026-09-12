@@ -1,9 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { zapp } from "../../vite/src/index.ts";
 
-// Keep the in-repository application self-contained. `zapp dev` supplies Vite
-// through the CLI, while an ordinary generated application declares Vite in
-// its own package.json and may use `defineConfig` for richer typing.
+// The in-repository application uses Vite pinned at the workspace root.
+// An ordinary generated application declares Vite in its own package.json.
 export default {
   root: "frontend",
   plugins: [zapp()],

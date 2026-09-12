@@ -4,6 +4,7 @@ import { basename, resolve } from "node:path";
 import { createDevBundle } from "../../cli/src/bundle";
 import { compileNative } from "../../cli/src/native";
 import { prepareZFrontendServices } from "../../cli/src/native-z";
+import { resolveViteCommand } from "../../cli/src/vite-command";
 import {
   createConfigContext,
   loadConfig,
@@ -12,6 +13,7 @@ import {
 const spike = import.meta.dir;
 const repository = resolve(spike, "../..");
 const output = resolve(spike, "build", "zapp-z-webview");
+const viteBuildCommand = resolveViteCommand(spike, ["build"]);
 
 async function run(
   command: string[],
@@ -303,7 +305,7 @@ try {
     config,
   });
   await run(
-    ["bunx", "vite", "build"],
+    viteBuildCommand,
     { ...process.env, ZAPP_PROJECT_ROOT: spike },
     spike,
   );

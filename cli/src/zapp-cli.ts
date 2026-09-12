@@ -28,6 +28,7 @@ import {
   type PreparedZFrontendServices,
 } from "./native-z";
 import { signalProcessTree, terminateProcessTree } from "./bounded-process";
+import { resolveViteCommand } from "./vite-command";
 
 // Bootstrap codegen lives outside cli/ in the monorepo but is bundled
 // alongside it in the published package. Dynamic import so the path
@@ -197,6 +198,7 @@ async function runDev(root: string) {
   );
   const nativeDir = resolveNativeDir();
   const port = config.devPort ?? 5173;
+  const viteCommand = resolveViteCommand(root, ["--port", String(port), "--strictPort"]);
   // iOS Simulator on Apple Silicon shares host network namespace, so
   // localhost from inside the sim resolves to the same Vite dev server
   // the host is binding. No special tunnel needed.
@@ -339,7 +341,7 @@ async function runDev(root: string) {
   }
 
   clog(1, "starting vite dev server...");
-  const viteProc = Bun.spawn(["bunx", "vite", "--port", String(port), "--strictPort"], {
+  const viteProc = Bun.spawn(viteCommand, {
     cwd: root,
     detached: process.platform !== "win32",
     stdout: "inherit",
@@ -585,6 +587,7 @@ async function runBuild(
     root,
     createConfigContext(root, configCommand, target),
   );
+  const viteCommand = resolveViteCommand(root, ["build"]);
   const nativeDir = resolveNativeDir();
 
   // 0. Check worker engine. Workers are opt-in: a project either
@@ -617,7 +620,7 @@ async function runBuild(
 
   // 2. Build frontend with Vite
   clog(1, "building frontend...");
-  const viteProc = Bun.spawn(["bunx", "vite", "build"], {
+  const viteProc = Bun.spawn(viteCommand, {
     cwd: root,
     stdout: "inherit",
     stderr: "inherit",

@@ -19,6 +19,11 @@ bun run dev
 resolves to the local `node_modules/.bin/zapp` pinned in `package.json`.
 This guarantees your project keeps working even as the CLI evolves.
 
+Both dev and build resolve Vite from the application's installed dependencies
+(or its workspace root), never from a temporary `bunx vite@latest` download.
+Keep `vite` in `devDependencies`, commit the lockfile, and run `bun install`
+after checkout. The in-repository Z Notes demo uses the root-pinned Vite.
+
 The current typed configuration contract is documented in
 [`docs/configuration.md`](../docs/configuration.md).
 
