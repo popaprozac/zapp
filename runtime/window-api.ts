@@ -46,6 +46,14 @@ export interface WindowBlurredEvent {
   readonly windowId: string;
 }
 
+export interface WindowMinimizedEvent {
+  readonly windowId: string;
+}
+
+export interface WindowUnminimizedEvent {
+  readonly windowId: string;
+}
+
 export interface WindowResizedEvent {
   readonly windowId: string;
   readonly size: WindowSize;
@@ -69,6 +77,8 @@ export const WindowEvent = {
   BLUR: 2,
   RESIZE: 3,
   NAVIGATION_REQUESTED: 4,
+  MINIMIZED: 5,
+  UNMINIMIZED: 6,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
@@ -94,6 +104,14 @@ export interface WindowHandle {
     handler: (event: WindowBlurredEvent) => void,
   ): WindowEventSubscription;
   subscribe(
+    event: typeof WindowEvent.MINIMIZED,
+    handler: (event: WindowMinimizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.UNMINIMIZED,
+    handler: (event: WindowUnminimizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
@@ -103,6 +121,12 @@ export interface WindowHandle {
   ): WindowEventSubscription;
 
   show(): void;
+  /** Reveal/restore and request focus; observe FOCUS for native confirmation. */
+  focus(): void;
+  /** Request native minimization without closing the window. */
+  minimize(): void;
+  /** Undo minimization without explicitly requesting app activation or focus. */
+  unminimize(): void;
   hide(): void;
   close(): void;
   setTitle(title: string): void;
@@ -111,6 +135,8 @@ export interface WindowHandle {
 type FocusedEventHandler =
   | ((event: WindowFocusedEvent) => void)
   | ((event: WindowBlurredEvent) => void)
+  | ((event: WindowMinimizedEvent) => void)
+  | ((event: WindowUnminimizedEvent) => void)
   | ((event: WindowResizedEvent) => void)
   | ((event: WindowNavigationRequestedEvent) => void);
 
@@ -121,6 +147,8 @@ const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
   [WindowEvent.FOCUS]: "window:focus",
   [WindowEvent.BLUR]: "window:blur",
+  [WindowEvent.MINIMIZED]: "window:minimized",
+  [WindowEvent.UNMINIMIZED]: "window:unminimized",
   [WindowEvent.RESIZE]: "window:resize",
   [WindowEvent.NAVIGATION_REQUESTED]: "window:navigation-requested",
 };
@@ -178,6 +206,14 @@ class FocusedWindowHandle implements WindowHandle {
     handler: (event: WindowBlurredEvent) => void,
   ): WindowEventSubscription;
   subscribe(
+    event: typeof WindowEvent.MINIMIZED,
+    handler: (event: WindowMinimizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.UNMINIMIZED,
+    handler: (event: WindowUnminimizedEvent) => void,
+  ): WindowEventSubscription;
+  subscribe(
     event: typeof WindowEvent.RESIZE,
     handler: (event: WindowResizedEvent) => void,
   ): WindowEventSubscription;
@@ -224,7 +260,7 @@ class FocusedWindowHandle implements WindowHandle {
       }
 
       const receive = handler as (
-        event: WindowFocusedEvent | WindowBlurredEvent,
+        event: WindowFocusedEvent | WindowBlurredEvent | WindowMinimizedEvent | WindowUnminimizedEvent,
       ) => void;
       receive({ windowId: this.id });
     });
@@ -232,6 +268,9 @@ class FocusedWindowHandle implements WindowHandle {
   }
 
   show(): void { windowAction("show", { windowId: this.id }); }
+  focus(): void { windowAction("focus", { windowId: this.id }); }
+  minimize(): void { windowAction("minimize", { windowId: this.id }); }
+  unminimize(): void { windowAction("unminimize", { windowId: this.id }); }
   hide(): void { windowAction("hide", { windowId: this.id }); }
   close(): void { windowAction("close", { windowId: this.id }); }
   setTitle(title: string): void {

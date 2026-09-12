@@ -1,5 +1,6 @@
 import WebKit from "WebKit/WebKit.h";
-import { showMacOSNativeWindow, focusMacOSNativeWindow } from "./window-activation.zs";
+import { showMacOSNativeWindow, focusMacOSNativeWindow,
+  minimizeMacOSNativeWindow, unminimizeMacOSNativeWindow } from "./window-activation.zs";
 import { configuredApplicationQuitOnLastWindowClosed } from "../../configured-application.zs";
 import { WindowError } from "../../application-error.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
@@ -291,14 +292,31 @@ internal class MacOSApplicationRuntime {
     }
   }
 
+  function minimizeWindow(in id: String): void on thread.main {
+    let sessions = this.contextMenus;
+    sessions.invalidateWindow(in id);
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => minimizeMacOSNativeWindow(in window.window);
+      none => {}
+    }
+  }
+
+  function unminimizeWindow(in id: String): void on thread.main {
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => unminimizeMacOSNativeWindow(in window.window);
+      none => {}
+    }
+  }
+
   function hideWindow(in id: String): void on thread.main {
     let sessions = this.contextMenus;
     sessions.invalidateWindow(in id);
-    for (const entry of this.nativeWindows) {
-      if (entry.value.id == id) {
-        entry.value.window.orderOut(null);
-        return;
-      }
+    const found = this.nativeWindow(in id);
+    match (found) {
+      some(window) => window.window.orderOut(null);
+      none => {}
     }
   }
 

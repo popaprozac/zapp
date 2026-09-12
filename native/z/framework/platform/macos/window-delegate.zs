@@ -79,6 +79,34 @@ class DesktopWindowDelegate on thread.main
     }
   }
 
+  function didMiniaturize(
+    in notification: WebKit.NSNotification
+  ): void as "windowDidMiniaturize:" {
+    const id = copy this.id;
+    const webView = this.webView;
+    match (attempt this.windows.upgrade()) {
+      success(windows) => {
+        windows.minimizedNative(in id);
+        deliverWebViewWindowEvent(in webView, in id, "minimized");
+      }
+      failure(_) => {}
+    }
+  }
+
+  function didDeminiaturize(
+    in notification: WebKit.NSNotification
+  ): void as "windowDidDeminiaturize:" {
+    const id = copy this.id;
+    const webView = this.webView;
+    match (attempt this.windows.upgrade()) {
+      success(windows) => {
+        windows.unminimizedNative(in id);
+        deliverWebViewWindowEvent(in webView, in id, "unminimized");
+      }
+      failure(_) => {}
+    }
+  }
+
   function didResize(
     in notification: WebKit.NSNotification
   ): void as "windowDidResize:" {

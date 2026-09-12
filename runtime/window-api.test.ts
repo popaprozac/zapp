@@ -24,6 +24,8 @@ test("focused window package exports only composed runtime values", () => {
     BLUR: 2,
     RESIZE: 3,
     NAVIGATION_REQUESTED: 4,
+    MINIMIZED: 5,
+    UNMINIMIZED: 6,
   });
   expect("Window" in windowAPI).toBe(false);
 });
@@ -161,11 +163,17 @@ test("focused handles send only narrow window actions", () => {
     const window = currentWindow();
     window.show();
     window.hide();
+    window.focus();
+    window.minimize();
+    window.unminimize();
     window.setTitle("Focused");
     window.close();
     expect(posted.map((message) => JSON.parse(message))).toEqual([
       { t: 4, m: "show", a: { windowId: "win-actions" } },
       { t: 4, m: "hide", a: { windowId: "win-actions" } },
+      { t: 4, m: "focus", a: { windowId: "win-actions" } },
+      { t: 4, m: "minimize", a: { windowId: "win-actions" } },
+      { t: 4, m: "unminimize", a: { windowId: "win-actions" } },
       {
         t: 4,
         m: "setTitle",
@@ -211,4 +219,73 @@ test("package export resolves the focused window facade", async () => {
     new URL("./package.json", import.meta.url),
   ).json() as { exports: Record<string, string> };
   expect(manifest.exports["./window"]).toBe("./window-api.ts");
+});
+
+test("minimization subscriptions observe native transitions only and dispose independently", () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
+  const listeners = new Map<string, Set<(value: unknown) => void>>();
+  (globalThis as any)[BRIDGE_KEY] = {
+    on(name: string, handler: (value: unknown) => void) {
+      const group = listeners.get(name) ?? new Set();
+      group.add(handler); listeners.set(name, group);
+      return () => group.delete(handler);
+    },
+    post() {},
+    emit() {},
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "win-events";
+  const deliver = (name: string, value: unknown) => {
+    for (const receive of listeners.get(name) ?? []) receive(value);
+  };
+  try {
+    const window = currentWindow();
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const restored: unknown[] = [];
+    const a = window.subscribe(WindowEvent.MINIMIZED, (event) => first.push(event));
+    const b = window.subscribe(WindowEvent.MINIMIZED, (event) => second.push(event));
+    const c = window.subscribe(WindowEvent.UNMINIMIZED, (event) => restored.push(event));
+    window.minimize(); window.unminimize(); window.focus();
+    expect(first).toEqual([]);
+    expect(restored).toEqual([]);
+    deliver("window:minimized", null);
+    deliver("window:minimized", { windowId: "another-window" });
+    expect(first).toEqual([]);
+    deliver("window:minimized", { windowId: "win-events", ignored: true });
+    a.unsubscribe(); a.unsubscribe();
+    deliver("window:minimized", { windowId: "win-events" });
+    deliver("window:unminimized", { windowId: "win-events", ignored: true });
+    expect(first).toEqual([{ windowId: "win-events" }]);
+    expect(second).toEqual([{ windowId: "win-events" }, { windowId: "win-events" }]);
+    expect(restored).toEqual([{ windowId: "win-events" }]);
+    b.unsubscribe(); c.unsubscribe();
+    expect([...listeners.values()].every((group) => group.size === 0)).toBe(true);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
+  }
+});
+
+test("window controls preserve the bridge emit fallback without invoking services", () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousWindowId = (globalThis as any)[WINDOW_ID_KEY];
+  const emitted: unknown[] = [];
+  (globalThis as any)[BRIDGE_KEY] = {
+    emit(name: string, args: unknown) { emitted.push([name, args]); },
+    invoke() { throw new Error("window controls are requests, not service invocations"); },
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "win-fallback";
+  try {
+    const window = currentWindow();
+    window.focus(); window.minimize(); window.unminimize();
+    expect(emitted).toEqual([
+      ["__window_action:focus", { windowId: "win-fallback" }],
+      ["__window_action:minimize", { windowId: "win-fallback" }],
+      ["__window_action:unminimize", { windowId: "win-fallback" }],
+    ]);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousWindowId;
+  }
 });

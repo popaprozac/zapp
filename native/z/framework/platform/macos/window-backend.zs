@@ -33,6 +33,16 @@ function focusMacOSWindow(in id: String): void on thread.main {
   current.focusWindow(in id);
 }
 
+function minimizeMacOSWindow(in id: String): void on thread.main {
+  const current = currentMacOSApplication();
+  current.minimizeWindow(in id);
+}
+
+function unminimizeMacOSWindow(in id: String): void on thread.main {
+  const current = currentMacOSApplication();
+  current.unminimizeWindow(in id);
+}
+
 function closeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
   current.requestWindowClose(in id);
@@ -50,6 +60,8 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
   const create: WindowCreateOperation = createMacOSWindowDeferred;
   const show: WindowOperation = showMacOSWindow;
   const focus: WindowOperation = focusMacOSWindow;
+  const minimize: WindowOperation = minimizeMacOSWindow;
+  const unminimize: WindowOperation = unminimizeMacOSWindow;
   const hide: WindowOperation = hideMacOSWindow;
   const close: WindowOperation = closeMacOSWindow;
   const setTitle: WindowTitleOperation = setMacOSWindowTitle;
@@ -57,6 +69,8 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
     create,
     show,
     focus,
+    minimize,
+    unminimize,
     hide,
     close,
     setTitle,

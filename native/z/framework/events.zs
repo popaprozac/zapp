@@ -85,6 +85,14 @@ export readonly struct WindowBlurredEvent {
   windowId: String;
 }
 
+export readonly struct WindowMinimizedEvent {
+  windowId: String;
+}
+
+export readonly struct WindowUnminimizedEvent {
+  windowId: String;
+}
+
 export readonly struct WindowSize {
   width: u32;
   height: u32;
@@ -153,6 +161,8 @@ export readonly class WindowNavigationRequestedEvent on thread.main {
 export enum WindowEvent {
   focused WindowFocusedEvent,
   blurred WindowBlurredEvent,
+  minimized WindowMinimizedEvent,
+  unminimized WindowUnminimizedEvent,
   resized WindowResizedEvent,
   navigationRequested WindowNavigationRequestedEvent,
   closeRequested WindowCloseRequestedEvent,

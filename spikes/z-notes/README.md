@@ -262,7 +262,7 @@ stops only after the last native window closes.
 
 Frontend code imports these capabilities from `@zappdev/runtime/window`. That
 focused boundary exposes the composed factories, handle operations, and
-focus/blur/resize subscriptions without carrying forward the legacy `Window`
+focus/blur/resize/minimization subscriptions without carrying forward the legacy `Window`
 namespace or loading its broad implementation. New capabilities join it only
 after their Z-owned native route and frontend contract work together end to
 end. Resize delivers the same
@@ -764,4 +764,13 @@ The implementation is in [`zapp/notes-tray.zs`](zapp/notes-tray.zs). See
 
 To check focus, put another app in front, hide Z Notes with Command-H, minimize
 it with the yellow button, or close every window. Then select **Show Z Notes**.
-See [window visibility and focus](../../docs/windows.md) for request/event semantics.
+See [window controls](../../docs/windows.md) for request/event semantics.
+
+The **Native window actions** controls now also exercise the public TypeScript
+`focus()`, `minimize()`, and `unminimize()` methods. **Focus in 2 seconds** gives
+you time to switch to another app; **Minimize for 2 seconds** restores without
+an explicit focus request; **Minimize, then focus** deliberately asks to bring
+the window forward. The event panel counts AppKit-confirmed minimized and
+unminimized transitions, including those initiated through the yellow button
+or Dock. Background WebView timers may be throttled; the native tray can always
+request restoration independently.

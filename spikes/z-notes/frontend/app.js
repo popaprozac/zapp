@@ -368,6 +368,8 @@ if (currentWindowId === "win-1") {
 
 let focusedEvents = 0;
 let blurredEvents = 0;
+let minimizedEvents = 0;
+let unminimizedEvents = 0;
 let resizedEvents = 0;
 let latestSize = "waiting";
 
@@ -376,6 +378,8 @@ function renderWindowEvents() {
     `Window: ${currentWindowId}`,
     `Focused: ${focusedEvents}`,
     `Blurred: ${blurredEvents}`,
+    `Minimized: ${minimizedEvents}`,
+    `Unminimized: ${unminimizedEvents}`,
     `Resized: ${resizedEvents}`,
     `Latest size: ${latestSize}`,
   ].join("\n");
@@ -387,6 +391,14 @@ windowHandle.subscribe(WindowEvent.FOCUS, () => {
 });
 windowHandle.subscribe(WindowEvent.BLUR, () => {
   blurredEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.MINIMIZED, () => {
+  minimizedEvents += 1;
+  renderWindowEvents();
+});
+windowHandle.subscribe(WindowEvent.UNMINIMIZED, () => {
+  unminimizedEvents += 1;
   renderWindowEvents();
 });
 windowHandle.subscribe(WindowEvent.RESIZE, (event) => {
@@ -636,6 +648,21 @@ hideWindowButton.addEventListener("click", () => {
 closeWindowButton.addEventListener("click", () => {
   status.textContent = `Closing ${currentWindowId}…`;
   windowHandle.close();
+});
+
+document.querySelector("#focus-window").addEventListener("click", () => {
+  status.textContent = "Switch to another window or app; requesting focus in 2 seconds…";
+  setTimeout(() => windowHandle.focus(), 2000);
+});
+document.querySelector("#minimize-window").addEventListener("click", () => {
+  status.textContent = "Minimizing; undo in 2 seconds without explicitly requesting focus…";
+  windowHandle.minimize();
+  setTimeout(() => windowHandle.unminimize(), 2000);
+});
+document.querySelector("#minimize-focus-window").addEventListener("click", () => {
+  status.textContent = "Minimizing; restore and request focus in 2 seconds…";
+  windowHandle.minimize();
+  setTimeout(() => windowHandle.focus(), 2000);
 });
 
 async function verifyTypedServiceError() {

@@ -23,6 +23,7 @@ export struct WindowOptions {
 struct WindowRecord {
   window: Window;
   options: WindowOptions;
+  pendingMinimize: boolean = false;
 }
 
 internal type WindowCreateOperation = (
@@ -43,6 +44,8 @@ internal struct WindowBackend {
   create: WindowCreateOperation;
   show: WindowOperation;
   focus: WindowOperation;
+  minimize: WindowOperation;
+  unminimize: WindowOperation;
   hide: WindowOperation;
   close: WindowOperation;
   setTitle: WindowTitleOperation;
@@ -80,6 +83,8 @@ function inactiveWindowBackend(): WindowBackend on thread.main {
     create: ignoreWindowCreate,
     show: ignoreWindowOperation,
     focus: ignoreWindowOperation,
+    minimize: ignoreWindowOperation,
+    unminimize: ignoreWindowOperation,
     hide: ignoreWindowOperation,
     close: ignoreWindowOperation,
     setTitle: ignoreWindowTitle,
@@ -143,6 +148,22 @@ export readonly class Window on thread.main {
     const current = attempt this.manager.upgrade();
     match (current) {
       success(manager) => manager.focus(in id);
+      failure(_) => {}
+    }
+  }
+
+  function minimize(): void on thread.main {
+    const id = copy this.id;
+    match (attempt this.manager.upgrade()) {
+      success(manager) => manager.minimize(in id);
+      failure(_) => {}
+    }
+  }
+
+  function unminimize(): void on thread.main {
+    const id = copy this.id;
+    match (attempt this.manager.upgrade()) {
+      success(manager) => manager.unminimize(in id);
       failure(_) => {}
     }
   }
@@ -242,11 +263,41 @@ class WindowManagerState on thread.main {
       some(record) => {
         let current = record;
         current.options.visible = true;
+        current.pendingMinimize = false;
         // Native focus can synchronously deliver events (and user callbacks).
         // Restore the record first; never overwrite callback changes afterward.
         this.windows.set(copy id, move current);
-        if (this.active) this.backend.focus(in id);
-        else this.pendingFocus = copy id;
+        if (this.active) {
+          this.pendingFocus = "";
+          this.backend.focus(in id);
+        } else this.pendingFocus = copy id;
+      }
+      none => {}
+    }
+  }
+
+  function minimize(inout this, in id: String): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.pendingMinimize = !this.active;
+        this.windows.set(copy id, move current);
+        if (this.pendingFocus == id) this.pendingFocus = "";
+        if (this.active) this.backend.minimize(in id);
+      }
+      none => {}
+    }
+  }
+
+  function unminimize(inout this, in id: String): void {
+    const found = this.windows.remove(id);
+    match (found) {
+      some(record) => {
+        let current = record;
+        current.pendingMinimize = false;
+        this.windows.set(copy id, move current);
+        if (this.active) this.backend.unminimize(in id);
       }
       none => {}
     }
@@ -304,6 +355,20 @@ class WindowManagerState on thread.main {
         let events = window.events;
         events.publishBlurred(in id);
       }
+      none => {}
+    }
+  }
+
+  function minimizedNative(inout this, in id: String): void {
+    match (this.get(in id)) {
+      some(window) => window.events.publishMinimized(in id);
+      none => {}
+    }
+  }
+
+  function unminimizedNative(inout this, in id: String): void {
+    match (this.get(in id)) {
+      some(window) => window.events.publishUnminimized(in id);
       none => {}
     }
   }
@@ -379,10 +444,30 @@ class WindowManagerState on thread.main {
     this.backend = backend;
     this.active = true;
     if (!realizePending) return;
-    for (const entry of this.windows) {
-      const id = copy entry.value.window.id;
-      const options = copy entry.value.options;
-      try this.backend.create(in id, in options);
+    // Snapshot handles; do not keep a Map view across native callbacks.
+    const pending = this.all();
+    for (const window of pending) {
+      const id = copy window.id;
+      const found = this.options(in id);
+      match (found) {
+        some(options) => {
+          try this.backend.create(in id, in options);
+          // Creation may have closed the window or issued a newer request.
+          // Read and consume pending state only after its callbacks finish.
+          const latest = this.windows.remove(id);
+          match (latest) {
+            some(record) => {
+              let current = record;
+              const minimize = current.pendingMinimize;
+              current.pendingMinimize = false;
+              this.windows.set(copy id, move current);
+              if (minimize) this.backend.minimize(in id);
+            }
+            none => {}
+          }
+        }
+        none => {}
+      }
     }
     const requestedFocus = copy this.pendingFocus;
     this.pendingFocus = "";
@@ -446,6 +531,22 @@ export readonly class WindowManager on thread.main {
 
   internal function focus(inout this, in id: String): void on thread.main {
     this.state.focus(in id);
+  }
+
+  internal function minimize(inout this, in id: String): void on thread.main {
+    this.state.minimize(in id);
+  }
+
+  internal function unminimize(inout this, in id: String): void on thread.main {
+    this.state.unminimize(in id);
+  }
+
+  internal function minimizedNative(inout this, in id: String): void on thread.main {
+    this.state.minimizedNative(in id);
+  }
+
+  internal function unminimizedNative(inout this, in id: String): void on thread.main {
+    this.state.unminimizedNative(in id);
   }
 
   internal function hide(inout this, in id: String): void on thread.main {

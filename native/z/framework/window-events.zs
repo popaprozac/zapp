@@ -8,6 +8,8 @@ import {
   WindowClosedEvent,
   WindowEvent,
   WindowFocusedEvent,
+  WindowMinimizedEvent,
+  WindowUnminimizedEvent,
   WindowNavigationRequestedEvent,
   WindowResizedEvent,
   WindowSize,
@@ -20,6 +22,8 @@ export readonly class WindowEvents on thread.main {
   readonly all: Event<WindowEvent>;
   readonly focused: Event<WindowFocusedEvent>;
   readonly blurred: Event<WindowBlurredEvent>;
+  readonly minimized: Event<WindowMinimizedEvent>;
+  readonly unminimized: Event<WindowUnminimizedEvent>;
   readonly resized: Event<WindowResizedEvent>;
   readonly navigationRequested: Event<WindowNavigationRequestedEvent>;
   readonly closeRequested: Event<WindowCloseRequestedEvent>;
@@ -29,6 +33,8 @@ export readonly class WindowEvents on thread.main {
     this.all = new Event<WindowEvent>();
     this.focused = new Event<WindowFocusedEvent>();
     this.blurred = new Event<WindowBlurredEvent>();
+    this.minimized = new Event<WindowMinimizedEvent>();
+    this.unminimized = new Event<WindowUnminimizedEvent>();
     this.resized = new Event<WindowResizedEvent>();
     this.navigationRequested = new Event<WindowNavigationRequestedEvent>();
     this.closeRequested = new Event<WindowCloseRequestedEvent>();
@@ -49,6 +55,24 @@ export readonly class WindowEvents on thread.main {
     let blurred = this.blurred;
     blurred.publish(in event);
     const aggregate = WindowEvent.blurred(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishMinimized(in windowId: String): void {
+    const event = WindowMinimizedEvent({ windowId: copy windowId });
+    let minimized = this.minimized;
+    minimized.publish(in event);
+    const aggregate = WindowEvent.minimized(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishUnminimized(in windowId: String): void {
+    const event = WindowUnminimizedEvent({ windowId: copy windowId });
+    let unminimized = this.unminimized;
+    unminimized.publish(in event);
+    const aggregate = WindowEvent.unminimized(copy event);
     let all = this.all;
     all.publish(in aggregate);
   }
@@ -124,6 +148,10 @@ export readonly class WindowEvents on thread.main {
     all.finish();
     focused.finish();
     blurred.finish();
+    let minimized = this.minimized;
+    let unminimized = this.unminimized;
+    minimized.finish();
+    unminimized.finish();
     resized.finish();
     navigationRequested.finish();
     closeRequested.finish();

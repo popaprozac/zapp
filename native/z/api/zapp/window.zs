@@ -17,6 +17,8 @@ import {
   WindowClosedEvent as FrameworkWindowClosedEvent,
   WindowEvent as FrameworkWindowEvent,
   WindowFocusedEvent as FrameworkWindowFocusedEvent,
+  WindowMinimizedEvent as FrameworkWindowMinimizedEvent,
+  WindowUnminimizedEvent as FrameworkWindowUnminimizedEvent,
   WindowNavigationRequestedEvent as FrameworkWindowNavigationRequestedEvent,
   WindowResizedEvent as FrameworkWindowResizedEvent,
   WindowSize as FrameworkWindowSize,
@@ -31,6 +33,8 @@ export type WindowEvent = FrameworkWindowEvent;
 export type WindowEventSubscription = FrameworkWindowEventSubscription;
 export type WindowEventSubscriptionError = FrameworkWindowEventSubscriptionError;
 export type WindowFocusedEvent = FrameworkWindowFocusedEvent;
+export type WindowMinimizedEvent = FrameworkWindowMinimizedEvent;
+export type WindowUnminimizedEvent = FrameworkWindowUnminimizedEvent;
 export type WindowBlurredEvent = FrameworkWindowBlurredEvent;
 export type WindowResizedEvent = FrameworkWindowResizedEvent;
 export type WindowSize = FrameworkWindowSize;

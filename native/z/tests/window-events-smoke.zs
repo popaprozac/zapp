@@ -46,6 +46,8 @@ function runWindowEventsSmoke(
           }
         }
         blurred(_) => {}
+        minimized(_) => {}
+        unminimized(_) => {}
         navigationRequested(_) => {}
         resized(value) => {
           allObserved.all = allObserved.all + i32(value.size.width);

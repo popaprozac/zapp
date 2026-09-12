@@ -15,3 +15,12 @@ internal function focusMacOSNativeWindow(in window: AppKit.NSWindow): void on th
   application.activate();
   window.makeKeyAndOrderFront(null);
 }
+
+internal function minimizeMacOSNativeWindow(in window: AppKit.NSWindow): void on thread.main {
+  if (!window.miniaturized) window.miniaturize(null);
+}
+
+internal function unminimizeMacOSNativeWindow(in window: AppKit.NSWindow): void on thread.main {
+  // Undo minimization only. No explicit app activation or key-window request.
+  if (window.miniaturized) window.deminiaturize(null);
+}
