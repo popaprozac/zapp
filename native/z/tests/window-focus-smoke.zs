@@ -34,10 +34,10 @@ function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thr
     probe.lastFocused = copy id;
     let windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
     const options = windows.options(in id);
-    match (in options) {
-      some(value) => { probe.registered = value.visible; }
-      none => { probe.registered = false; }
-    }
+    probe.registered = match (in options) {
+      some(value) => value.visible;
+      none => false;
+    };
     // Model a synchronous native delegate callback, not an optimistic event
     // from Window.focus(). The subscriber may close its own window here.
     windows.focusedNative(in id);
