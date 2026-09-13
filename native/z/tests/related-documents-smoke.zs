@@ -258,9 +258,63 @@ function checkDocumentEndpoint(): void throws i32 on thread.main {
   try verify(!afterClose, 82);
 }
 
+function relatedEndpoint(value: Option<BridgeDocument>): BridgeDocument throws i32 {
+  return match (value) { some(endpoint) => endpoint; none => throw 90; };
+}
+
+function checkRelatedEndpoint(): void throws i32 on thread.main {
+  const registry = createRelatedDocuments();
+  const owner = try document(registry.beginOwner(1, selection()));
+  const refused = match (BridgeDocument.beginRelated(2, registry, in owner)) {
+    some(endpoint) => false;
+    none => true;
+  };
+  try verify(refused && registry.count() == 1, 91);
+  try ready(registry, in owner);
+  const child = try relatedEndpoint(BridgeDocument.beginRelated(2, registry, in owner));
+  const realm = "0123456789abcdef0123456789abcdef";
+  const wrongRealm = "fedcba9876543210fedcba9876543210";
+  const beforeCommit = match (child.offer(in realm)) { some(value) => true; none => false; };
+  try verify(child.requiresShell() && !beforeCommit, 92);
+  child.didCommit();
+  const identity = try document(child.offer(in realm));
+  const token = `${identity.token}`;
+  try verify(!child.observeShell(in token, in realm), 93);
+  try verify(!child.acknowledge(in token, copy realm), 94);
+  try verify(child.bindingMatches(in token, in realm) && !child.isCurrent(in identity), 95);
+  const earlyRequest = match (registry.beginRequest(in identity, 1)) { some(value) => true; none => false; };
+  try verify(!earlyRequest, 96);
+  try verify(!child.observeShell("0", in realm) && !child.observeShell(in token, in wrongRealm), 97);
+  try verify(child.observeShell(in token, in realm) && child.isCurrent(in identity), 98);
+  const capabilities = match (registry.capabilitiesFor(in identity)) { some(value) => value; none => throw 99; };
+  try verify(capabilities.allowsService("notes.list") && !capabilities.allowsService("notes.delete"), 100);
+
+  // A child handle never retargets, even when the native window survives.
+  child.didCommit();
+  const replacement = match (child.offer(in realm)) { some(value) => true; none => false; };
+  try verify(!replacement && !child.isCurrent(in identity) && registry.count() == 1, 101);
+  const preparing = try relatedEndpoint(BridgeDocument.beginRelated(3, registry, in owner));
+  preparing.close();
+  try verify(registry.count() == 1, 102);
+
+  // Native creation/readiness can race owner retirement. Neither a late DOM
+  // observation nor another commit may resurrect the child's reserved token.
+  const lost = try relatedEndpoint(BridgeDocument.beginRelated(4, registry, in owner));
+  lost.didCommit();
+  const lostIdentity = try document(lost.offer(in realm));
+  const lostToken = `${lostIdentity.token}`;
+  lost.acknowledge(in lostToken, copy realm);
+  try verify(retireCount(registry, in owner) == 2, 103);
+  try verify(!lost.observeShell(in lostToken, in realm), 104);
+  lost.didCommit();
+  const revived = match (lost.offer(in realm)) { some(value) => true; none => false; };
+  try verify(!revived && registry.count() == 0, 105);
+}
+
 async function main(): i32 throws i32 on thread.main {
   try checkIdentities();
   try checkDocumentEndpoint();
+  try checkRelatedEndpoint();
   try await checkCancellation();
   console.log("related document registry: identity, readiness, authority, generations, cancellation passed");
   return 0;

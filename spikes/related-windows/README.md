@@ -39,6 +39,7 @@ bun run test:checked-z
 bun run test:checked-lifetime
 bun run test:registry
 bun run test:document-routing
+bun run test:related-readiness
 bun run benchmark
 ```
 
@@ -126,9 +127,9 @@ window-ID and request-ID reuse, stale/duplicate completion, delayed task-control
 attachment, and cancellation of suspended Z work. An explicit task-start check
 prevents a cancellation-before-start case from masquerading as in-flight proof.
 
-The registry is not yet wired into the production macOS window manager or the
-checked-Z WebKit fixture above. No public factory is exposed. Native source/origin
-authentication and family close veto are still separate integration gates.
+The registry now backs ordinary macOS document routing and the related-readiness
+fixture below. No public related-window factory is exposed. Production related
+creation and family close veto are still separate integration gates.
 Results go to ignored `.artifacts/registry-results.json`; the
 [dated evidence](results/2026-09-13/registry.json) is retained separately.
 
@@ -158,6 +159,33 @@ iteration bound provides a secondary deadline; the loopback server stops in
 This probe exposed and helped fix Stage 0's omission of task-handle runtime
 support in synchronous programs that only store `TaskControl`/`TaskScope`.
 No dummy async function or native shim was added to the fixture.
+
+## Internal related-child readiness
+
+`bun run test:related-readiness` uses the same bounded runner with
+`--related` and the Z-authored
+[`related-readiness-native-smoke.zs`](../../native/z/tests/related-readiness-native-smoke.zs)
+host. It tests the production endpoint, transport and bootstrap in a real
+WebKit-created child, with WebKit's supplied configuration and separate bridge
+registration. No owner relay handles its service messages.
+
+All four native/Stage 0 x `-O0`/`-O2` UBSan runs pass: one unprepared creation is
+refused, one reserved child inherits the owner's `notes.list` grant (not
+`admin.erase`), its call issued before body parsing waits for native readiness,
+and its direct reply is `42`. It also checks shared owner object access, distinct
+documents, and child closure leaving the owner registered. Cleanup drops child
+registrations explicitly before the fixture exits; this is not a leak proof.
+
+Results go to ignored `.artifacts/related-readiness-results.json`; the
+[dated evidence](results/2026-09-13/related-readiness.json) is checked in. Deadlines
+match the document-routing probe above. Root routing is tested separately by
+that probe and the packaged Z Notes smoke.
+
+This is an internal readiness proof with loopback pages and an instrumented
+native echo. Production factory integration, partial native-construction failure,
+family preflight, renderer loss, custom-protocol/Vite shell selection, and initial
+`about:blank` readiness remain open. It does not expose `createRelatedWindow` or
+measure first paint/startup improvement.
 
 ## Direct bridge follow-up
 

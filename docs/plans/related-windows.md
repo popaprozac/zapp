@@ -181,6 +181,8 @@ validation and physical window teardown remain outside this helper.
       scheduling, completion consumption, and committed-navigation retirement.
 - [x] Bind the production bridge to a native-offered token and reject stale
       replies in the actual JS execution realm, including reused request IDs.
+- [x] Prove the internal child endpoint's inherited authority and two-stage
+      shell/bridge readiness in headless tests and an actual WebKit-created child.
 - [ ] Integrate related-child creation, shell/bridge readiness, inherited
       authority, and partial-creation cleanup into the window manager.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
@@ -195,6 +197,7 @@ bun test runtime/related-window-lifetime.test.ts runtime/related-window-types.te
 bun test runtime/related-window-transport.test.ts
 bun test runtime/document-transport.test.ts
 bun run spikes/related-windows/document-routing.ts
+bun run spikes/related-windows/document-routing.ts --related
 bun run check
 ```
 
@@ -312,3 +315,42 @@ One upstream limitation remains recorded in Z's ownership-pressure log: native
 lowering of stored async block closures is narrower than Stage 0. Routing keeps
 its existing expression-bodied scheduling callback and named async entrypoint;
 this checkpoint does not claim general closure/suspension parity.
+
+### Internal related-child readiness checkpoint
+
+`BridgeDocument.beginRelated` now reserves a child under an exact live, ready
+owner. It accepts no capability override. The child keeps that reserved identity
+through its first commit; later committed navigation is terminal rather than
+silently retargeting a retained handle. Owner retirement also removes a child
+that is still being prepared.
+
+The child bootstrap queues calls until it has both a usable `head`/`body` and
+native activation. Its acknowledgement establishes bridge presence; native code
+then evaluates the matching realm/token and DOM, marks registry readiness, and
+releases the queue. Wrong identities, retirement, cancellation, and timeouts
+cannot start queued invocations. Native routing remains authoritative even if an
+activation was queued before JavaScript disposal could run. Root windows retain
+their existing handshake; they do not pay for the extra child DOM evaluation.
+
+The [related-readiness probe](../../native/z/tests/related-readiness-native-smoke.zs)
+uses WebKit's supplied child configuration, a fresh content controller and
+retained Z protocol adapters. It refuses an unprepared child, accepts one with
+the owner's exact authority, invokes from the child's head before body parsing,
+receives a direct native reply, reads shared owner state, and closes the child
+without retiring its owner. Native and Stage 0 pass at `-O0`/`-O2` with strict
+warnings and UBSan; [raw results](../../spikes/related-windows/results/2026-09-13/related-readiness.json)
+are retained. The echo is instrumentation, not a registered application service.
+
+This proves the internal gate, not the public factory. Production manager
+creation/failed-creation unwind, shell URL selection for packaged and Vite
+content, family-wide close preflight, unsolicited delivery, and renderer loss
+remain integration work. The HTTP child performs a real navigation; this does
+not prove initial `about:blank` readiness, first paint, or a performance gain.
+
+Two small compiler corrections landed with this checkpoint: Stage 0 preserves
+the enclosing function's return type inside value-producing blocks, and native
+emission declares Objective-C block adapters before nested callable bodies.
+Nested block capture of an outer callback parameter remains a separate native
+lowering gap. Whole-aggregate `replace` of ARC-bearing `Option` storage also
+remains restricted; the fixture retains a direct endpoint before clearing its
+one-shot reservation. Neither restriction is hidden by a native shim.

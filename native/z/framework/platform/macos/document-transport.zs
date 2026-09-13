@@ -12,6 +12,28 @@ internal type DesktopRouteMessageOperation = (
 readonly struct DocumentBinding {
   realm: String;
   token: String;
+  shell: boolean;
+}
+
+function confirmDocumentShell(
+  document: BridgeDocument,
+  webView: WebKit.WKWebView,
+  token: String,
+  realm: String
+): void on thread.main {
+  if (!document.requiresShell() || !document.bindingMatches(in token, in realm)) return;
+  const binding = DocumentBinding({ realm: copy realm, token: copy token, shell: true });
+  const encoded = json.encode(in binding);
+  const probe = `(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._documentShellReady==='function'&&b._documentShellReady(r.realm,r.token)})()`;
+  webView.evaluateJavaScript(move probe, completionHandler: move (value, error): void => {
+    if (error != null || !(value instanceof WebKit.NSNumber)) return;
+    if (!value.boolValue || !document.observeShell(in token, in realm)) return;
+    // Registry readiness precedes queued JS calls. The eventual script checks
+    // its realm/token/disposal again; native acceptance still rejects retirement
+    // even if this activation was queued before JS disposal could run.
+    const activation = `(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._activateDocument==='function'&&b._activateDocument(r.realm,r.token)})()`;
+    webView.evaluateJavaScript(move activation, completionHandler: move (result, failure): void => {});
+  });
 }
 
 function lineEnd(in source: String): usize {
@@ -57,9 +79,9 @@ internal function routeDocumentMessage(
     if (!validRealm(in body)) return;
     match (document.offer(in body)) {
       some(identity) => {
-        const binding = DocumentBinding({ realm: copy body, token: `${identity.token}` });
+        const binding = DocumentBinding({ realm: copy body, token: `${identity.token}`, shell: document.requiresShell() });
         const source = json.encode(in binding);
-        const script = `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._bindDocument==='function'&&b._bindDocument(r.realm,r.token)})()`;
+        const script = `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._bindDocument==='function'&&b._bindDocument(r.realm,r.token,r.shell)})()`;
         webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});
       }
       none => {}
@@ -71,7 +93,10 @@ internal function routeDocumentMessage(
     if (tokenEnd == body.byteLength) return;
     const token = body.copyBytes(0, tokenEnd);
     const realm = body.copyBytes(tokenEnd + 1, body.byteLength);
-    if (validRealm(in realm)) document.acknowledge(in token, move realm);
+    if (validRealm(in realm)) {
+      document.acknowledge(in token, copy realm);
+      confirmDocumentShell(document, webView, move token, move realm);
+    }
     return;
   }
   if (tag.byteAt(0) != 64) return;

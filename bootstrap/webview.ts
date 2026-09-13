@@ -27,6 +27,9 @@
     ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")
     : "";
   let documentToken = "";
+  let documentActive = false;
+  let documentNeedsShell = false;
+  let documentReadyListener: (() => void) | undefined;
   let waitingForDocument: string[] = [];
 
   function postNative(msg: string): void {
@@ -41,8 +44,27 @@
   function post(msg: string): void {
     if (disposed) return;
     if (!documentBound) { postNative(msg); return; }
-    if (!documentToken) { waitingForDocument.push(msg); return; }
+    if (!documentActive) { waitingForDocument.push(msg); return; }
     postNative("@" + documentToken + "\n" + msg);
+  }
+
+  function clearDocumentReadyListener(): void {
+    if (!documentReadyListener) return;
+    document.removeEventListener("DOMContentLoaded", documentReadyListener);
+    documentReadyListener = undefined;
+  }
+
+  function flushDocumentQueue(): void {
+    const queued = waitingForDocument;
+    waitingForDocument = [];
+    for (const msg of queued) {
+      if (disposed) break;
+      // An invoke cancelled/timed out before activation must never start work.
+      let value: any;
+      try { value = JSON.parse(msg); } catch {}
+      if (value?.t === 1 && !pending[value.id]) continue;
+      post(msg);
+    }
   }
 
   function takePending(id: number): PendingEntry | undefined {
@@ -125,26 +147,47 @@
   const bridge = {
     // Native evaluates this in the current document, but a late evaluation may
     // land after navigation. The realm guard prevents binding its replacement.
-    _bindDocument(expectedRealm: string, token: string): boolean {
+    _bindDocument(expectedRealm: string, token: string, needsShell = false): boolean {
       if (disposed || !documentBound || expectedRealm !== realm || !/^[1-9][0-9]{0,19}$/.test(token)) return false;
       if (documentToken && (token.length < documentToken.length
         || (token.length === documentToken.length && token < documentToken))) return false;
+      if (token === documentToken && needsShell !== documentNeedsShell) return false;
       if (documentToken && token !== documentToken) {
         const error = new Error("Native document session was replaced");
         for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
       }
-      postNative("@ready\n" + token + "\n" + realm);
+      clearDocumentReadyListener();
+      if (token !== documentToken) documentActive = false;
       documentToken = token;
-      const queued = waitingForDocument;
-      waitingForDocument = [];
-      for (const msg of queued) {
-        if (disposed) break;
-        // An invoke cancelled/timed out before binding must never start work.
-        let value: any;
-        try { value = JSON.parse(msg); } catch {}
-        if (value?.t === 1 && !pending[value.id]) continue;
-        post(msg);
+      documentNeedsShell = needsShell;
+      const acknowledge = () => {
+        if (disposed || documentToken !== token) return;
+        if (needsShell && (!document.head || !document.body)) return;
+        clearDocumentReadyListener();
+        postNative("@ready\n" + token + "\n" + realm);
+        if (!needsShell) {
+          documentActive = true;
+          flushDocumentQueue();
+        }
+      };
+      if (needsShell && (!document.head || !document.body)) {
+        documentReadyListener = acknowledge;
+        document.addEventListener("DOMContentLoaded", acknowledge);
+      } else {
+        acknowledge();
       }
+      return true;
+    },
+
+    _documentShellReady(expectedRealm: string, token: string): boolean {
+      return !disposed && documentBound && documentNeedsShell && expectedRealm === realm
+        && token === documentToken && !!document.head && !!document.body;
+    },
+
+    _activateDocument(expectedRealm: string, token: string): boolean {
+      if (!bridge._documentShellReady(expectedRealm, token)) return false;
+      documentActive = true;
+      flushDocumentQueue();
       return true;
     },
 
@@ -153,7 +196,7 @@
     },
 
     _onDocumentInvokeResult(token: string, id: number, ok: boolean, payload: string): boolean {
-      if (disposed || !documentBound || !documentToken || token !== documentToken) return false;
+      if (disposed || !documentBound || !documentActive || token !== documentToken) return false;
       bridge._onInvokeResult(id, ok, payload);
       return true;
     },
@@ -431,6 +474,8 @@
     _dispose(error: Error): void {
       if (disposed) return;
       disposed = error;
+      clearDocumentReadyListener();
+      documentActive = false;
       waitingForDocument = [];
       for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
       for (const id of Object.keys(bridge._syncPending)) {

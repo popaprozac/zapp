@@ -8,6 +8,7 @@
     "test:checked-lifetime": "bun run checked-z.ts --lifetime",
     "test:registry": "bun run registry.ts",
     "test:document-routing": "bun run document-routing.ts",
+    "test:related-readiness": "bun run document-routing.ts --related",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

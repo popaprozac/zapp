@@ -2,7 +2,8 @@ import { thread } from "std/thread";
 import { CapabilitySelection } from "./application-capabilities.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "./related-documents.zs";
 
-// One native endpoint, many successive documents. Platform callbacks validate
+// Root endpoints can host successive documents; related endpoints are terminal
+// after replacement. Platform callbacks validate
 // sender/frame/origin before offering, acknowledging, or accepting a token.
 // Realm names only target handshake JS; they never select authority.
 internal class BridgeDocument on thread.main {
@@ -14,6 +15,7 @@ internal class BridgeDocument on thread.main {
   private token: String;
   private committed: boolean;
   private closed: boolean;
+  private related: boolean;
 
   internal constructor(windowId: i32, documents: RelatedDocuments, capabilities: CapabilitySelection) {
     this.windowId = windowId;
@@ -24,9 +26,39 @@ internal class BridgeDocument on thread.main {
     this.token = "";
     this.committed = false;
     this.closed = false;
+    this.related = false;
   }
 
+  // A child can inherit only a live, ready native owner's authority. Reserve its
+  // identity before creating native resources so owner retirement includes it.
+  static function beginRelated(
+    windowId: i32,
+    documents: RelatedDocuments,
+    in owner: RelatedDocumentIdentity
+  ): Option<BridgeDocument> on thread.main {
+    const capabilities = match (documents.capabilitiesFor(in owner)) {
+      some(value) => value;
+      none => return Option.none;
+    };
+    const identity = match (documents.beginRelated(in owner, windowId)) {
+      some(value) => value;
+      none => return Option.none;
+    };
+    const endpoint = new BridgeDocument(windowId, documents, capabilities);
+    endpoint.adoptRelated(identity);
+    return Option.some(endpoint);
+  }
+
+  private function adoptRelated(inout this, identity: RelatedDocumentIdentity): void {
+    this.related = true;
+    this.token = `${identity.token}`;
+    this.identity = Option.some(identity);
+  }
+
+  function requiresShell(): boolean { return this.related; }
+
   function retire(inout this): void {
+    if (this.related) this.closed = true;
     match (copy this.identity) {
       some(identity) => { const retired = this.documents.retire(in identity); }
       none => {}
@@ -38,6 +70,11 @@ internal class BridgeDocument on thread.main {
   }
 
   function didCommit(inout this): void {
+    if (this.closed) return;
+    if (this.related && !this.committed) {
+      this.committed = true;
+      return;
+    }
     this.retire();
     if (!this.closed) this.committed = true;
   }
@@ -51,9 +88,13 @@ internal class BridgeDocument on thread.main {
     if (this.closed || !this.committed) return Option.none;
     if (this.realm.byteLength != 0 && this.realm != realm) return Option.none;
     match (copy this.identity) {
-      some(identity) => return Option.some(copy identity);
+      some(identity) => {
+        if (!this.documents.isLive(in identity)) return Option.none;
+        return Option.some(copy identity);
+      }
       none => {}
     }
+    if (this.related) return Option.none;
     const documents = this.documents;
     this.identity = documents.beginOwner(this.windowId, this.capabilities);
     this.token = match (in this.identity) { some(identity) => `${identity.token}`; none => ""; };
@@ -65,11 +106,30 @@ internal class BridgeDocument on thread.main {
     if (this.realm.byteLength != 0 && this.realm != realm) return false;
     return match (copy this.identity) {
       some(identity) => {
-        if (this.token != token) return false;
+        if (this.token != token || !this.documents.isLive(in identity)) return false;
         this.realm = move realm;
-        this.documents.observeDocument(in identity);
+        if (!this.related) this.documents.observeDocument(in identity);
         select this.documents.observeBridge(in identity);
       }
+      none => false;
+    };
+  }
+
+  function bindingMatches(in token: String, in realm: String): boolean {
+    if (this.closed || !this.committed || this.token != token
+      || this.realm.byteLength == 0 || this.realm != realm) return false;
+    return match (in this.identity) {
+      some(identity) => this.documents.isLive(in identity);
+      none => false;
+    };
+  }
+
+  // Called only after the native host has evaluated the matching realm/token
+  // and usable head/body. A bridge acknowledgement alone cannot expose a child.
+  function observeShell(in token: String, in realm: String): boolean {
+    if (!this.related || !this.bindingMatches(in token, in realm)) return false;
+    return match (in this.identity) {
+      some(identity) => this.documents.observeDocument(in identity);
       none => false;
     };
   }
