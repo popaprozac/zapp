@@ -266,3 +266,13 @@ That follow-up also closed upstream Z `instanceof` control-flow parity gaps:
 the native frontend now preserves negated guard proofs, while Stage 0 no longer
 leaks a one-branch proof past a nonterminal `if`. Regressions test valid and
 invalid paths independently. No new Z syntax or runtime wrapper was required.
+
+The next [headless Z registry proof](../../native/z/tests/related-documents-smoke.zs)
+now exercises the framework's internal document/authority/request bookkeeping.
+Its [four-run evidence](../../spikes/related-windows/results/2026-09-13/registry.json)
+covers real suspended task cancellation, live owner/sibling work, nested and
+partially constructed descendants, and stale document/request generations.
+Related creation has no capability override: it inherits the owner's immutable
+selection. This is not yet connected to the WebKit probe or production window
+manager; the [plan](../plans/related-windows.md#native-registry-checkpoint) keeps
+those integration gates distinct.

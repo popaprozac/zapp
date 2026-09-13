@@ -87,18 +87,52 @@ export class PendingRequests on thread.main {
     id: u64,
     generation: u64
   ): void {
+    this.finishIfCurrent(id, generation);
+  }
+
+  // Document-bound routing carries the generation through asynchronous task
+  // submission. A delayed attachment must not attach to a reused request ID.
+  internal function attachGeneration(
+    inout this,
+    id: u64,
+    generation: u64,
+    control: TaskControl
+  ): boolean {
+    const found = this.requests.remove(id);
+    match (found) {
+      some(value) => {
+        let request = value;
+        if (request.hasSameGeneration(generation)) {
+          request.attach(control);
+          this.requests.set(id, request);
+          return true;
+        }
+        this.requests.set(id, request);
+      }
+      none => {}
+    }
+    control.requestCancel();
+    return false;
+  }
+
+  internal function finishIfCurrent(
+    inout this,
+    id: u64,
+    generation: u64
+  ): boolean {
     const found = this.requests.remove(id);
     match (found) {
       some(value) => {
         let request = value;
         if (request.hasSameGeneration(generation)) {
           request.finish();
-          return;
+          return true;
         }
         this.requests.set(id, request);
       }
       none => {}
     }
+    return false;
   }
 
   function cancel(

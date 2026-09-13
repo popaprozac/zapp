@@ -6,6 +6,7 @@
     "test:bridge": "bun run direct-bridge.ts",
     "test:checked-z": "bun run checked-z.ts",
     "test:checked-lifetime": "bun run checked-z.ts --lifetime",
+    "test:registry": "bun run registry.ts",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

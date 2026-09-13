@@ -36,6 +36,7 @@ bun run test
 bun run test:bridge
 bun run test:checked-z
 bun run test:checked-lifetime
+bun run test:registry
 bun run benchmark
 ```
 
@@ -43,7 +44,7 @@ Use `bun run test`, not Bun's test-discovery command. For a quick benchmark
 wiring check: `BENCH_RUNS=1 bun run benchmark`; the saved baseline uses five
 rounds. No root workspace dependency, script, lockfile, or CI changes are needed.
 
-All commands briefly open native windows and close them automatically. They
+The UI commands briefly open native windows and close them automatically. They
 use an ephemeral loopback server, stopped in `finally`, and locally bundled
 scripts. Dependency installation may access the network; the native probes do
 not download remote scripts or use a running Z Notes instance or Vite server.
@@ -108,6 +109,26 @@ family registry, permission inheritance, navigation/security audit, or real Z
 task cancellation. The instrumented held request intentionally never replies.
 Results are written to ignored `.artifacts/checked-z-lifetime-results.json`;
 the [dated evidence](results/2026-09-13/checked-z-lifetime.json) is retained separately.
+
+## Headless native document registry
+
+`bun run test:registry` needs no WebKit, visible desktop, or network server. It
+executes the framework's internal Z registry, using the actual immutable
+capability selection and pending task controls. Native and Stage 0 emission each
+run at `-O0`/`-O2` with UBSan. Emission is bounded at 120 seconds, compilation at
+30 seconds, and each executable at 10 seconds with process-group termination.
+
+The test covers separate shell/bridge readiness, unchanged inherited grants,
+partial-child cleanup, nested descendants, live siblings, owner replacement,
+window-ID and request-ID reuse, stale/duplicate completion, delayed task-control
+attachment, and cancellation of suspended Z work. An explicit task-start check
+prevents a cancellation-before-start case from masquerading as in-flight proof.
+
+The registry is not yet wired into the production macOS window manager or the
+checked-Z WebKit fixture above. No public factory is exposed. Native source/origin
+authentication and family close veto are still separate integration gates.
+Results go to ignored `.artifacts/registry-results.json`; the
+[dated evidence](results/2026-09-13/registry.json) is retained separately.
 
 ## Direct bridge follow-up
 

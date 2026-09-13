@@ -5,6 +5,8 @@ Status: **approved contract, implementation in progress**, 2026-09-13.
 The runtime now provides the event/error/type declarations, a tested internal
 document-lifetime helper, and terminal disposal of the production WebView bridge.
 A checked-Z WebKit probe connects those pieces across actual child closure.
+The internal Z document registry separately proves inherited authority,
+subtree retirement, and cancellation of real tasks on both compiler paths.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -136,6 +138,9 @@ validation and physical window teardown remain outside this helper.
       reentrancy, cleanup failures, typed overloads, and cross-realm Promises.
 - [x] Bind the helper to the actual bootstrap's pending-request disposal and
       prove retained child-Promise rejection after native closure in checked Z.
+- [x] Implement the internal Z registry with native-minted document identities,
+      unchanged inherited capabilities, generation-safe request tracking, and
+      real-task cancellation tests for retired descendants and live siblings.
 - [ ] Integrate the checked-Z family/document registry into the window manager;
       do not promote the Objective-C oracle into production.
 - [ ] Implement the readiness handshake and partial-creation cleanup.
@@ -171,3 +176,44 @@ identity, not the production creation handshake or family registry. It does not
 yet prove authority-catalog inheritance, owner replacement, renderer failure,
 custom-protocol readiness, or cancellation of a real Z service task. The held
 native request is an instrumented pending request, not a running service.
+
+### Native registry checkpoint
+
+`native/z/framework/related-documents.zs` is framework-internal Z code, not yet
+connected to `MacOSApplicationRuntime` or the public factory. It owns one record
+per live native window/document pair. Native-minted monotonically increasing
+tokens prevent a retired identity from addressing a replacement document.
+Private registry storage cannot be reset through the calling API.
+
+An ordinary owner registers an already-validated `CapabilitySelection`. Related
+creation accepts only its exact owner identity and new native window ID: there
+is no profile override to accidentally grant different family authority.
+Children remain unroutable until both native-validated bridge and shell readiness
+have been observed. Retiring an owner also removes children still being prepared.
+
+Each document owns an existing `PendingRequests` table. Internal request tickets
+pair document identity with request ID and generation. Completion is consumed
+once; stale completion and delayed attachment cannot affect a reused request ID
+or a replacement document. Late attachments request cancellation immediately.
+Committed subtree retirement first removes every affected record, then requests
+cancellation, leaving unrelated owner/sibling documents active. The platform must
+perform family cancellation preflight before committing retirement and validate
+the ticket at the actual delivery turn before evaluating JavaScript.
+
+`bun run spikes/related-windows/registry.ts` runs the headless registry test with
+native and Stage 0 emission at `-O0`/`-O2`, strict Clang warnings, UBSan, and a
+10-second process-group runtime deadline. It verifies real tasks reach suspension
+before child retirement, cancelled tasks do not continue afterward, and owner and
+sibling tasks complete. No additional JS pending table or per-request Promise
+wrapper is introduced. Registry lookups use hashed maps; subtree collection walks
+the live ancestry at teardown, not on every bridge request. These are structural
+cost observations, not new benchmark measurements.
+
+Next, bind this registry to actual WebView/document provenance and the existing
+window-manager routing/close paths. Origin validation, token delivery across
+navigation, partial native creation unwind, renderer loss, and full-family close
+preflight remain integration gates. The headless proof does not authenticate a
+renderer or demonstrate any of those native UI paths. Before growing the runtime,
+split its window/document responsibilities: `application-runtime.zs` already has
+721 lines and fails the existing test's fewer-than-700-lines organization guard.
+That failure predates this checkpoint; the guard has not been relaxed.
