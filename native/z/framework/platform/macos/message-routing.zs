@@ -1,3 +1,4 @@
+import { RelatedDocumentIdentity, RelatedDocumentRequest } from "../../related-documents.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
 import { CapabilitySelection } from "../../application-capabilities.zs";
 import {
@@ -12,7 +13,6 @@ import {
   bridgeFailure,
   decodeBridgeMessage,
 } from "../../bridge.zs";
-import { TaskControl } from "std/async";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import {
@@ -67,136 +67,74 @@ enum WindowMessageRoute {
   service BridgeMessage,
 }
 
-function deliverInvalidWindowResponse(
-  messageId: u64,
-  windowId: i32
-): void on thread.main {
-  const response = bridgeFailure(
-    messageId,
-    "INVALID_WINDOW",
-    "unknown originating window"
-  );
-  deliverResponse(in response, windowId);
-}
-
-export c function zapp_route_message_owned(
-  message: String,
-  windowId: i32
-): void {
-  const current = currentMacOSApplication();
-  const updates = current.updates;
-  const routed = updates.schedule(
-    thread.main,
-    async move (): void => routeMessageOnMain(move message, windowId)
-  );
-  if (!routed.accepted) return;
-}
-
 internal function routeMessageOnMain(
   message: String,
-  windowId: i32
+  document: RelatedDocumentIdentity
 ): void on thread.main {
   const current = currentMacOSApplication();
+  const documents = current.windows.documents;
+  if (!documents.isReady(in document)) return;
   const updates = current.updates;
   const decoded = attempt decodeBridgeMessage(in message);
   const bridgeMessage = match (decoded) {
     success(value) => value;
     failure(error) => {
-      const failure = bridgeFailure(
-        0,
-        "INVALID_MESSAGE",
-        copy error.message
-      );
-      deliverResponse(in failure, windowId);
+      const failure = bridgeFailure(0, "INVALID_MESSAGE", copy error.message);
+      deliverResponse(in failure, document);
       return;
     }
   };
   if (bridgeMessage.kind == BridgeMessageKind.cancel) {
-    const cancellationId = bridgeMessage.id;
-    const cancellation = updates.schedule(
-      thread.main,
-      async move (): void => cancelPendingRequest(windowId, cancellationId)
-    );
-    if (!cancellation.accepted) return;
+    documents.cancelRequest(in document, bridgeMessage.id);
     return;
   }
-  const services = current.services;
   const tracked = bridgeMessage.kind == BridgeMessageKind.invoke;
   const requestId = bridgeMessage.id;
+  let request = RelatedDocumentRequest({ document: copy document, id: requestId, generation: 0 });
+  if (tracked) {
+    const started = match (documents.beginRequest(in document, requestId)) {
+      some(ticket) => ticket;
+      none => return;
+    };
+    request = started;
+  }
+  const services = current.services;
   const control = updates.schedule(
     thread.main,
-    async move (): void => await routeScheduledMessageAndDeliver(
-      move bridgeMessage,
-      services,
-      windowId,
-      requestId,
-      tracked
-    )
+    async move (): void => await routeScheduledMessageAndDeliver(move bridgeMessage, services, request, tracked)
   );
-  const accepted: boolean = control.accepted;
-  if (tracked && accepted) {
-    const attachment = updates.schedule(
-      thread.main,
-      async move (): void => attachPendingRequest(windowId, requestId, control)
-    );
-    if (!attachment.accepted) return;
+  if (tracked) documents.attachRequest(in request, control);
+  if (!control.accepted) {
+    const failure = bridgeFailure(requestId, "APPLICATION_CLOSING", "Application is closing");
+    finishAndDeliverResponse(in failure, in request, tracked);
   }
-  if (!accepted) {
-    const failure = bridgeFailure(
-      0,
-      "APPLICATION_CLOSING",
-      "Application is closing"
-    );
-    deliverResponse(in failure, windowId);
-  }
-}
-
-function attachPendingRequest(
-  windowId: i32,
-  id: u64,
-  control: TaskControl
-): void on thread.main {
-  const current = currentMacOSApplication();
-  current.windows.attachRequest(windowId, id, control);
 }
 
 async function routeScheduledMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
-  windowId: i32,
-  requestId: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): void on thread.main {
-  let generation: u64 = 0;
-  if (tracked) generation = beginPendingRequest(windowId, requestId);
-  const delivered = await routeFrameworkOrServiceMessageAndDeliver(
-    move message,
-    services,
-    windowId,
-    requestId,
-    generation,
-    tracked
-  );
+  const delivered = await routeFrameworkOrServiceMessageAndDeliver(move message, services, request, tracked);
   if (!delivered) return;
 }
 
 async function routeFrameworkOrServiceMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
   const permissions = current.permissions;
   const notifications = current.notifications;
-  const selected = current.windows.capabilitiesForWindow(windowId);
+  const selected = current.windows.documents.capabilitiesFor(in request.document);
   const capabilities = match (selected) {
     some(value) => value;
     none => {
-      if (tracked) finishPendingRequest(windowId, requestId, generation);
-      deliverInvalidWindowResponse(message.id, windowId);
+      if (tracked) finishPendingRequest(in request);
+      // The document is no longer authorized; do not target its replacement.
       return true;
     }
   };
@@ -209,9 +147,7 @@ async function routeFrameworkOrServiceMessageAndDeliver(
   const delivered = await routeAfterNotificationMessageAndDeliver(
     move notificationRoute,
     services,
-    windowId,
-    requestId,
-    generation,
+    request,
     tracked
   );
   return delivered;
@@ -220,16 +156,13 @@ async function routeFrameworkOrServiceMessageAndDeliver(
 async function routeAfterNotificationMessageAndDeliver(
   route: NotificationBridgeRoute,
   services: AsyncServices,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
   const forwarded = match (route) {
     response(value) => {
-      if (tracked) finishPendingRequest(windowId, requestId, generation);
-      deliverResponse(in value, windowId);
+      finishAndDeliverResponse(in value, in request, tracked);
       return true;
     }
     unhandled(value) => value;
@@ -237,36 +170,30 @@ async function routeAfterNotificationMessageAndDeliver(
   if (isFileBridgeMessage(in forwarded)) {
     return await routeFileMessageAndDeliver(
       move forwarded,
-      windowId,
-      requestId,
-      generation,
+      request,
       tracked
     );
   }
   return await routeWindowOrServiceMessageAndDeliver(
     move forwarded,
     services,
-    windowId,
-    requestId,
-    generation,
+    request,
     tracked
   );
 }
 
 async function routeFileMessageAndDeliver(
   message: BridgeMessage,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
-  const selected = current.windows.capabilitiesForWindow(windowId);
+  const selected = current.windows.documents.capabilitiesFor(in request.document);
   const capabilities = match (selected) {
     some(value) => value;
     none => {
-      if (tracked) finishPendingRequest(windowId, requestId, generation);
-      deliverInvalidWindowResponse(message.id, windowId);
+      if (tracked) finishPendingRequest(in request);
+      // The document is no longer authorized; do not target its replacement.
       return true;
     }
   };
@@ -278,39 +205,33 @@ async function routeFileMessageAndDeliver(
     capabilities,
     files
   );
-  if (tracked) finishPendingRequest(windowId, requestId, generation);
-  deliverResponse(in response, windowId);
+  finishAndDeliverResponse(in response, in request, tracked);
   return true;
 }
 
 async function routeWindowOrServiceMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
   let windows = current.windowManager;
   const windowRoute = selectWindowMessageRoute(
     move message,
-    windowId,
+    request,
     inout windows
   );
   match (windowRoute) {
     framework(response) => {
-      if (tracked) finishPendingRequest(windowId, requestId, generation);
-      deliverResponse(in response, windowId);
+      finishAndDeliverResponse(in response, in request, tracked);
       return true;
     }
-    handled => return true;
+    handled => { if (tracked) finishPendingRequest(in request); return true; }
     service(forwarded) => return await routeMessageAndDeliver(
       move forwarded,
       services,
-      windowId,
-      requestId,
-      generation,
+      request,
       tracked
     );
   }
@@ -318,16 +239,17 @@ async function routeWindowOrServiceMessageAndDeliver(
 
 function selectWindowMessageRoute(
   message: BridgeMessage,
-  windowId: i32,
+  request: RelatedDocumentRequest,
   inout windows: WindowManager
 ): WindowMessageRoute on thread.main {
   const current = currentMacOSApplication();
   const permissions = current.permissions;
-  const selected = current.windows.capabilitiesForWindow(windowId);
+  const selected = current.windows.documents.capabilitiesFor(in request.document);
   const workers = current.applicationWorkers;
   const menu = current.menu;
   const clipboard = current.clipboard;
   const shell = current.shell;
+  const windowId = request.document.windowId;
   const logicalId = current.windows.logicalWindowId(windowId);
   match (selected) {
     some(capabilities) => match (logicalId) {
@@ -486,9 +408,7 @@ function deliverFrontendMenuCommand(
 async function routeMessageAndDeliver(
   message: BridgeMessage,
   services: AsyncServices,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean {
   const routed = await routeDecodedMessageWithServicesAsync(
@@ -497,9 +417,7 @@ async function routeMessageAndDeliver(
   );
   const delivered = await on thread.main finishAndDeliverRoutedResponse(
     move routed,
-    windowId,
-    requestId,
-    generation,
+    request,
     tracked
   );
   return delivered;
@@ -507,50 +425,36 @@ async function routeMessageAndDeliver(
 
 async function finishAndDeliverRoutedResponse(
   routed: Option<BridgeResponse>,
-  windowId: i32,
-  requestId: u64,
-  generation: u64,
+  request: RelatedDocumentRequest,
   tracked: boolean
 ): boolean on thread.main {
-  if (tracked) finishPendingRequest(windowId, requestId, generation);
   return match (routed) {
     some(response) => {
-      deliverResponse(in response, windowId);
+      finishAndDeliverResponse(in response, in request, tracked);
       select true;
     }
-    none => false;
+    none => { if (tracked) finishPendingRequest(in request); select false; }
   };
 }
 
-function beginPendingRequest(
-  windowId: i32,
-  id: u64
-): u64 on thread.main {
+function finishPendingRequest(in request: RelatedDocumentRequest): boolean on thread.main {
   const current = currentMacOSApplication();
-  return current.windows.beginRequest(windowId, id);
+  return current.windows.documents.finishRequest(in request);
 }
 
-function finishPendingRequest(
-  windowId: i32,
-  id: u64,
-  generation: u64
+function finishAndDeliverResponse(
+  in response: BridgeResponse,
+  in request: RelatedDocumentRequest,
+  tracked: boolean
 ): void on thread.main {
-  const current = currentMacOSApplication();
-  current.windows.finishRequest(windowId, id, generation);
-}
-
-function cancelPendingRequest(
-  windowId: i32,
-  id: u64
-): void on thread.main {
-  const current = currentMacOSApplication();
-  current.windows.cancelRequest(windowId, id);
+  if (tracked && !finishPendingRequest(in request)) return;
+  deliverResponse(in response, copy request.document);
 }
 
 internal function deliverResponse(
   in response: BridgeResponse,
-  windowId: i32
+  document: RelatedDocumentIdentity
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.windows.deliverResponse(in response, windowId);
+  current.windows.deliverResponse(in response, document);
 }

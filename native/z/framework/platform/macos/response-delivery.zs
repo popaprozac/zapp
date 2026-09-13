@@ -3,6 +3,8 @@ import json from "std/json";
 import { TextBuffer } from "std/text";
 import { thread } from "std/thread";
 import { BridgeResponse } from "../../bridge.zs";
+import { BridgeDocument } from "../../bridge-document.zs";
+import { RelatedDocumentIdentity } from "../../related-documents.zs";
 import { configuredFrontendIsDevelopment } from "./configured-webview.zs";
 import { setMacOSApplicationResult } from "./application-host.zs";
 import {
@@ -10,6 +12,7 @@ import {
 } from "./configured-smoke.zs";
 
 readonly struct WebViewResponseEnvelope {
+  document: String;
   id: String;
   ok: boolean;
   payload: String;
@@ -70,15 +73,16 @@ function javascriptJSON(in source: String): String {
   return output.finish();
 }
 
-function responseScript(in response: BridgeResponse): String {
+function responseScript(in response: BridgeResponse, in document: RelatedDocumentIdentity): String {
   const envelope = WebViewResponseEnvelope({
+    document: `${document.token}`,
     id: `${response.id}`,
     ok: response.ok,
     payload: copy response.payload,
   });
   const encoded = json.encode(in envelope);
   const source = javascriptJSON(in encoded);
-  return `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b._onInvokeResult!=='function'){throw new Error('Zapp bridge is unavailable')}b._onInvokeResult(Number(r.id),r.ok,r.payload)})()`;
+  return `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._onDocumentInvokeResult==='function'&&b._onDocumentInvokeResult(r.document,Number(r.id),r.ok,r.payload)})()`;
 }
 
 function windowEventScript(
@@ -222,10 +226,13 @@ internal function deliverWebViewResponse(
   in webView: WebKit.WKWebView,
   in window: WebKit.NSWindow,
   in response: BridgeResponse,
+  document: RelatedDocumentIdentity,
+  endpoint: BridgeDocument,
   windowId: i32,
   activeWindowCount: usize
 ): void on thread.main {
-  const script = responseScript(in response);
+  if (!endpoint.isCurrent(in document)) return;
+  const script = responseScript(in response, in document);
   const payload = copy response.payload;
   const requestId = response.id;
   const development = configuredFrontendIsDevelopment();
@@ -233,6 +240,9 @@ internal function deliverWebViewResponse(
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {
+      // Evaluation can complete after committed navigation or closure. Neither
+      // a stale reply nor its completion may close/inspect the new document.
+      if (!endpoint.isCurrent(in document)) return;
       if (error != null) {
         setMacOSApplicationResult(45);
         window.close();

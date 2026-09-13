@@ -10,6 +10,7 @@ import { NotificationManager } from "../../notifications.zs";
 import { ShellManager } from "../../shell.zs";
 import { FileManager } from "../../files.zs";
 import { bridgeFailure } from "../../bridge.zs";
+import { createRelatedDocuments } from "../../related-documents.zs";
 import { MacOSWindowRegistry } from "./window-registry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
@@ -22,9 +23,8 @@ import {
 } from "../../window.zs";
 import { stopMacOSRunLoop } from "./application-host.zs";
 import {
-  DesktopDeliverResponseOperation,
   DesktopRouteMessageOperation,
-} from "./message-handler.zs";
+} from "./document-transport.zs";
 import {
   deliverApplicationWorkerLifecycle,
   deliverApplicationWorkerMessage,
@@ -292,8 +292,7 @@ internal function initializeMacOSApplicationRuntimeState(
   shell: ShellManager,
   files: FileManager,
   menu: ApplicationMenu,
-  routeMessage: DesktopRouteMessageOperation,
-  deliverResponse: DesktopDeliverResponseOperation
+  routeMessage: DesktopRouteMessageOperation
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const requests = createApplicationWorkerServiceRequests();
   const beginWorkerServiceRequest: BeginWorkerServiceRequest = move (
@@ -329,11 +328,11 @@ internal function initializeMacOSApplicationRuntimeState(
     menu,
     contextMenus,
     routeMessage,
-    deliverMessageResponse: deliverResponse,
     didCloseNativeWindow,
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,
+    documents: createRelatedDocuments(),
   });
   const value = new MacOSApplicationRuntime({
     permissions,

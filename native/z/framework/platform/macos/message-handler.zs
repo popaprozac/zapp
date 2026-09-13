@@ -1,29 +1,16 @@
 import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
-import {
-  BridgeResponse,
-  bridgeFailure,
-} from "../../bridge.zs";
+import { BridgeDocument } from "../../bridge-document.zs";
+import { routeDocumentMessage, DesktopRouteMessageOperation } from "./document-transport.zs";
 import { thread } from "std/thread";
 import { hasConfiguredFrontendOrigin } from "./navigation.zs";
 
-internal type DesktopRouteMessageOperation = (
-  message: String,
-  windowId: i32
-) => void on thread.main;
-
-internal type DesktopDeliverResponseOperation = (
-  in response: BridgeResponse,
-  windowId: i32
-) => void on thread.main;
-
 internal readonly class DesktopMessageHandler on thread.main
   implements WebKit.WKScriptMessageHandler {
-  readonly windowId: i32;
+  readonly document: BridgeDocument;
   readonly expectedView: WebKit.WKWebView;
   readonly expectedController: WebKit.WKUserContentController;
   readonly routeMessage: DesktopRouteMessageOperation;
-  readonly deliverResponse: DesktopDeliverResponseOperation;
 
   function receive(
     in controller: WebKit.WKUserContentController,
@@ -46,14 +33,9 @@ internal readonly class DesktopMessageHandler on thread.main
     const body = message.body;
     if (body instanceof WebKit.NSString) {
       const text: String = body;
-      this.routeMessage(move text, this.windowId);
+      routeDocumentMessage(this.document, in this.expectedView, move text, this.routeMessage);
       return;
     }
-    const failure = bridgeFailure(
-      0,
-      "INVALID_MESSAGE",
-      "WebView message body must be a string"
-    );
-    this.deliverResponse(in failure, this.windowId);
+    console.error("blocked native bridge message without document-bound string body");
   }
 }

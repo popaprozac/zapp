@@ -15,13 +15,11 @@ import {
   initializeMacOSApplicationRuntimeState,
 } from "./application-runtime.zs";
 import {
-  deliverResponse,
   routeMessageOnMain,
 } from "./message-routing.zs";
 import {
-  DesktopDeliverResponseOperation,
   DesktopRouteMessageOperation,
-} from "./message-handler.zs";
+} from "./document-transport.zs";
 
 internal function initializeMacOSApplicationRuntime(
   name: String,
@@ -37,7 +35,6 @@ internal function initializeMacOSApplicationRuntime(
   menu: ApplicationMenu
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const route: DesktopRouteMessageOperation = routeMessageOnMain;
-  const deliver: DesktopDeliverResponseOperation = deliverResponse;
   return initializeMacOSApplicationRuntimeState(
     move name,
     permissions,
@@ -50,7 +47,6 @@ internal function initializeMacOSApplicationRuntime(
     shell,
     files,
     menu,
-    route,
-    deliver
+    route
   );
 }

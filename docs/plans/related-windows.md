@@ -5,12 +5,46 @@ Status: **approved contract, implementation in progress**, 2026-09-13.
 The runtime now provides the event/error/type declarations, a tested internal
 document-lifetime helper, and terminal disposal of the production WebView bridge.
 A checked-Z WebKit probe connects those pieces across actual child closure.
-The internal Z document registry separately proves inherited authority,
-subtree retirement, and cancellation of real tasks on both compiler paths.
+The internal Z document registry proves inherited authority, subtree retirement,
+and cancellation of real tasks on both compiler paths. Production macOS request
+routing now uses document-bound identities, with a private bridge handshake and
+stale-reply rejection across committed navigation.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
 and remaining native integration gates separately.
+
+## Surfaces of an application, not necessarily more application instances
+
+Choose where state belongs independently of how many native windows present it.
+An inspector should not inherently require a second application bootstrap,
+state store, or database connection. Related windows let one frontend owner
+drive several documents, while the other models remain useful alongside it:
+
+| Model | Where shared state lives | How windows coordinate |
+|---|---|---|
+| Independent frontends | Each window, with explicit synchronization | Messages |
+| Zapp worker | A DOM-independent JS runtime | Calls/messages to a shared owner |
+| Related-window family | One frontend owner driving several documents | Shared objects, callbacks, and framework reactivity |
+| Native Z services | Backend-owned state and resources | Generated service calls and events |
+
+These are complementary choices, not progressively better tiers. A worker could
+own a remote connection, cached records, and background indexing; the frontend
+owner could hold selection and editing state; related inspectors could display
+that state; native services could provide persistence and OS integration. One
+worker update enters the frontend state without separately synchronizing every
+related document. A smaller application may keep its connection and state in the
+frontend owner without a worker at all.
+
+Related native windows share trust, scheduling, and document lifetime. They are
+not independent frontend applications, and heavy work still belongs outside the
+UI owner. Each child still costs a document, DOM, layout, and rendering work.
+
+The startup benefit is avoiding duplicate loading/execution and initialization,
+not necessarily removing duplicated bytes from the binary: packaged assets can
+already be stored once. The current benchmark supports quicker warm child
+startup, but neither measures true first paint nor isolates framework reuse as
+the principal cause. See the [benchmark limits](../../spikes/related-windows/BENCHMARKS.md).
 
 ## One document, one handle
 
@@ -143,9 +177,12 @@ validation and physical window teardown remain outside this helper.
       real-task cancellation tests for retired descendants and live siblings.
 - [x] Split native window ownership/delivery out of the application runtime and
       bind production message handlers to their exact WebView/controller.
-- [ ] Integrate the checked-Z family/document registry into the window manager;
-      do not promote the Objective-C oracle into production.
-- [ ] Implement the readiness handshake and partial-creation cleanup.
+- [x] Integrate native document identities into ordinary window routing, request
+      scheduling, completion consumption, and committed-navigation retirement.
+- [x] Bind the production bridge to a native-offered token and reject stale
+      replies in the actual JS execution realm, including reused request IDs.
+- [ ] Integrate related-child creation, shell/bridge readiness, inherited
+      authority, and partial-creation cleanup into the window manager.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
       checks, renderer loss, and navigation gates through native integration.
 - [ ] Expose the public factory and add a Z Notes demonstration.
@@ -156,6 +193,8 @@ Focused validation from the repository root:
 ```sh
 bun test runtime/related-window-lifetime.test.ts runtime/related-window-types.test.ts runtime/window-api.test.ts runtime/window-errors.test.ts
 bun test runtime/related-window-transport.test.ts
+bun test runtime/document-transport.test.ts
+bun run spikes/related-windows/document-routing.ts
 bun run check
 ```
 
@@ -181,8 +220,8 @@ native request is an instrumented pending request, not a running service.
 
 ### Native registry checkpoint
 
-`native/z/framework/related-documents.zs` is framework-internal Z code, not yet
-connected to `MacOSApplicationRuntime` or the public factory. It owns one record
+`native/z/framework/related-documents.zs` is framework-internal Z code, now
+connected to macOS window routing but not the public factory. It owns one record
 per live native window/document pair. Native-minted monotonically increasing
 tokens prevent a retired identity from addressing a replacement document.
 Private registry storage cannot be reset through the calling API.
@@ -199,8 +238,9 @@ once; stale completion and delayed attachment cannot affect a reused request ID
 or a replacement document. Late attachments request cancellation immediately.
 Committed subtree retirement first removes every affected record, then requests
 cancellation, leaving unrelated owner/sibling documents active. The platform must
-perform family cancellation preflight before committing retirement and validate
-the ticket at the actual delivery turn before evaluating JavaScript.
+perform family cancellation preflight before committing retirement. Production
+response delivery validates the identity before evaluating JavaScript, then the
+bootstrap checks its token again when that script actually executes.
 
 `bun run spikes/related-windows/registry.ts` runs the headless registry test with
 native and Stage 0 emission at `-O0`/`-O2`, strict Clang warnings, UBSan, and a
@@ -211,15 +251,9 @@ wrapper is introduced. Registry lookups use hashed maps; subtree collection walk
 the live ancestry at teardown, not on every bridge request. These are structural
 cost observations, not new benchmark measurements.
 
-Next, bind this registry to actual WebView/document provenance and the existing
-window-manager routing/close paths. Origin validation, token delivery across
-navigation, partial native creation unwind, renderer loss, and full-family close
-preflight remain integration gates. The headless proof does not authenticate a
-renderer or demonstrate any of those native UI paths.
-
 The macOS ownership split has now landed: `application-runtime.zs` owns
 application/services/workers, while `window-registry.zs` owns live and retired
-native windows, per-window requests, delivery, and presentation operations.
+native windows, document endpoints, delivery, and presentation operations.
 Both are below 400 lines; the existing fewer-than-700-lines test remains strict
 and passes again. One main-executor registry is allocated per application, not
 per request; it owns the application name without keeping a duplicate String.
@@ -230,9 +264,51 @@ under the existing registration's removal lifetime.
 The bounded Z Notes packaged smoke passes after the move, including real bridge
 replies, cancellation, origin/subframe rejection, and shutdown. This validates
 the existing independent-window path, not the new related-document factory.
-The next integration must bind a document identity at the validated native
-message boundary and preserve it through scheduled work and response delivery;
-looking up whichever document is current in a later callback is not sufficient.
-Navigation/renderer retirement and the creation handshake must use that same
-identity. The public factory remains gated until those paths and family preflight
-are proven together.
+
+### Production document-routing checkpoint
+
+Each native window owns a `BridgeDocument`. The message handler validates the
+exact WebView/content controller, main frame, and configured origin before the
+private handshake or any request reaches that endpoint. After committed
+navigation, native code offers a new monotonic token to the current JS realm;
+the bootstrap acknowledges it before releasing queued startup calls. The realm
+nonce targets that handshake, not permissions. Neither token nor JSON chooses a
+capability profile: routing uses the native identity's validated selection.
+
+Requests acquire a document/request/generation ticket before scheduling. Task
+controls attach to that exact ticket; a late attachment cancels itself. A reply
+must consume its tracked completion and pass native document readiness checks.
+It also carries the document token into `_onDocumentInvokeResult`, so an already
+queued evaluation cannot resolve a replacement realm's reused request ID.
+Native completion callbacks check the endpoint again before acting on errors.
+
+Committed navigation, observed renderer termination, and accepted native close
+retire the endpoint and request cancellation of its pending work. Provisional or
+cancelled navigation does not retire the current document. The root handshake
+establishes ordinary bridge routing; it is **not** the related-child factory's
+stronger usable-`head`/`body` readiness promise.
+
+The real-WebKit [document-routing probe](../../spikes/related-windows/document-routing.ts)
+uses the production endpoint, transport, and bootstrap. Native/Stage 0 emission
+both pass at `-O0`/`-O2` with UBSan. It commits two documents in one WebView, reuses
+request ID `1`, rejects the old native ticket, deliberately evaluates an old
+token reply of `99` in the new realm, and observes the correct new reply of `42`.
+The fixture validates its own exact loopback URLs; the packaged Z Notes smoke
+separately exercises production configured-origin and subframe rejection.
+
+Costs are explicit: one endpoint/registry record and one handshake per document,
+a small token prefix on requests, native parsing/copying, and a token check on
+replies. The JS startup queue drains once; there is no additional steady-state
+pending table or Promise wrapper. This is correctness evidence, not a new
+throughput or zero-overhead measurement.
+
+Remaining gates: related native creation and failed-creation unwind; full-family
+close preflight; document-bound unsolicited event/menu/worker delivery; actual
+renderer-crash and back/forward-cache integration; and complete owner/child
+retirement behavior with real services. The headless cancellation test and the
+WebKit replacement test prove different pieces, not the entire composition.
+
+One upstream limitation remains recorded in Z's ownership-pressure log: native
+lowering of stored async block closures is narrower than Stage 0. Routing keeps
+its existing expression-bodied scheduling callback and named async entrypoint;
+this checkpoint does not claim general closure/suspension parity.

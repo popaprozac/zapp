@@ -5,6 +5,7 @@ import { thread } from "std/thread";
 import { delay } from "std/time";
 import console from "std/console";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
+import { BridgeDocument } from "../framework/bridge-document.zs";
 import {
   RelatedDocuments,
   RelatedDocumentIdentity,
@@ -224,8 +225,42 @@ async function checkCancellation(): void throws i32 on thread.main {
   try verify(registry.count() == 0, 64);
 }
 
+function checkDocumentEndpoint(): void throws i32 on thread.main {
+  const registry = createRelatedDocuments();
+  const endpoint = new BridgeDocument(10, registry, selection());
+  const realm = "0123456789abcdef0123456789abcdef";
+  const beforeCommit = match (endpoint.offer(in realm)) { some(value) => true; none => false; };
+  try verify(!beforeCommit, 70);
+  endpoint.didCommit();
+  const first = try document(endpoint.offer(in realm));
+  const firstToken = `${first.token}`;
+  try verify(!endpoint.isCurrent(in first), 71);
+  try verify(!endpoint.acknowledge("0", copy realm), 72);
+  try verify(endpoint.acknowledge(in firstToken, copy realm), 73);
+  try verify(endpoint.isCurrent(in first), 74);
+  const firstRequest = try request(registry.beginRequest(in first, 1));
+  endpoint.didCommit();
+  const second = try document(endpoint.offer(in realm));
+  const secondToken = `${second.token}`;
+  try verify(second.token > first.token, 75);
+  try verify(!endpoint.acknowledge(in firstToken, copy realm), 76);
+  try verify(!registry.finishRequest(in firstRequest), 77);
+  try verify(endpoint.acknowledge(in secondToken, copy realm), 78);
+  const wrongRealm = "fedcba9876543210fedcba9876543210";
+  const refused = match (endpoint.offer(in wrongRealm)) { some(value) => false; none => true; };
+  try verify(refused && !endpoint.acknowledge(in secondToken, copy wrongRealm), 79);
+  try verify(!endpoint.isCurrent(in first) && endpoint.isCurrent(in second), 80);
+  endpoint.retire();
+  try verify(!endpoint.isCurrent(in second) && registry.count() == 0, 81);
+  endpoint.close();
+  endpoint.didCommit();
+  const afterClose = match (endpoint.offer(in realm)) { some(value) => true; none => false; };
+  try verify(!afterClose, 82);
+}
+
 async function main(): i32 throws i32 on thread.main {
   try checkIdentities();
+  try checkDocumentEndpoint();
   try await checkCancellation();
   console.log("related document registry: identity, readiness, authority, generations, cancellation passed");
   return 0;

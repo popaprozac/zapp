@@ -558,6 +558,7 @@ describe("Z native host inputs", () => {
       "window-resize.zs",
       "window-runtime.zs",
       "window-registry.zs",
+      "document-transport.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -590,7 +591,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(20);
+    expect(macOSModules).toHaveLength(21);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSModules[1]).toContain("readonly windows: MacOSWindowRegistry on thread.main");
     expect(macOSModules[1]).not.toContain("function createWindow(");
@@ -682,7 +683,13 @@ describe("Z native host inputs", () => {
     expect(notesHTML).toContain('id="window-events"');
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
-    expect(macOSPlatform).toContain("current.windows.capabilitiesForWindow(windowId)");
+    expect(macOSPlatform).toContain("current.windows.documents.capabilitiesFor(in request.document)");
+    expect(macOSPlatform).toContain("documents.beginRequest(in document, requestId)");
+    expect(macOSPlatform).toContain("documents.attachRequest(in request, control)");
+    expect(macOSPlatform).toContain("if (tracked && !finishPendingRequest(in request)) return;");
+    expect(macOSPlatform).toContain("b._onDocumentInvokeResult(r.document,Number(r.id),r.ok,r.payload)");
+    expect(macOSPlatform).toContain('as "webView:didCommitNavigation:"');
+    expect(macOSPlatform).toContain('as "webViewWebContentProcessDidTerminate:"');
     expect(macOSPlatform).toContain("unknown window capability profile");
     expect(macOSPlatform).toContain("WindowMessageRoute.handled");
     expect(windowBridge).toContain("export enum WindowBridgeRoute");

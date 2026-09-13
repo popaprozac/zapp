@@ -79,6 +79,16 @@ internal class RelatedDocuments on thread.main {
     return this.insert(windowId, Option<RelatedDocumentIdentity>.none, capabilities, true);
   }
 
+  // Native WebViews begin unroutable until the document-bound handshake is
+  // acknowledged. Headless/native callers may still register a proven owner.
+  function beginOwner(
+    inout this,
+    windowId: i32,
+    capabilities: CapabilitySelection
+  ): Option<RelatedDocumentIdentity> {
+    return this.insert(windowId, Option<RelatedDocumentIdentity>.none, capabilities, false);
+  }
+
   function beginRelated(
     inout this,
     in owner: RelatedDocumentIdentity,

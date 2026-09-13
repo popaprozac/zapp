@@ -3,6 +3,8 @@ import WebKit from "WebKit/WebKit.h";
 import console from "std/console";
 import objc from "std/objc";
 import { thread } from "std/thread";
+import { BridgeDocument } from "../../bridge-document.zs";
+import { requestBridgeDocumentBinding } from "./document-transport.zs";
 import {
   configuredFrontendOrigin,
   configuredNavigationAllowsSelf,
@@ -137,6 +139,25 @@ internal class DesktopNavigationDelegate on thread.main
   readonly windows: Weak<WindowManager>;
   readonly contextMenus: ContextMenuSessions;
   readonly menu: ApplicationMenu;
+  readonly document: BridgeDocument;
+
+  function didCommitNavigation(
+    in webView: WebKit.WKWebView,
+    in navigation: WebKit.WKNavigation | null
+  ): void as "webView:didCommitNavigation:" {
+    if (webView != this.webView) return;
+    const document = this.document;
+    document.didCommit();
+    requestBridgeDocumentBinding(in webView);
+  }
+
+  function processTerminated(
+    in webView: WebKit.WKWebView
+  ): void as "webViewWebContentProcessDidTerminate:" {
+    if (webView != this.webView) return;
+    const document = this.document;
+    document.retire();
+  }
 
   function didFailProvisionalNavigation(
     in webView: WebKit.WKWebView,
@@ -227,7 +248,8 @@ internal function createDesktopNavigationDelegate(
   in webView: WebKit.WKWebView,
   windows: Weak<WindowManager>,
   contextMenus: ContextMenuSessions,
-  menu: ApplicationMenu
+  menu: ApplicationMenu,
+  document: BridgeDocument
 ): objc.Adapter<WebKit.WKNavigationDelegate> on thread.main {
   const delegate = new DesktopNavigationDelegate({
     id,
@@ -237,6 +259,7 @@ internal function createDesktopNavigationDelegate(
     windows,
     contextMenus,
     menu,
+    document,
   });
   return objc.adapt<WebKit.WKNavigationDelegate>(delegate);
 }

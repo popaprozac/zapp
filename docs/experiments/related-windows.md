@@ -15,6 +15,13 @@ backend/worker state and messages remain appropriate, but detachable inspectors,
 editors, palettes, and other closely coordinated UI can accumulate synchronization
 code and duplicated frontend bootstrapping.
 
+The useful distinction is another surface of the same frontend application,
+not necessarily another application instance. State placement is independent of
+window count: independent frontends, related documents, JS workers, and native
+Z services can coexist. The [four-model comparison](../plans/related-windows.md#surfaces-of-an-application-not-necessarily-more-application-instances)
+explains the ownership choices without presenting them as progressively better
+tiers. Avoided initialization is not a claim of fewer packaged asset bytes.
+
 The question is whether an optional family of related windows can let one
 DOM-capable frontend owner keep the UI state/framework tree while rendering
 into multiple native window documents. The inspiration is this

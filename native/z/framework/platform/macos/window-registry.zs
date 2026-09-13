@@ -8,12 +8,13 @@ import { ApplicationCapabilities, CapabilitySelection } from "../../application-
 import { ApplicationMenu } from "../../application-menu.zs";
 import { ContextMenuSessions } from "../../context-menu.zs";
 import { BridgeResponse } from "../../bridge.zs";
-import { TaskControl } from "std/async";
+import { BridgeDocument } from "../../bridge-document.zs";
+import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowManager, WindowOptions } from "../../window.zs";
 import { stopMacOSRunLoop } from "./application-host.zs";
-import { DesktopDeliverResponseOperation, DesktopRouteMessageOperation } from "./message-handler.zs";
+import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import { createMacOSWindowRuntime } from "./window-construction.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { deliverWebViewApplicationWorkerMessage, deliverWebViewApplicationQuitRequested,
@@ -31,7 +32,7 @@ internal class MacOSWindowRegistry on thread.main {
   readonly menu: ApplicationMenu;
   readonly contextMenus: ContextMenuSessions;
   readonly routeMessage: DesktopRouteMessageOperation;
-  readonly deliverMessageResponse: DesktopDeliverResponseOperation;
+  readonly documents: RelatedDocuments;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
   nativeWindows: Map<i32, MacOSWindowRuntime>;
   retiredNativeWindows: Array<MacOSWindowRuntime>;
@@ -88,15 +89,16 @@ internal class MacOSWindowRegistry on thread.main {
     const windowManager = this.windowManager;
     const windowManagerOwner = weak windowManager;
     const didClose = this.didCloseNativeWindow;
+    const document = new BridgeDocument(nativeId, this.documents, selectedCapabilities);
     const runtime = try createMacOSWindowRuntime(
       copy this.name,
       in id,
       nativeId,
       in options,
       selectedCapabilities,
+      document,
       windowManagerOwner,
       this.routeMessage,
-      this.deliverMessageResponse,
       didClose,
       this.contextMenus,
       this.menu
@@ -113,7 +115,7 @@ internal class MacOSWindowRegistry on thread.main {
       some(value) => {
         let window = value;
         this.contextMenus.invalidateWindow(in window.id);
-        window.pendingRequests.cancelAll();
+        window.document.close();
         let menu = this.menu;
         menu.invalidateFrontendOwner(in window.id);
         this.retiredNativeWindows.push(move window);
@@ -138,74 +140,6 @@ internal class MacOSWindowRegistry on thread.main {
     for (const window of windows) {
       window.window.close();
     }
-  }
-
-  function beginRequest(
-    inout this,
-    windowId: i32,
-    id: u64
-  ): u64 on thread.main {
-    const found = this.nativeWindows.remove(windowId);
-    return match (found) {
-      some(value) => {
-        let window = value;
-        const generation = window.pendingRequests.begin(id);
-        this.nativeWindows.set(windowId, window);
-        select generation;
-      }
-      none => 0;
-    };
-  }
-
-  function attachRequest(
-    inout this,
-    windowId: i32,
-    id: u64,
-    control: TaskControl
-  ): void on thread.main {
-    const found = this.nativeWindows.remove(windowId);
-    match (found) {
-      some(value) => {
-        let window = value;
-        window.pendingRequests.attach(id, control);
-        this.nativeWindows.set(windowId, window);
-      }
-      none => {}
-    }
-  }
-
-  function finishRequest(
-    inout this,
-    windowId: i32,
-    id: u64,
-    generation: u64
-  ): void on thread.main {
-    const found = this.nativeWindows.remove(windowId);
-    match (found) {
-      some(value) => {
-        let window = value;
-        window.pendingRequests.finish(id, generation);
-        this.nativeWindows.set(windowId, window);
-      }
-      none => {}
-    }
-  }
-
-  function cancelRequest(
-    inout this,
-    windowId: i32,
-    id: u64
-  ): boolean on thread.main {
-    const found = this.nativeWindows.remove(windowId);
-    return match (found) {
-      some(value) => {
-        let window = value;
-        const cancelled = window.pendingRequests.cancel(id);
-        this.nativeWindows.set(windowId, window);
-        select cancelled;
-      }
-      none => false;
-    };
   }
 
   function showWindow(in id: String): void on thread.main {
@@ -303,16 +237,6 @@ internal class MacOSWindowRegistry on thread.main {
     }
   }
 
-  function capabilitiesForWindow(
-    windowId: i32
-  ): Option<CapabilitySelection> on thread.main {
-    const found = this.nativeWindows.get(windowId);
-    return match (in found) {
-      some(window) => Option.some(window.capabilitySelection);
-      none => Option.none;
-    };
-  }
-
   function nativeWindow(in id: String): Option<MacOSWindowRuntime> on thread.main {
     for (const entry of this.nativeWindows) {
       if (entry.value.id == id) return Option.some(entry.value);
@@ -371,8 +295,10 @@ internal class MacOSWindowRegistry on thread.main {
 
   function deliverResponse(
     in response: BridgeResponse,
-    windowId: i32
+    document: RelatedDocumentIdentity
   ): void on thread.main {
+    if (!this.documents.isReady(in document)) return;
+    const windowId = document.windowId;
     const activeWindowCount = this.nativeWindows.length;
     const found = this.nativeWindows.get(windowId);
     match (in found) {
@@ -380,6 +306,8 @@ internal class MacOSWindowRegistry on thread.main {
         window.webView,
         window.window,
         in response,
+        document,
+        window.document,
         windowId,
         activeWindowCount
       );

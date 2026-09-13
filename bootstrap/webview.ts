@@ -20,14 +20,29 @@
   let nextId = 1;
   const listeners: Record<string, Array<(payload: any) => void>> = {};
   let disposed: Error | undefined;
+  // Enabled by the checked native host, not application configuration. Legacy
+  // probes/backends retain their transport until they implement this protocol.
+  const documentBound = (globalThis as any)[Symbol.for("zapp.documentTransport")] === 1;
+  const realm = documentBound
+    ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")
+    : "";
+  let documentToken = "";
+  let waitingForDocument: string[] = [];
 
-  function post(msg: string): void {
+  function postNative(msg: string): void {
     if (disposed) return;
     if ((window as any).webkit?.messageHandlers?.zapp) {
       (window as any).webkit.messageHandlers.zapp.postMessage(msg);
     } else if ((window as any).chrome?.webview) {
       (window as any).chrome.webview.postMessage(msg);
     }
+  }
+
+  function post(msg: string): void {
+    if (disposed) return;
+    if (!documentBound) { postNative(msg); return; }
+    if (!documentToken) { waitingForDocument.push(msg); return; }
+    postNative("@" + documentToken + "\n" + msg);
   }
 
   function takePending(id: number): PendingEntry | undefined {
@@ -108,6 +123,41 @@
   };
 
   const bridge = {
+    // Native evaluates this in the current document, but a late evaluation may
+    // land after navigation. The realm guard prevents binding its replacement.
+    _bindDocument(expectedRealm: string, token: string): boolean {
+      if (disposed || !documentBound || expectedRealm !== realm || !/^[1-9][0-9]{0,19}$/.test(token)) return false;
+      if (documentToken && (token.length < documentToken.length
+        || (token.length === documentToken.length && token < documentToken))) return false;
+      if (documentToken && token !== documentToken) {
+        const error = new Error("Native document session was replaced");
+        for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
+      }
+      postNative("@ready\n" + token + "\n" + realm);
+      documentToken = token;
+      const queued = waitingForDocument;
+      waitingForDocument = [];
+      for (const msg of queued) {
+        if (disposed) break;
+        // An invoke cancelled/timed out before binding must never start work.
+        let value: any;
+        try { value = JSON.parse(msg); } catch {}
+        if (value?.t === 1 && !pending[value.id]) continue;
+        post(msg);
+      }
+      return true;
+    },
+
+    _requestDocumentBinding(): void {
+      if (documentBound && !disposed) postNative("@hello\n" + realm);
+    },
+
+    _onDocumentInvokeResult(token: string, id: number, ok: boolean, payload: string): boolean {
+      if (disposed || !documentBound || !documentToken || token !== documentToken) return false;
+      bridge._onInvokeResult(id, ok, payload);
+      return true;
+    },
+
     invoke(
       method: string,
       args?: Record<string, unknown>,
@@ -381,6 +431,7 @@
     _dispose(error: Error): void {
       if (disposed) return;
       disposed = error;
+      waitingForDocument = [];
       for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
       for (const id of Object.keys(bridge._syncPending)) {
         const entry = bridge._syncPending[id];
@@ -394,6 +445,7 @@
   };
 
   (globalThis as any)[BRIDGE_KEY] = bridge;
+  bridge._requestDocumentBinding();
 
   // Cleanup workers on page unload — terminate every worker this webview owns.
   window.addEventListener("pagehide", () => {

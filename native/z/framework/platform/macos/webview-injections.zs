@@ -73,6 +73,7 @@ internal function installWebViewScripts(
   in windowId: String,
   in profiles: Array<String>
 ): void throws String on thread.main {
+  addUserScript(contentController, "globalThis[Symbol.for('zapp.documentTransport')]=1", 1);
   addUserScript(contentController, configuredWebViewBootstrap(), 1);
   addUserScript(
     contentController,

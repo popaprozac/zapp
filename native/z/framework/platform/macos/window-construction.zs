@@ -4,7 +4,7 @@ import { WindowError } from "../../application-error.zs";
 import { CapabilitySelection } from "../../application-capabilities.zs";
 import { ContextMenuSessions } from "../../context-menu.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
-import { createPendingRequests } from "../../pending-requests.zs";
+import { BridgeDocument } from "../../bridge-document.zs";
 import {
   WindowManager,
   WindowOptions,
@@ -13,10 +13,9 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { createDesktopAssetSchemeHandler } from "./scheme-handler.zs";
 import {
-  DesktopDeliverResponseOperation,
   DesktopMessageHandler,
-  DesktopRouteMessageOperation,
 } from "./message-handler.zs";
+import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import {
   createDesktopNavigationDelegate,
   resolveLogicalURL,
@@ -40,9 +39,9 @@ internal function createMacOSWindowRuntime(
   nativeId: i32,
   in options: WindowOptions,
   capabilitySelection: CapabilitySelection,
+  document: BridgeDocument,
   windowManager: Weak<WindowManager>,
   routeMessage: DesktopRouteMessageOperation,
-  deliverResponse: DesktopDeliverResponseOperation,
   didCloseNativeWindow: NativeWindowClosedOperation,
   contextMenus: ContextMenuSessions,
   menu: ApplicationMenu
@@ -77,11 +76,10 @@ internal function createMacOSWindowRuntime(
   // removal of the handler, breaking its retained WebView/controller references
   // when this runtime is released after native callbacks have unwound.
   const handler = new DesktopMessageHandler({
-    windowId: nativeId,
+    document,
     expectedView: webView,
     expectedController: contentController,
     routeMessage,
-    deliverResponse,
   });
   const handlerName = Foundation.NSString.alloc().initWithUTF8String("zapp");
   if (handlerName == null) {
@@ -120,7 +118,8 @@ internal function createMacOSWindowRuntime(
     webView,
     windowManager,
     contextMenus,
-    menu
+    menu,
+    document
   );
   webView.navigationDelegate = navigationDelegate;
   const windowDelegate = createDesktopWindowDelegate(
@@ -156,7 +155,7 @@ internal function createMacOSWindowRuntime(
     windowDelegate,
     presentationObserver,
     registration,
-    pendingRequests: createPendingRequests(),
+    document,
     capabilitySelection,
   });
 }

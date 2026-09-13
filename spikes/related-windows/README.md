@@ -11,7 +11,8 @@ Start with [why, findings, and next steps](../../docs/experiments/related-window
 See [BENCHMARKS.md](BENCHMARKS.md) for the three-way measurements and limits.
 The [approved public contract](../../docs/plans/related-windows.md) now has runtime
 types and a separately tested lifetime helper. The public factory/native bridge
-integration is still pending; this oracle does not expose that API.
+creation is still pending; production document routing is now integrated and
+tested separately from this oracle.
 
 ## Why Objective-C here?
 
@@ -37,6 +38,7 @@ bun run test:bridge
 bun run test:checked-z
 bun run test:checked-lifetime
 bun run test:registry
+bun run test:document-routing
 bun run benchmark
 ```
 
@@ -130,6 +132,33 @@ authentication and family close veto are still separate integration gates.
 Results go to ignored `.artifacts/registry-results.json`; the
 [dated evidence](results/2026-09-13/registry.json) is retained separately.
 
+## Production document routing across navigation
+
+`bun run test:document-routing` runs the framework's `BridgeDocument`, private
+transport, and real bundled WebView bootstrap in a checked-Z WebKit host. It
+commits two pages in one WebView. Both pages use request ID `1`, but native
+retirement rejects the original ticket and a deliberately queued old-token reply
+of `99` cannot resolve the replacement page's Promise. The current reply is `42`.
+
+The fixture validates its exact WebView/controller, main frame, and loopback
+URLs before calling the production transport. It is not a replacement for the
+packaged Z Notes smoke's configured-origin and subframe checks. It does not
+exercise related-child creation, actual renderer crashes, BFCache restoration,
+unsolicited event routing, or family-wide close preflight. The held request here
+is instrumentation; the headless registry probe separately tests real Z tasks.
+
+Native and Stage 0 emission each run at `-O0`/`-O2`, with strict Clang warnings
+and UBSan. Each emission is bounded at 120 seconds, compilation at 30 seconds,
+and execution at 15 seconds with process-group termination. A native run-loop
+iteration bound provides a secondary deadline; the loopback server stops in
+`finally`. No remote scripts or ASan are used. Results go to ignored
+`.artifacts/document-routing-results.json`; the
+[dated evidence](results/2026-09-13/document-routing.json) is retained separately.
+
+This probe exposed and helped fix Stage 0's omission of task-handle runtime
+support in synchronous programs that only store `TaskControl`/`TaskScope`.
+No dummy async function or native shim was added to the fixture.
+
 ## Direct bridge follow-up
 
 `bun run test:bridge` runs sixteen cases: HTTP and custom protocol, `-O0` and
@@ -218,7 +247,8 @@ Renderer process identities are not measured or promised.
 
 Related windows share trust and owner/scheduling coupling. They are not a
 replacement for independently isolated windows, and a headless JS worker cannot
-provide the missing DOM owner. Public syntax and lifecycle rules remain open.
+provide the missing DOM owner. Public syntax and lifecycle rules are recorded in
+the approved contract; the production factory remains gated on integration.
 
 ## Files
 
