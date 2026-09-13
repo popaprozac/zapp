@@ -1,0 +1,5 @@
+body { margin:0; background:#172233; color:#e7effd; font:14px system-ui; }
+main, section { padding:14px; } h2 { font-size:18px; }
+.rows { display:grid; grid-template-columns:repeat(4,1fr); gap:3px; }
+.row { padding:3px; border:1px solid #304052; background:#223145; }
+.selected { background:#226bad; } #sequence { font-variant-numeric:tabular-nums; }

@@ -1,0 +1,11 @@
+# Reproducible, local-only dependencies and generated outputs
+node_modules/
+cache/
+.artifacts/
+/app.js
+/bench.js
+/direct-app.js
+/probe
+/probe.dSYM/
+/benchmark
+/benchmark.dSYM/

@@ -1,0 +1,44 @@
+[
+  {
+    "url": "http://127.0.0.1:50419/index.html?child=blank",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"about:blank\"}\n{\"kind\":\"child-created\",\"url\":\"about:blank\"}\n{\"pass\":true,\"assertions\":[{\"name\":\"window.open returns a child WindowProxy\",\"pass\":true},{\"name\":\"opener relationship preserved\",\"pass\":true},{\"pass\":true,\"name\":\"child has a separate DOM document\"},{\"name\":\"child has separate realm intrinsics\",\"pass\":true},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"name\":\"portal renders into child document\",\"pass\":true},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"pass\":true,\"name\":\"child React event updates both windows\"},{\"name\":\"hidden owner still drives child state\",\"pass\":true},{\"pass\":true,\"name\":\"child close observable in owner\"},{\"pass\":true,\"name\":\"window.open returns a child WindowProxy\"},{\"pass\":true,\"name\":\"opener relationship preserved\"},{\"pass\":true,\"name\":\"child has a separate DOM document\"},{\"pass\":true,\"name\":\"child has separate realm intrinsics\"},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"pass\":true,\"name\":\"function identity crosses related realms\"},{\"pass\":true,\"name\":\"portal renders into child document\"},{\"pass\":true,\"name\":\"React context keeps same object identity\"},{\"name\":\"owner state survives child recreation\",\"pass\":true},{\"pass\":true,\"name\":\"recreated child remains interactive\"}],\"closedChildren\":2,\"createdChildren\":2,\"kind\":\"result\",\"react\":\"19.2.0\",\"url\":\"http:\\/\\/127.0.0.1:50419\\/index.html?child=blank\"}\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "url": "http://127.0.0.1:50419/index.html?child=url",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"http:\\/\\/127.0.0.1:50419\\/child.html\"}\n{\"kind\":\"child-created\",\"url\":\"http:\\/\\/127.0.0.1:50419\\/child.html\"}\n{\"pass\":true,\"assertions\":[{\"name\":\"window.open returns a child WindowProxy\",\"pass\":true},{\"name\":\"opener relationship preserved\",\"pass\":true},{\"name\":\"child has a separate DOM document\",\"pass\":true},{\"pass\":true,\"name\":\"child has separate realm intrinsics\"},{\"pass\":true,\"name\":\"ordinary object identity crosses related realms\"},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"pass\":true,\"name\":\"portal renders into child document\"},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"name\":\"child React event updates both windows\",\"pass\":true},{\"pass\":true,\"name\":\"hidden owner still drives child state\"},{\"name\":\"child close observable in owner\",\"pass\":true},{\"pass\":true,\"name\":\"window.open returns a child WindowProxy\"},{\"pass\":true,\"name\":\"opener relationship preserved\"},{\"name\":\"child has a separate DOM document\",\"pass\":true},{\"name\":\"child has separate realm intrinsics\",\"pass\":true},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"name\":\"portal renders into child document\",\"pass\":true},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"name\":\"owner state survives child recreation\",\"pass\":true},{\"name\":\"recreated child remains interactive\",\"pass\":true}],\"closedChildren\":2,\"createdChildren\":2,\"kind\":\"result\",\"react\":\"19.2.0\",\"url\":\"http:\\/\\/127.0.0.1:50419\\/index.html?child=url\"}\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "url": "http://127.0.0.1:50419/index.html?child=cross-origin",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"http:\\/\\/localhost:50419\\/child.html\"}\n{\"createdChildren\":1,\"closedChildren\":1,\"kind\":\"result\",\"assertions\":[{\"pass\":true,\"name\":\"cross-origin child opens\"},{\"pass\":true,\"name\":\"cross-origin child DOM access rejected\"}],\"pass\":true,\"url\":\"http:\\/\\/127.0.0.1:50419\\/index.html?child=cross-origin\"}\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "url": "zapp://probe/index.html?child=blank",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"about:blank\"}\n{\"kind\":\"child-created\",\"url\":\"about:blank\"}\n{\"pass\":true,\"assertions\":[{\"name\":\"window.open returns a child WindowProxy\",\"pass\":true},{\"name\":\"opener relationship preserved\",\"pass\":true},{\"pass\":true,\"name\":\"child has a separate DOM document\"},{\"name\":\"child has separate realm intrinsics\",\"pass\":true},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"name\":\"portal renders into child document\",\"pass\":true},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"pass\":true,\"name\":\"child React event updates both windows\"},{\"name\":\"hidden owner still drives child state\",\"pass\":true},{\"pass\":true,\"name\":\"child close observable in owner\"},{\"pass\":true,\"name\":\"window.open returns a child WindowProxy\"},{\"pass\":true,\"name\":\"opener relationship preserved\"},{\"pass\":true,\"name\":\"child has a separate DOM document\"},{\"pass\":true,\"name\":\"child has separate realm intrinsics\"},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"pass\":true,\"name\":\"function identity crosses related realms\"},{\"pass\":true,\"name\":\"portal renders into child document\"},{\"pass\":true,\"name\":\"React context keeps same object identity\"},{\"name\":\"owner state survives child recreation\",\"pass\":true},{\"pass\":true,\"name\":\"recreated child remains interactive\"}],\"closedChildren\":2,\"createdChildren\":2,\"kind\":\"result\",\"react\":\"19.2.0\",\"url\":\"zapp:\\/\\/probe\\/index.html?child=blank\"}\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "url": "zapp://probe/index.html?child=url",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"zapp:\\/\\/probe\\/child.html\"}\n{\"kind\":\"child-created\",\"url\":\"zapp:\\/\\/probe\\/child.html\"}\n{\"pass\":true,\"assertions\":[{\"name\":\"window.open returns a child WindowProxy\",\"pass\":true},{\"name\":\"opener relationship preserved\",\"pass\":true},{\"name\":\"child has a separate DOM document\",\"pass\":true},{\"pass\":true,\"name\":\"child has separate realm intrinsics\"},{\"pass\":true,\"name\":\"ordinary object identity crosses related realms\"},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"pass\":true,\"name\":\"portal renders into child document\"},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"name\":\"child React event updates both windows\",\"pass\":true},{\"pass\":true,\"name\":\"hidden owner still drives child state\"},{\"name\":\"child close observable in owner\",\"pass\":true},{\"pass\":true,\"name\":\"window.open returns a child WindowProxy\"},{\"pass\":true,\"name\":\"opener relationship preserved\"},{\"name\":\"child has a separate DOM document\",\"pass\":true},{\"name\":\"child has separate realm intrinsics\",\"pass\":true},{\"name\":\"ordinary object identity crosses related realms\",\"pass\":true},{\"name\":\"function identity crosses related realms\",\"pass\":true},{\"name\":\"portal renders into child document\",\"pass\":true},{\"name\":\"React context keeps same object identity\",\"pass\":true},{\"name\":\"owner state survives child recreation\",\"pass\":true},{\"name\":\"recreated child remains interactive\",\"pass\":true}],\"closedChildren\":2,\"createdChildren\":2,\"kind\":\"result\",\"react\":\"19.2.0\",\"url\":\"zapp:\\/\\/probe\\/index.html?child=url\"}\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "url": "zapp://probe/index.html?child=cross-origin",
+    "status": 0,
+    "stdout": "{\"kind\":\"child-created\",\"url\":\"zapp:\\/\\/other\\/child.html\"}\n{\"createdChildren\":1,\"closedChildren\":1,\"kind\":\"result\",\"assertions\":[{\"pass\":true,\"name\":\"cross-origin child opens\"},{\"pass\":true,\"name\":\"cross-origin child DOM access rejected\"}],\"pass\":true,\"url\":\"zapp:\\/\\/probe\\/index.html?child=cross-origin\"}\n",
+    "stderr": "",
+    "timedOut": false
+  }
+]

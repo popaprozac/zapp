@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Child with its own native bridge</title>
+<body><div id="root"></div></body>
+<script>
+// Negative controls call the raw native entrypoint themselves. The parent
+// cannot impersonate a cross-origin document by sending a forged URL.
+if (new URLSearchParams(location.search).has("negative")) {
+  window.webkit.messageHandlers.directProbe.postMessage({
+    id: 1, method: "echo", token: "forged", windowId: "window-0", args: {},
+  });
+}
+</script>

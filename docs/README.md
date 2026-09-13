@@ -31,6 +31,7 @@ for using its public APIs.
 | [`z-native-core.md`](z-native-core.md) | Running, validating, and measuring the native framework |
 | [`plans/application-startup-integration.md`](plans/application-startup-integration.md) | Startup integration checkpoint, upstream compiler gates, and resume sequence |
 | [`plans/window-resize-polish.md`](plans/window-resize-polish.md) | Experimental native resize measurements, visual A/B probe, and pending Z interop design |
+| [`experiments/related-windows.md`](experiments/related-windows.md) | Related-window DOM/portal feasibility, three-way benchmarks, and security/lifecycle gates (research only) |
 | [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 ## Historical and contributor references

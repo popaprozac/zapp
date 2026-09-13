@@ -1,0 +1,13 @@
+{
+  "name": "zapp-related-window-probe",
+  "private": true,
+  "scripts": {
+    "test": "bun run run.ts",
+    "test:bridge": "bun run direct-bridge.ts",
+    "benchmark": "bun run benchmark.ts"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}

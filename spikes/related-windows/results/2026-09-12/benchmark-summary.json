@@ -1,0 +1,309 @@
+{
+  "date": "2026-09-12T18:09:38.835Z",
+  "runCount": 5,
+  "productionBundleBytes": 197022,
+  "relatedChildHelperBytes": 265,
+  "compileStderr": "",
+  "summary": [
+    {
+      "origin": "http:",
+      "mode": "related",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 91,
+        "p95": 95
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 57,
+        "p95": 73.00000000000006
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 0,
+        "p95": 2
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 13.249083422124386,
+        "p95": 42.85441618412733
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 0
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.043,
+        "p95": 0.052
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 0
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.03,
+        "p95": 0.03333333333333333
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34.00000000000023
+      }
+    },
+    {
+      "origin": "http:",
+      "mode": "related-root",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 89,
+        "p95": 98
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 57,
+        "p95": 62
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 1,
+        "p95": 1
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 8.647915907204151,
+        "p95": 47.192917205393314
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 0
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.04699999999999989,
+        "p95": 0.047
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 0
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.03,
+        "p95": 0.03333333333333333
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34
+      }
+    },
+    {
+      "origin": "http:",
+      "mode": "independent",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 94,
+        "p95": 111
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 90,
+        "p95": 124
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 4,
+        "p95": 4
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 12.379041872918606,
+        "p95": 14.827125705778599
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 1
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.238,
+        "p95": 0.241
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 1
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.20999999999999963,
+        "p95": 0.22
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34.00000000000023
+      }
+    },
+    {
+      "origin": "zapp:",
+      "mode": "related",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 93,
+        "p95": 97
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 57,
+        "p95": 73
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 0,
+        "p95": 5
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 12.73420825600624,
+        "p95": 43.775166384875774
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 0
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.043,
+        "p95": 0.044
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 0
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.03,
+        "p95": 0.03
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34.00000000000023
+      }
+    },
+    {
+      "origin": "zapp:",
+      "mode": "related-root",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 93,
+        "p95": 332
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 56,
+        "p95": 63
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 1,
+        "p95": 2
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 7.970375008881092,
+        "p95": 45.660125091671944
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 0
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.046,
+        "p95": 0.047
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 0
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.03,
+        "p95": 0.03
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34
+      }
+    },
+    {
+      "origin": "zapp:",
+      "mode": "independent",
+      "runs": 5,
+      "firstChildTwoFramesMs": {
+        "n": 5,
+        "p50": 106,
+        "p95": 111
+      },
+      "laterChildTwoFramesMs": {
+        "n": 15,
+        "p50": 89,
+        "p95": 106
+      },
+      "childScriptLoadInitMs": {
+        "n": 20,
+        "p50": 4,
+        "p95": 5
+      },
+      "nativeCreationMs": {
+        "n": 20,
+        "p50": 12.956833466887474,
+        "p95": 14.855667017400265
+      },
+      "deltaCompletionMs": {
+        "n": 5000,
+        "p50": 0,
+        "p95": 1
+      },
+      "deltaRunMeanMs": {
+        "n": 5,
+        "p50": 0.234,
+        "p95": 0.244
+      },
+      "coalesced32CompletionMs": {
+        "n": 1500,
+        "p50": 0,
+        "p95": 1
+      },
+      "coalesced32RunMeanMs": {
+        "n": 5,
+        "p50": 0.21,
+        "p95": 0.21666666666666667
+      },
+      "updateTwoFramesMs": {
+        "n": 120,
+        "p50": 33,
+        "p95": 34
+      }
+    }
+  ]
+}
