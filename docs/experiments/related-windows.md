@@ -140,13 +140,15 @@ The tests establish:
 - DOM `window.close()` also rejects a retained Promise, but does **not** exercise
   the native cancellation preflight.
 
-That last distinction needs a public-policy decision before integration.
+The close-route distinction is agreed:
 [WebKit's delegate contract](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKUIDelegate.h)
 reports DOM `close()` only after it has completed. The oracle treats that callback
 as terminal cleanup; it cannot restore a closed document by vetoing the containing
-native window. Proposed direction: use Zapp's window handle for cancellable close
-requests, and treat intrinsic DOM closure as an already-committed terminal path.
-No DOM interception or public behavior has been adopted here.
+native window. Use Zapp's window handle for cancellable close requests, and treat
+intrinsic DOM closure as an already-committed terminal path. Both paths still
+invalidate native routing and clean up retained document state. We will not
+silently intercept or redefine DOM `window.close()`. This is the approved policy
+for future integration; the production related-window feature is not built yet.
 
 `PROBE_DOCUMENT_INVALIDATED`, disposal hooks, and test controls are private fixture
 vocabulary, not proposed Zapp APIs. Public error shape and cross-realm error
@@ -167,9 +169,9 @@ unproven.
    child remains isolated from a higher-authority owner. Deliberate compatible
    content/capability policies before granting any native bridge to children.
 2. **Explicit ownership and lifetime.** Carry the tested native preflight and
-   nonblocking cleanup into Zapp's existing lifecycle machinery. Deliberate
-   intrinsic DOM closure, owner crashes, and failed navigation; do not assume
-   the platform oracle settles every terminal path.
+   nonblocking cleanup into Zapp's existing lifecycle machinery. Preserve the
+   agreed close-route distinction; deliberate owner crashes and failed navigation.
+   Do not assume the platform oracle settles every terminal path.
 3. **Navigation is a security transition.** Test dev/prod origin equivalence,
    redirects, external URLs, CSP, COOP, opener removal, and bridge injection.
    Current negative tests are not a complete navigation security audit.
@@ -197,12 +199,19 @@ unproven.
       ordering without blocking native window closure on frontend cleanup.
 - [x] Native child/family close veto before any teardown, with pending requests
       preserved on cancellation and invalidated on accepted closure.
-- [ ] Deliberate intrinsic DOM close versus cancellable framework requests, and
-      the public invalidation error/cleanup contract before integration.
+- [x] Agree that framework close requests are cancellable, while intrinsic DOM
+      close is already committed and must still run terminal cleanup.
+- [ ] Deliberate the public invalidation error/cleanup contract before integration.
 - [ ] Expand oracle tests for renderer failure, long-hidden owner, failed/external
       navigation, capability mismatch, and cleanup/leaks before integration.
-- [ ] Reproduce the mechanism in checked Z interop; surface any upstream gaps
-      instead of growing a production Objective-C implementation.
+- [x] Reproduce the essential creation boundary in checked Z: nullable
+      `WKUIDelegate` return, WebKit-supplied configuration, child-owned handler,
+      direct native reply, and terminal DOM-close callback.
+- [ ] Close the native diagnostic-parity findings recorded in Z's
+      `docs/ownership-pressure.md` (unknown Array method, readonly intermediate
+      assignment path). Stage 0's nested adapter declaration-order gap is fixed.
+- [ ] Port the broader document-token, retained-Promise, and cancellation-preflight
+      behavior to checked Z; do not grow the oracle into production native code.
 - [ ] Integrate only after those gates with the existing window manager and
       close/cancellation/permission mechanisms, including dev and bundled content.
 - [ ] Measure a representative multi-window app with cold/warm startup, process-
@@ -226,3 +235,10 @@ new performance measurement.
 The expanded [lifecycle evidence](../../spikes/related-windows/results/2026-09-12/direct-lifecycle.json)
 preserves retained-Promise, cancellation-preflight, and delayed-cleanup checks
 without overwriting that earlier twelve-case snapshot.
+The [checked-Z host](../../spikes/related-windows/checked-z/main.zs) has its own
+[four-run evidence](../../spikes/related-windows/results/2026-09-12/checked-z.json):
+native and Stage 0 emission at `-O0`/`-O2`, all with UBSan. One allowed and one
+refused child creation exercise both sides of the nullable native return, and
+the allowed child receives a direct reply before DOM-close teardown. This is
+a narrower HTTP-only port, not a claim that the full lifecycle oracle has been
+implemented in Zapp or that production navigation/capability policy is complete.

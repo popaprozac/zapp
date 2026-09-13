@@ -1,0 +1,11 @@
+{
+  "target": {
+    "name": "related-window-checked-z",
+    "entry": "main.zs",
+    "platform": "macos",
+    "minimumVersion": "14.0",
+    "link": {
+      "frameworks": ["AppKit", "WebKit"]
+    }
+  }
+}

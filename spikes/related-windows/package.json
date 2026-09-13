@@ -4,6 +4,7 @@
   "scripts": {
     "test": "bun run run.ts",
     "test:bridge": "bun run direct-bridge.ts",
+    "test:checked-z": "bun run checked-z.ts",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

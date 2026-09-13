@@ -1,0 +1,42 @@
+{
+  "recordedAt": "2026-09-13T06:03:41.383Z",
+  "scope": "macOS system WKWebView; Z-owned one-child loopback creation, native reply, nullable refusal, terminal DOM close; not the full related-window lifecycle",
+  "cases": [
+    {
+      "frontend": "native",
+      "optimization": "-O0",
+      "pass": true,
+      "status": 0,
+      "stdout": "checked-z related child: pass=true created=1 rejected=1 replies=1 closed=1\n",
+      "stderr": "",
+      "timedOut": false
+    },
+    {
+      "frontend": "native",
+      "optimization": "-O2",
+      "pass": true,
+      "status": 0,
+      "stdout": "checked-z related child: pass=true created=1 rejected=1 replies=1 closed=1\n",
+      "stderr": "",
+      "timedOut": false
+    },
+    {
+      "frontend": "stage0",
+      "optimization": "-O0",
+      "pass": true,
+      "status": 0,
+      "stdout": "checked-z related child: pass=true created=1 rejected=1 replies=1 closed=1\n",
+      "stderr": "",
+      "timedOut": false
+    },
+    {
+      "frontend": "stage0",
+      "optimization": "-O2",
+      "pass": true,
+      "status": 0,
+      "stdout": "checked-z related child: pass=true created=1 rejected=1 replies=1 closed=1\n",
+      "stderr": "",
+      "timedOut": false
+    }
+  ]
+}

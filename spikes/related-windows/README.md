@@ -31,6 +31,7 @@ cd spikes/related-windows
 bun install --frozen-lockfile --ignore-scripts
 bun run test
 bun run test:bridge
+bun run test:checked-z
 bun run benchmark
 ```
 
@@ -47,6 +48,9 @@ not download remote scripts or use a running Z Notes instance or Vite server.
   external 20-second process-group deadline per case.
 - Direct bridge: `-O0` and `-O2` with strict Clang warnings and UBSan; native
   20-second watchdog and external 25-second process-group deadline per case.
+- Checked Z: native and Stage 0 emission, each at `-O0`/`-O2` with UBSan;
+  15-second native timer and 20-second external process-group deadline. Each
+  emission has a 120-second deadline and Clang compilation a 30-second deadline.
 - Benchmark: optimized `-O2 -DNDEBUG`, no sanitizer; native 30-second watchdog,
   external 35-second process-group deadline per case.
 - Compilation: 30-second deadline. Interrupt/timeout handlers stop the harness
@@ -114,8 +118,9 @@ through the owner; only the document-lifecycle notification uses that route.
 Native child/family close vetoes preserve pending operations and every affected
 document before teardown. DOM `window.close()` is a separate terminal path:
 WebKit reports it after completion, too late for native preflight cancellation.
-The public policy for that distinction still needs agreement. All disposal/error
-names and test hooks here are private fixtures, not new Zapp APIs.
+The agreed policy keeps Zapp handle requests cancellable and intrinsic DOM closure
+terminal, without redefining browser `window.close()`. All disposal/error names
+and test hooks here are private fixtures, not new Zapp APIs.
 
 Remaining gates include actual Z task cancellation and service integration;
 failed navigation/renderer failure; early document-start/`about:blank` readiness;
@@ -123,6 +128,37 @@ sustained hidden-owner scheduling; and production capability-profile enforcement
 Native delayed callbacks are invalidated and their stale replies suppressed,
 not physically cancelled. JS reactions can wait on a busy owner even though
 native closure does not wait for JS cleanup.
+
+## Checked-Z creation boundary
+
+`bun run test:checked-z` runs the smaller [Z-authored host](checked-z/main.zs).
+It needs the sibling `z-lang` checkout and its bootstrapped native compiler;
+`Z_NATIVE_COMPILER` can override that executable. The checked-in
+[z.json](checked-z/z.json) sits beside the source for header/tooling configuration.
+There is no handwritten native source or `raw` block in this host.
+
+Four bounded UBSan configurations pass: native/Stage 0 emission x `-O0`/`-O2`.
+Each verifies one successful WebKit-created child, one nullable delegate refusal,
+one child-native-child round trip, and one DOM-driven native child close. The
+child receives a separate content controller and retained protocol registration,
+reads an owner object, and verifies its document/realm intrinsics remain distinct.
+The native handler checks the actual message WebView and main frame; the owner
+has no service-message handler to relay through. Z retains the child and adapters
+until the application loop unwinds.
+
+The [checked-Z evidence](results/2026-09-12/checked-z.json) is separate from the
+broader Objective-C lifecycle oracle. This Z port uses only ephemeral loopback
+content and one child; it does not yet cover custom protocols, family preflight,
+replacement tokens, retained Promises, production capability policy, or origin
+validation. Those remain integration work, not implied by this positive test.
+Document-start injection here is followed by a real child-page load; this does
+not establish a usable bridge in the initial `about:blank` document.
+
+This pressure test found and fixed Stage 0's adapter/helper declaration ordering
+for registrations created inside methods or native callbacks. Two separate native
+diagnostic mismatches (unknown Array methods and readonly intermediate assignment
+paths) are recorded in Z's `docs/ownership-pressure.md` and remain the next
+upstream checkpoint. The valid probe source passes both frontends.
 
 ## Boundaries
 
@@ -144,6 +180,8 @@ provide the missing DOM owner. Public syntax and lifecycle rules remain open.
 - `direct-bridge.m`, `direct-bootstrap.js`, `direct-app.jsx`, `direct-lifecycle.jsx`,
   `direct-bridge.ts`: separate native endpoints, concurrent replies, retained
   Promises, cancellation preflight, and nonblocking cleanup checks.
+- `checked-z/main.zs`, `checked-z/z.json`, `checked-z.ts`: the narrower Z-owned
+  creation/direct-handler/terminal-close boundary, verified through both frontends.
 - `types.ts`: benchmark result shape for editor/typechecking support.
 - `results/2026-09-12/`: original feasibility, benchmark summary, and raw observations.
 - `.artifacts/`: ignored results of local reruns.
