@@ -251,3 +251,18 @@ refused child creation exercise both sides of the nullable native return, and
 the allowed child receives a direct reply before DOM-close teardown. This is
 a narrower HTTP-only port, not a claim that the full lifecycle oracle has been
 implemented in Zapp or that production navigation/capability policy is complete.
+
+The [production-bridge lifetime follow-up](../../spikes/related-windows/checked-z/lifetime.zs)
+now has its own [four-run evidence](../../spikes/related-windows/results/2026-09-13/checked-z-lifetime.json).
+It uses the actual bundled bridge and owner-side lifetime helper, with checked-Z
+native creation/retirement and separate bridge/DOM readiness signals. A child
+request receives a direct reply; another child-created Promise survives long
+enough for the owner to observe its rejection after native closure. Early/late
+cleanup runs once each, and a disposed bridge cannot dispatch more work.
+This does not yet port the broader family registry, authority catalog,
+replacement/navigation cases, or cancellation into real service tasks.
+
+That follow-up also closed upstream Z `instanceof` control-flow parity gaps:
+the native frontend now preserves negated guard proofs, while Stage 0 no longer
+leaks a one-branch proof past a nonterminal `if`. Regressions test valid and
+invalid paths independently. No new Z syntax or runtime wrapper was required.

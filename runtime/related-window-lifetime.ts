@@ -12,6 +12,15 @@ type Listener = {
   callback: ((event: RelatedWindowInvalidatedEvent) => void) | undefined;
 };
 
+/** @internal Bind the existing document transport, not a request/response relay. */
+export function bindRelatedDocumentLifetime(
+  identity: RelatedDocumentIdentity,
+  transport: { _dispose(error: Error): void },
+  reportError?: (error: unknown) => void,
+): RelatedDocumentLifetime {
+  return new RelatedDocumentLifetime(identity, error => transport._dispose(error), reportError);
+}
+
 /**
  * @internal One document's JS lifetime. Native routing must be invalidated
  * independently, before notification enters JS; no JS acknowledgement is needed.

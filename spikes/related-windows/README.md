@@ -35,6 +35,7 @@ bun install --frozen-lockfile --ignore-scripts
 bun run test
 bun run test:bridge
 bun run test:checked-z
+bun run test:checked-lifetime
 bun run benchmark
 ```
 
@@ -85,6 +86,28 @@ Six runs passed, with 88 assertions and empty stderr in the saved baseline.
 The native delegate constructs the child with WebKit's supplied configuration
 and lets WebKit navigate it. It does not create an arbitrary independent
 WebView and attempt to manufacture a DOM handle over IPC. No private API is used.
+
+## Production bridge lifetime in checked Z
+
+`bun run test:checked-lifetime` uses `checked-z/lifetime.zs` with the real bundled
+WebView bootstrap and the owner's `RelatedDocumentLifetime` helper. No handwritten
+Objective-C source is used by this host. It requires the Zapp root dependencies
+as well as the local native Z compiler; it uses the same process deadlines and
+UBSan matrix as the smaller checked-Z creation probe.
+
+Four runs (native/Stage 0 × `-O0`/`-O2`) pass with empty stderr. Separate native
+bridge-ready and DOM-ready signals precede exposing the child to the owner.
+The child bridge creates its own Promise and receives a direct native reply.
+After DOM closure, Z retires native routing and closes the window before sending
+an identity-checked lifecycle notification to the owner. The owner settles a
+retained child Promise using the real pending table; early/late cleanup queues
+once each, and the retired bridge cannot dispatch another request.
+
+This remains a single-child HTTP fixture. It does not implement the production
+family registry, permission inheritance, navigation/security audit, or real Z
+task cancellation. The instrumented held request intentionally never replies.
+Results are written to ignored `.artifacts/checked-z-lifetime-results.json`;
+the [dated evidence](results/2026-09-13/checked-z-lifetime.json) is retained separately.
 
 ## Direct bridge follow-up
 

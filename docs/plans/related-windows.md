@@ -2,9 +2,11 @@
 
 Status: **approved contract, implementation in progress**, 2026-09-13.
 
-The runtime now provides the event/error/type declarations and a tested internal
-document-lifetime helper. **`createRelatedWindow` is not implemented or exported
-yet.** The example below describes the intended API, not a runnable feature today.
+The runtime now provides the event/error/type declarations, a tested internal
+document-lifetime helper, and terminal disposal of the production WebView bridge.
+A checked-Z WebKit probe connects those pieces across actual child closure.
+**`createRelatedWindow` is not implemented or exported yet.** The example below
+describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
 and remaining native integration gates separately.
 
@@ -132,8 +134,10 @@ validation and physical window teardown remain outside this helper.
 - [x] Add public event/error/type declarations and internal lifetime helper.
 - [x] Test queued/late delivery, independent unsubscribe, stale identities,
       reentrancy, cleanup failures, typed overloads, and cross-realm Promises.
-- [ ] Connect the helper to the actual child bridge and checked-Z document
-      registry; do not promote the Objective-C oracle into production.
+- [x] Bind the helper to the actual bootstrap's pending-request disposal and
+      prove retained child-Promise rejection after native closure in checked Z.
+- [ ] Integrate the checked-Z family/document registry into the window manager;
+      do not promote the Objective-C oracle into production.
 - [ ] Implement the readiness handshake and partial-creation cleanup.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
       checks, renderer loss, and navigation gates through native integration.
@@ -144,6 +148,7 @@ Focused validation from the repository root:
 
 ```sh
 bun test runtime/related-window-lifetime.test.ts runtime/related-window-types.test.ts runtime/window-api.test.ts runtime/window-errors.test.ts
+bun test runtime/related-window-transport.test.ts
 bun run check
 ```
 
@@ -152,3 +157,17 @@ WebKit renderer scheduling or production cancellation. The separate bounded
 [native probes](../../spikes/related-windows/README.md) establish narrower platform
 facts. Their remaining gaps stay explicit until the corresponding integration
 tests pass.
+
+The [checked-Z lifetime probe](../../spikes/related-windows/checked-z/lifetime.zs)
+uses the production bundled bootstrap and owner-side helper. Native and Stage 0
+both pass at `-O0`/`-O2` with UBSan. It distinguishes bridge startup from document
+readiness, validates the sending WebView/main frame/exact fixture URL, sends a
+reply directly to the child, and closes the native child before notifying the
+owner. A retained child Promise rejects there; early and late cleanup each run
+once; a disposed bridge cannot submit another request.
+
+This is an HTTP-only single-child integration proof with fixed native fixture
+identity, not the production creation handshake or family registry. It does not
+yet prove authority-catalog inheritance, owner replacement, renderer failure,
+custom-protocol readiness, or cancellation of a real Z service task. The held
+native request is an instrumented pending request, not a running service.

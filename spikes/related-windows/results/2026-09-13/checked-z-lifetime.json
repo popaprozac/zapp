@@ -1,0 +1,38 @@
+[
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "pass": true,
+    "status": 0,
+    "stdout": "checked-z lifetime: pass=true created=1 refused=1 ready=1 replies=1 pending=1 closed=1\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O2",
+    "pass": true,
+    "status": 0,
+    "stdout": "checked-z lifetime: pass=true created=1 refused=1 ready=1 replies=1 pending=1 closed=1\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O0",
+    "pass": true,
+    "status": 0,
+    "stdout": "checked-z lifetime: pass=true created=1 refused=1 ready=1 replies=1 pending=1 closed=1\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O2",
+    "pass": true,
+    "status": 0,
+    "stdout": "checked-z lifetime: pass=true created=1 refused=1 ready=1 replies=1 pending=1 closed=1\n",
+    "stderr": "",
+    "timedOut": false
+  }
+]

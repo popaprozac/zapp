@@ -19,8 +19,10 @@
   const pending: Record<number, PendingEntry> = {};
   let nextId = 1;
   const listeners: Record<string, Array<(payload: any) => void>> = {};
+  let disposed: Error | undefined;
 
   function post(msg: string): void {
+    if (disposed) return;
     if ((window as any).webkit?.messageHandlers?.zapp) {
       (window as any).webkit.messageHandlers.zapp.postMessage(msg);
     } else if ((window as any).chrome?.webview) {
@@ -118,6 +120,10 @@
       const signal = opts?.signal;
 
       const p: any = new Promise((resolve, reject) => {
+        if (disposed) {
+          reject(disposed);
+          return;
+        }
         if (signal?.aborted) {
           cancelled = true;
           reject(abortError(signal.reason));
@@ -132,10 +138,14 @@
           signal.addEventListener("abort", entry.abort, { once: true });
         }
         pending[id] = entry;
-        post(JSON.stringify({ t: 1, id, m: method, a: args || {} }));
+        try { post(JSON.stringify({ t: 1, id, m: method, a: args || {} })); }
+        catch (error) {
+          takePending(id)?.reject(error);
+          return;
+        }
         // Native user interactions (e.g. menu tracking) have no arbitrary
         // expiry. Explicit cancellation and document teardown still retire it.
-        if (timeout !== 0) {
+        if (timeout !== 0 && pending[id] === entry) {
           entry.timer = setTimeout(() => {
             const timedOut = takePending(id);
             if (!timedOut) return;
@@ -163,6 +173,7 @@
     },
 
     on(name: string, handler: (payload: any) => void): () => void {
+      if (disposed) return () => {};
       if (!listeners[name]) listeners[name] = [];
       const wasEmpty = listeners[name].length === 0;
       listeners[name].push(handler);
@@ -194,12 +205,13 @@
     },
 
     _onEvent(name: string, payload: string): void {
+      if (disposed) return;
       const handlers = listeners[name] || [];
       let parsed: any = payload;
       try {
         parsed = JSON.parse(payload);
       } catch {}
-      for (let i = 0; i < handlers.length; i++) {
+      for (let i = 0; i < handlers.length && !disposed; i++) {
         try {
           handlers[i](parsed);
         } catch (e) {
@@ -271,6 +283,7 @@
     // --- Worker lifecycle ---
 
     createWorker(scriptUrl: string, opts?: { engine?: string; name?: string }): string {
+      if (disposed) throw disposed;
       const id = "w-" + nextId++;
       if (nextId > 65535) nextId = 1;
       bridge._workers[id] = { onmessage: null, _messageHandlers: [] };
@@ -296,21 +309,27 @@
 
     // --- Sync wait/notify ---
 
-    _syncPending: {} as Record<string, { resolve: (v: "notified" | "timed-out") => void; timer?: ReturnType<typeof setTimeout> }>,
+    _syncPending: {} as Record<string, { resolve: (v: "notified" | "timed-out") => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout> }>,
 
     syncWait(key: string, timeoutMs?: number | null): Promise<"notified" | "timed-out"> {
       const id = "sync-" + nextId++ + "-" + Date.now();
       if (nextId > 65535) nextId = 1;
 
-      return new Promise((resolve) => {
-        bridge._syncPending[id] = { resolve };
+      return new Promise((resolve, reject) => {
+        if (disposed) { reject(disposed); return; }
+        bridge._syncPending[id] = { resolve, reject };
 
         const a: Record<string, unknown> = { id, key };
         if (timeoutMs != null && timeoutMs > 0) a.timeoutMs = timeoutMs;
-        post(JSON.stringify({ t: 6, m: "wait", a }));
+        try { post(JSON.stringify({ t: 6, m: "wait", a })); }
+        catch (error) {
+          delete bridge._syncPending[id];
+          reject(error);
+          return;
+        }
 
         // Transport safety timeout (native timeout + buffer)
-        if (timeoutMs != null && timeoutMs > 0) {
+        if (timeoutMs != null && timeoutMs > 0 && bridge._syncPending[id]) {
           bridge._syncPending[id].timer = setTimeout(() => {
             if (bridge._syncPending[id]) {
               delete bridge._syncPending[id];
@@ -347,13 +366,30 @@
       const event = { data: parsed };
       if (w.onmessage) w.onmessage(event);
       const handlers = w._messageHandlers || [];
-      for (let i = 0; i < handlers.length; i++) {
+      for (let i = 0; i < handlers.length && !disposed; i++) {
         try {
           handlers[i](event);
         } catch (e) {
           console.error("[zapp] worker message handler error:", e);
         }
       }
+    },
+
+    // Internal terminal transition. Native routing/cancellation has already
+    // retired the document; never post one cancellation per retired JS request.
+    // A surviving owner may call this on a retained child bridge directly.
+    _dispose(error: Error): void {
+      if (disposed) return;
+      disposed = error;
+      for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
+      for (const id of Object.keys(bridge._syncPending)) {
+        const entry = bridge._syncPending[id];
+        delete bridge._syncPending[id];
+        if (entry.timer !== undefined) clearTimeout(entry.timer);
+        entry.reject(error);
+      }
+      for (const name of Object.keys(listeners)) delete listeners[name];
+      bridge._workers = {};
     },
   };
 
