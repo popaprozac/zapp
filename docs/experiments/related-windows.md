@@ -1,7 +1,9 @@
 # Related windows: one frontend owner, multiple native documents
 
-Status: research checkpoint, 2026-09-12. **Go for further exploration, not a
-shipping feature or approved public API.** macOS/system WKWebView only.
+Status: research evidence from 2026-09-12; **public contract approved on
+2026-09-13, not a shipping feature.** macOS/system WKWebView only. The
+[implementation plan](../plans/related-windows.md) separates the approved API,
+runtime foundation, and remaining integration gates.
 
 Runnable source: [spikes/related-windows](../../spikes/related-windows/README.md).
 Measurements: [benchmark report](../../spikes/related-windows/BENCHMARKS.md).
@@ -61,8 +63,9 @@ Independent windows remain the default. Related windows are an explicit,
 same-trust family, not a way to make a lower-permission window isolated from
 its owner. Each member keeps its own native identity, events, and direct native
 bridge; it inherits the family's authority rather than choosing a stronger or
-nominally isolated weaker profile. Public construction/binding syntax is still
-open, and production capability-catalog enforcement has not been implemented.
+nominally isolated weaker profile. `createRelatedWindow` and `RelatedWindowHandle`
+are now approved; the public factory and production capability-catalog enforcement
+have not been implemented.
 
 The lifetime belongs to the owning document: hiding/minimizing preserves the
 family; accepted owner closure or document replacement tears down its children.
@@ -150,11 +153,14 @@ invalidate native routing and clean up retained document state. We will not
 silently intercept or redefine DOM `window.close()`. This is the approved policy
 for future integration; the production related-window feature is not built yet.
 
-`PROBE_DOCUMENT_INVALIDATED`, disposal hooks, and test controls are private fixture
-vocabulary, not proposed Zapp APIs. Public error shape and cross-realm error
-handling still need deliberation. A blocked owner can delay Promise reactions
-and portal cleanup even though native closure is not waiting. Renderer failure
-and prolonged hidden-owner scheduling are not covered by these checks.
+`PROBE_DOCUMENT_INVALIDATED`, disposal hooks, and test controls remain private
+fixture vocabulary. The approved public contract uses
+`RelatedWindowInvalidatedError` and remembered, queued
+`RelatedWindowEvent.INVALIDATED` subscriptions. Its runtime helper has unit tests,
+but is not wired into this oracle or the production native bridge yet. A blocked
+owner can delay Promise reactions and portal cleanup even though native closure
+is not waiting. Renderer failure and prolonged hidden-owner scheduling are not
+covered by these checks.
 
 The native delayed blocks still run after invalidation and suppress stale replies;
 this is not proof of cancellation propagation into real Z tasks. The oracle
@@ -193,23 +199,26 @@ unproven.
 - [x] Independent child native endpoints while preserving DOM/portal relationships,
       including provenance checks and stale-document reply domains.
 - [x] Agree on document-owned lifetime and shared family authority in principle.
-- [ ] Deliberate Zapp's optional related-window family shape, authority, owner
-      lifetime edge cases, and navigation rules with the project owner. No API is locked.
+- [x] Approve the optional related-window family shape, shared authority,
+      document-owned lifetime, and first-tier child navigation restrictions.
+      Remaining lifecycle edge cases are integration gates, not assumed proven.
 - [x] Settle retained child promises on invalidation and prove cancellation/unmount
       ordering without blocking native window closure on frontend cleanup.
 - [x] Native child/family close veto before any teardown, with pending requests
       preserved on cancellation and invalidated on accepted closure.
 - [x] Agree that framework close requests are cancellable, while intrinsic DOM
       close is already committed and must still run terminal cleanup.
-- [ ] Deliberate the public invalidation error/cleanup contract before integration.
+- [x] Approve the public invalidation error/cleanup contract and test its runtime
+      helper separately; the native integration remains outstanding.
 - [ ] Expand oracle tests for renderer failure, long-hidden owner, failed/external
       navigation, capability mismatch, and cleanup/leaks before integration.
 - [x] Reproduce the essential creation boundary in checked Z: nullable
       `WKUIDelegate` return, WebKit-supplied configuration, child-owned handler,
       direct native reply, and terminal DOM-close callback.
-- [ ] Close the native diagnostic-parity findings recorded in Z's
+- [x] Close the native diagnostic-parity findings recorded in Z's
       `docs/ownership-pressure.md` (unknown Array method, readonly intermediate
-      assignment path). Stage 0's nested adapter declaration-order gap is fixed.
+      assignment path), with Z commit `e8ebfc94`. Stage 0's nested adapter
+      declaration-order gap is also fixed.
 - [ ] Port the broader document-token, retained-Promise, and cancellation-preflight
       behavior to checked Z; do not grow the oracle into production native code.
 - [ ] Integrate only after those gates with the existing window manager and

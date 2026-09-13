@@ -1,5 +1,6 @@
 import {
   ZappError,
+  ZappInvocationError,
   registerBridgeErrorFactory,
   type BridgeErrorPayload,
 } from "./errors";
@@ -31,4 +32,32 @@ registerBridgeErrorFactory("WINDOW_ERROR", (payload: BridgeErrorPayload) => (
     operation: payload.operation as WindowOperation | undefined,
     windowId: payload.windowId,
   })
+));
+
+export interface RelatedWindowInvalidatedErrorPayload {
+  readonly windowId: string;
+  /** Human-readable explanation; not an exhaustive machine-readable reason enum. */
+  readonly reason: string;
+}
+
+/** Work lost its owning related document, rather than failing inside a service. */
+export class RelatedWindowInvalidatedError extends ZappError {
+  readonly windowId: string;
+  readonly reason: string;
+
+  constructor(payload: RelatedWindowInvalidatedErrorPayload) {
+    super({
+      code: "RELATED_WINDOW_INVALIDATED",
+      message: `Related window "${payload.windowId}" is no longer usable: ${payload.reason}`,
+    });
+    this.name = "RelatedWindowInvalidatedError";
+    this.windowId = payload.windowId;
+    this.reason = payload.reason;
+  }
+}
+
+registerBridgeErrorFactory("RELATED_WINDOW_INVALIDATED", (payload: BridgeErrorPayload) => (
+  payload.windowId && payload.reason
+    ? new RelatedWindowInvalidatedError({ windowId: payload.windowId, reason: payload.reason })
+    : new ZappInvocationError(payload)
 ));

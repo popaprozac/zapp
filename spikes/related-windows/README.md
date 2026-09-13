@@ -9,6 +9,9 @@ document, with ordinary object/function references and same-origin enforcement.
 
 Start with [why, findings, and next steps](../../docs/experiments/related-windows.md).
 See [BENCHMARKS.md](BENCHMARKS.md) for the three-way measurements and limits.
+The [approved public contract](../../docs/plans/related-windows.md) now has runtime
+types and a separately tested lifetime helper. The public factory/native bridge
+integration is still pending; this oracle does not expose that API.
 
 ## Why Objective-C here?
 

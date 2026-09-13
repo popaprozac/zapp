@@ -12,8 +12,10 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
-test("focused window package exports only composed runtime values", () => {
+test("focused window package exposes its intended public values", () => {
   expect(Object.keys(windowAPI).sort()).toEqual([
+    "RelatedWindowEvent",
+    "RelatedWindowInvalidatedError",
     "WindowError",
     "WindowEvent",
     "createWindow",

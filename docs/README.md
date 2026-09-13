@@ -32,6 +32,7 @@ for using its public APIs.
 | [`plans/application-startup-integration.md`](plans/application-startup-integration.md) | Startup integration checkpoint, upstream compiler gates, and resume sequence |
 | [`plans/window-resize-polish.md`](plans/window-resize-polish.md) | Experimental native resize measurements, visual A/B probe, and pending Z interop design |
 | [`experiments/related-windows.md`](experiments/related-windows.md) | Related-window DOM/portal feasibility, three-way benchmarks, and security/lifecycle gates (research only) |
+| [`plans/related-windows.md`](plans/related-windows.md) | Approved related-document API, tested runtime foundation, and remaining native integration gates (not available yet) |
 | [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 ## Historical and contributor references

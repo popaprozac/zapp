@@ -12,6 +12,7 @@ export interface BridgeErrorPayload extends ZappErrorPayload {
   target?: string;
   path?: string;
   windowId?: string;
+  reason?: string;
   workerId?: string;
   service?: string;
   method?: string;
@@ -117,6 +118,9 @@ export function errorFromBridgePayload(payload: string): Error {
           : {}),
         ...(typeof parsed.windowId === "string" && parsed.windowId.length > 0
           ? { windowId: parsed.windowId }
+          : {}),
+        ...(typeof parsed.reason === "string" && parsed.reason.length > 0
+          ? { reason: parsed.reason }
           : {}),
         ...(typeof parsed.workerId === "string" && parsed.workerId.length > 0
           ? { workerId: parsed.workerId }

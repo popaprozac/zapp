@@ -16,11 +16,14 @@ export interface ContextMenuOptions {
   readonly y: number;
 }
 
-export { WindowError } from "./window-errors";
+export { WindowError, RelatedWindowInvalidatedError } from "./window-errors";
 export type {
   WindowErrorPayload,
   WindowOperation,
+  RelatedWindowInvalidatedErrorPayload,
 } from "./window-errors";
+export { RelatedWindowEvent } from "./related-window-contract";
+export type { RelatedWindowHandle, RelatedWindowInvalidatedEvent } from "./related-window-contract";
 
 /** Frontend-safe options accepted by the Z-owned window factory. */
 export interface WindowCreateOptions {
