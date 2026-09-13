@@ -41,7 +41,7 @@ try {
     await Bun.write(source, emission.stdout);
     for (const optimization of ["-O0", "-O2"]) {
       const binary = join(artifacts, `${name}-${frontend}${optimization}`);
-      const compile = await runBoundedCommand(["xcrun", "clang", "-fobjc-arc", "-fblocks", optimization, "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all", "-mmacosx-version-min=14.0", "-framework", "AppKit", "-framework", "WebKit", "-framework", "CoreFoundation", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
+      const compile = await runBoundedCommand(["xcrun", "clang", "-fobjc-arc", "-fblocks", optimization, "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all", "-mmacosx-version-min=14.0", "-framework", "AppKit", "-framework", "WebKit", "-framework", "CoreFoundation", "-lcompression", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
       if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify({ frontend, compile }));
       const outcome = await runBoundedCommand([binary, `http://127.0.0.1:${server.port}`, bootstrap], { cwd: root, timeoutMs: 15_000 });
       const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""

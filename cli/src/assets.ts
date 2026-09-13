@@ -6,6 +6,7 @@ import { copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs";
 import { brotliCompressSync, constants } from "node:zlib";
 import { clog } from "./log";
+import { resolveBootstrapDir } from "./paths";
 
 /** Marker written by both prod asset emitters (zc + Nim) to signal that
  *  assets are baked into the binary. The zc DEV stub path does NOT write it. */
@@ -209,9 +210,33 @@ export async function generateAssetManifestZ(
     outputPath: string;
   },
 ): Promise<string> {
+  const { RELATED_DOCUMENT_SHELL_HTML, RELATED_DOCUMENT_SHELL_PATH } = await import(
+    path.join(resolveBootstrapDir(), "related-document.ts")
+  );
+  // The framework owns this path even when the frontend uses a build tool other
+  // than Vite. Never silently replace an application's asset at the same URL.
+  if (options.embed) {
+    const candidate = path.resolve(root, assetDir, `.${RELATED_DOCUMENT_SHELL_PATH}`);
+    if (existsSync(candidate)) {
+      throw new Error(`Frontend asset ${RELATED_DOCUMENT_SHELL_PATH} conflicts with the reserved related-window shell`);
+    }
+  }
   const assets = options.embed
     ? (await collectAssets(root, assetDir, options.compress ?? true)).assets
     : [];
+  if (options.embed) {
+    const shellPath = path.join(root, ".zapp", "assets", ".zapp", "related.html");
+    await mkdir(path.dirname(shellPath), { recursive: true });
+    await writeFile(shellPath, RELATED_DOCUMENT_SHELL_HTML, "utf8");
+    const length = Buffer.byteLength(RELATED_DOCUMENT_SHELL_HTML);
+    assets.push({
+      relPath: RELATED_DOCUMENT_SHELL_PATH,
+      brPath: shellPath,
+      originalSize: length,
+      compressedSize: length,
+      brotli: false,
+    });
+  }
   const payloadDirectory = path.join(path.dirname(options.outputPath), "configured-assets");
   await rm(payloadDirectory, { recursive: true, force: true });
   await mkdir(payloadDirectory, { recursive: true });

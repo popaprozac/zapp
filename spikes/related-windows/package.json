@@ -9,6 +9,7 @@
     "test:registry": "bun run registry.ts",
     "test:document-routing": "bun run document-routing.ts",
     "test:related-readiness": "bun run document-routing.ts --related",
+    "test:shell": "bun run shell.ts",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

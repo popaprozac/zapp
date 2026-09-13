@@ -40,6 +40,7 @@ bun run test:checked-lifetime
 bun run test:registry
 bun run test:document-routing
 bun run test:related-readiness
+bun run test:shell
 bun run benchmark
 ```
 
@@ -112,6 +113,22 @@ family registry, permission inheritance, navigation/security audit, or real Z
 task cancellation. The instrumented held request intentionally never replies.
 Results are written to ignored `.artifacts/checked-z-lifetime-results.json`;
 the [dated evidence](results/2026-09-13/checked-z-lifetime.json) is retained separately.
+
+## Vite and packaged shell readiness
+
+For the next production-delivery check, run `bun run test:shell`. It owns an
+ephemeral Vite server and also loads the same child shell through Zapp's real
+embedded-asset scheme handler at `zapp://app`. The generated asset catalog and
+staged framework remain under ignored `.artifacts/shell/`; tracked source is
+never rewritten. The child has no frontend script tags or HMR bootstrap.
+
+All eight combinations of native/Stage 0, `-O0`/`-O2`, and Vite/packaged pass
+with UBSan. Each execution has a 15-second process-group deadline. The fixture
+verifies two-stage readiness, a direct child bridge reply, shared owner state,
+unprepared-creation refusal, and child-only closure. The server closes in
+`finally`. [Dated output](results/2026-09-13/related-shell.json) is preserved.
+This is shell-delivery evidence, not the public factory or full-family close
+integration. See the [remaining gates](../../docs/plans/related-windows.md#vite-and-packaged-shell-checkpoint).
 
 ## Headless native document registry
 

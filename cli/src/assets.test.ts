@@ -12,6 +12,7 @@ import {
 import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { RELATED_DOCUMENT_SHELL_HTML, RELATED_DOCUMENT_SHELL_PATH } from "../../bootstrap/related-document";
 
 async function pathExists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
@@ -208,8 +209,40 @@ test("generateAssetManifestZ copies payloads beside the generated module", async
     ))).toBe(true);
     const source = await Bun.file(out).text();
     expect(source).toContain("configuredEmbeddedAssetCount");
-    expect(source).toContain("return 1");
+    expect(source).toContain("return 2");
     expect(source).toContain("compressed: false");
+    expect(source).toContain(JSON.stringify(RELATED_DOCUMENT_SHELL_PATH));
+    expect(await Bun.file(path.join(root, "generated/configured-assets/asset-1.bin")).text())
+      .toBe(RELATED_DOCUMENT_SHELL_HTML);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Z packaging reserves the shell path without overwriting frontend assets", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-shell-"));
+  try {
+    const conflict = path.join(root, "dist", RELATED_DOCUMENT_SHELL_PATH);
+    await mkdir(path.dirname(conflict), { recursive: true });
+    await writeFile(conflict, "user content");
+    await expect(generateAssetManifestZ(root, "dist", {
+      embed: true, outputPath: path.join(root, "generated/configured-assets.zs"),
+    })).rejects.toThrow("conflicts with the reserved related-window shell");
+    expect(await Bun.file(conflict).text()).toBe("user content");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("development asset catalogs stay empty; Vite owns shell delivery", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zapp-assets-shell-dev-"));
+  try {
+    const outputPath = path.join(root, "generated/configured-assets.zs");
+    await generateAssetManifestZ(root, "missing", { embed: false, outputPath });
+    const source = await Bun.file(outputPath).text();
+    expect(source).toContain("return 0;");
+    expect(source).not.toContain(RELATED_DOCUMENT_SHELL_PATH);
+    expect(source).not.toContain("embed.bytes(");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

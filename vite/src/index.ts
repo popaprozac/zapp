@@ -20,6 +20,7 @@ import type { Plugin, ViteDevServer } from "vite";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, stat, readFile, rm } from "node:fs/promises";
+import { serveRelatedDocumentShell } from "./related-document";
 
 // Mirrors the CLI ZAPP_LOG levels so the plugin's progress logs are quiet by
 // default and reappear under --verbose/--debug (the CLI sets process.env.ZAPP_LOG).
@@ -971,6 +972,7 @@ export function zapp(options?: ZappOptions): Plugin {
     // configureServer runs before buildStart, so we re-discover workers here
     // (buildStart's results aren't yet available).
     async configureServer(server: ViteDevServer) {
+      server.middlewares.use(serveRelatedDocumentShell);
       workerOptions = await resolveWorkerOptions(projectRoot, options);
       const devOutDir = path.join(projectRoot, ".zapp", "workers");
       // Wipe stale bundles first — otherwise renaming/deleting a worker,

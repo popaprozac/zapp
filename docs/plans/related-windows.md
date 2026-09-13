@@ -9,6 +9,8 @@ The internal Z document registry proves inherited authority, subtree retirement,
 and cancellation of real tasks on both compiler paths. Production macOS request
 routing now uses document-bound identities, with a private bridge handshake and
 stale-reply rejection across committed navigation.
+The private minimal shell is served by Vite and embedded by Z packaging, with
+actual WebKit readiness verified through both delivery paths.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -183,6 +185,8 @@ validation and physical window teardown remain outside this helper.
       replies in the actual JS execution realm, including reused request IDs.
 - [x] Prove the internal child endpoint's inherited authority and two-stage
       shell/bridge readiness in headless tests and an actual WebKit-created child.
+- [x] Deliver the same minimal child shell through Vite and the production
+      embedded-asset handler, without loading another frontend entry or HMR client.
 - [ ] Integrate related-child creation, shell/bridge readiness, inherited
       authority, and partial-creation cleanup into the window manager.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
@@ -198,6 +202,7 @@ bun test runtime/related-window-transport.test.ts
 bun test runtime/document-transport.test.ts
 bun run spikes/related-windows/document-routing.ts
 bun run spikes/related-windows/document-routing.ts --related
+bun run spikes/related-windows/shell.ts
 bun run check
 ```
 
@@ -350,7 +355,39 @@ not prove initial `about:blank` readiness, first paint, or a performance gain.
 Two small compiler corrections landed with this checkpoint: Stage 0 preserves
 the enclosing function's return type inside value-producing blocks, and native
 emission declares Objective-C block adapters before nested callable bodies.
-Nested block capture of an outer callback parameter remains a separate native
-lowering gap. Whole-aggregate `replace` of ARC-bearing `Option` storage also
+Nested block capture of an outer callback parameter was subsequently fixed in
+Z commit `bc27e0a7`, with stored callable ownership and native iteration parity
+regressions. Whole-aggregate `replace` of ARC-bearing `Option` storage
 remains restricted; the fixture retains a direct endpoint before clearing its
-one-shot reservation. Neither restriction is hidden by a native shim.
+one-shot reservation. The remaining restriction is not hidden by a native shim.
+
+### Vite and packaged shell checkpoint
+
+The private `/.zapp/related.html` resource has one canonical HTML source. Vite
+serves it before HTML transforms and SPA fallback; it contains no app entry,
+script, bridge bundle, or HMR client. Production Z packaging embeds the same
+bytes uncompressed in the existing process-lifetime asset catalog. A frontend
+asset at that reserved path fails packaging instead of being silently replaced.
+No new public configuration or URL option is introduced.
+
+`bun run spikes/related-windows/shell.ts` runs the production asset generator,
+Z scheme handler, document endpoint, and bridge against both a real Vite server
+and `zapp://app`. All eight runs pass: native/Stage 0 × `-O0`/`-O2` ×
+Vite/packaged, with strict Clang warnings, UBSan, and 15-second per-process
+deadlines. Test-only injected JS invokes before body parsing, observes the
+empty usable shell after activation, reads shared owner state, receives `42`
+directly in the child, and closes it without retiring the owner. Unprepared
+creation is refused. [Raw results](../../spikes/related-windows/results/2026-09-13/related-shell.json)
+retain the exact outputs. The harness owns and closes its Vite server.
+
+The shell itself grants no authority; creation still requires native owner and
+document validation. These are real same-origin navigations, not an
+`about:blank` shortcut or first-paint benchmark. Production manager creation and
+failed-creation unwind, family close preflight, unsolicited event delivery, and
+renderer/owner retirement remain the next integration gates before exposing
+`createRelatedWindow`.
+
+This broader asset-host test also exposed and fixed Stage 0's inferred-borrow
+argument ABI for Objective-C protocol values: `helper(task)` now passes the
+same object pointer as `helper(in task)`. Zapp's valid helper calls did not need
+a workaround or new language syntax. The fix is Z commit `ad73dc7b`.

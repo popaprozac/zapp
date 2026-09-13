@@ -12,6 +12,7 @@ import { CapabilitySelection } from "../framework/application-capabilities.zs";
 import { BridgeDocument } from "../framework/bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } from "../framework/related-documents.zs";
 import { DesktopRouteMessageOperation, routeDocumentMessage, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
+import { createDesktopAssetSchemeHandler } from "../framework/platform/macos/scheme-handler.zs";
 
 readonly struct ProbeMessage { t: i32 = 0; id: u64 = 0; m: String = ""; }
 
@@ -174,6 +175,7 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
   readonly owner: WebKit.WKWebView;
   readonly address: String;
   readonly bootstrap: String;
+  readonly shellTest: boolean;
 
   function create(
     inout this,
@@ -196,6 +198,13 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
     const controller = WebKit.WKUserContentController.alloc().init();
     configuration.userContentController = controller;
     install(controller, in this.bootstrap);
+    if (this.shellTest) {
+      // Test instrumentation is injected, not part of the framework's shell.
+      // The early native call must wait for body parsing and native activation.
+      controller.addUserScript(WebKit.WKUserScript.alloc().initWithSource(
+        "(()=>{const b=globalThis[Symbol.for('zapp.bridge')];b.invoke('echo',{}, {timeout:0}).then(value=>{const pass=value===42&&!!document.head&&!!document.body&&document.scripts.length===0&&document.body.children.length===0&&opener.shared.value===41&&opener.document!==document;b.post(JSON.stringify({t:3,m:pass?'pass':'fail'}));window.close()})})()",
+        injectionTime: WebKit.WKUserScriptInjectionTimeAtDocumentStart, forMainFrameOnly: true));
+    }
     const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 300, 180), configuration: configuration);
     const state = this.state;
     const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => state.route(view, move message, identity);
@@ -229,10 +238,12 @@ function selection(): CapabilitySelection {
 
 function main(): i32 on thread.main {
   const args = process.args();
-  if (args.length != 2) return 2;
+  if (args.length != 2 && args.length != 3) return 2;
+  const shellTest = args.length == 3;
   const bootstrap = match (attempt fs.readText(args[1])) { success(value) => value; failure(_) => return 3; };
   const address = `${args[0]}/owner.html`;
-  const childAddress = `${args[0]}/child.html`;
+  const childPath = shellTest ? "/.zapp/related.html" : "/child.html";
+  const childAddress = `${args[0]}${childPath}`;
   const url = WebKit.NSURL.URLWithString(copy address);
   if (url == null) return 4;
   const app = WebKit.NSApplication.sharedApplication;
@@ -242,6 +253,8 @@ function main(): i32 on thread.main {
   install(controller, in bootstrap);
   const config = WebKit.WKWebViewConfiguration.alloc().init();
   config.userContentController = controller;
+  const scheme = createDesktopAssetSchemeHandler();
+  config.setURLSchemeHandler(scheme, forURLScheme: "zapp");
   config.websiteDataStore = WebKit.WKWebsiteDataStore.nonPersistentDataStore();
   config.preferences.javaScriptCanOpenWindowsAutomatically = true;
   const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 300, 180), configuration: config);
@@ -255,7 +268,7 @@ function main(): i32 on thread.main {
   const registration = objc.register({ add: controller.addScriptMessageHandler(messages, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
   const nav = new Navigation({ document });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(nav);
-  const owner = new OwnerUI({ state, owner: view, address: childAddress, bootstrap });
+  const owner = new OwnerUI({ state, owner: view, address: childAddress, bootstrap, shellTest });
   const ui = objc.adapt<WebKit.WKUIDelegate>(owner);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;
