@@ -81,8 +81,9 @@ WebView and attempt to manufacture a DOM handle over IPC. No private API is used
 
 ## Direct bridge follow-up
 
-`bun run test:bridge` runs twelve cases: HTTP and custom protocol, `-O0` and
-`-O2`, each with concurrent round trips, owner closure, or owner replacement.
+`bun run test:bridge` runs sixteen cases: HTTP and custom protocol, `-O0` and
+`-O2`, each with concurrent round trips, owner closure, owner replacement, or
+retained-Promise/cleanup lifecycle checks.
 It installs a separate `WKUserContentController` on each WebKit-supplied child
 configuration and verifies direct native request/reply routing. Children load
 only fixture HTML and an injected bridge, not another React bundle.
@@ -95,17 +96,33 @@ Context and direct object identity still work. A portal's owner-defined
 callback uses the owner's bridge; calling the child-defined bridge function
 uses the child's bridge and returns a promise from the child's realm.
 
-The dated [direct-bridge.json](results/2026-09-12/direct-bridge.json) retains all
+The earlier [direct-bridge.json](results/2026-09-12/direct-bridge.json) retains
 twelve runs, 236 JS assertions, 28 child creations/closures, and native
-observations. New runs write ignored `.artifacts/direct-bridge-results.json`.
+observations. The expanded [direct-lifecycle.json](results/2026-09-12/direct-lifecycle.json)
+retains sixteen runs, 344 assertions, and 36 matched child creations/closures.
+New runs write ignored `.artifacts/direct-bridge-results.json`.
 This is a private oracle protocol and instrumented native echo, not a public
 API, full Zapp service integration, or a new throughput benchmark.
 
-Important remaining gates: rejecting child promises retained in the owner when
-their document disappears; family cancellation and unmount ordering; failed
-navigation behavior; early document-start/`about:blank` readiness; sustained
-hidden-owner scheduling; and production capability-profile enforcement. This
-probe cancels native pending work but does not claim retained JS promises settle.
+The lifecycle checks reject child-created Promises observed by the owner and a
+surviving sibling, unmount a portal, drain document registries, and ignore stale
+invalidation notifications. They deliberately disable child `pagehide` and pause
+owner lifecycle processing: the native window still closes, and cleanup settles
+the retained Promise when processing resumes. Service payloads are not relayed
+through the owner; only the document-lifecycle notification uses that route.
+
+Native child/family close vetoes preserve pending operations and every affected
+document before teardown. DOM `window.close()` is a separate terminal path:
+WebKit reports it after completion, too late for native preflight cancellation.
+The public policy for that distinction still needs agreement. All disposal/error
+names and test hooks here are private fixtures, not new Zapp APIs.
+
+Remaining gates include actual Z task cancellation and service integration;
+failed navigation/renderer failure; early document-start/`about:blank` readiness;
+sustained hidden-owner scheduling; and production capability-profile enforcement.
+Native delayed callbacks are invalidated and their stale replies suppressed,
+not physically cancelled. JS reactions can wait on a busy owner even though
+native closure does not wait for JS cleanup.
 
 ## Boundaries
 
@@ -124,8 +141,9 @@ provide the missing DOM owner. Public syntax and lifecycle rules remain open.
 
 - `probe.m`, `app.jsx`, `run.ts`: feasibility host, React assertions, bounded runner.
 - `benchmark.m`, `bench.jsx`, `benchmark.ts`: three native/context variants and measurements.
-- `direct-bridge.m`, `direct-bootstrap.js`, `direct-app.jsx`, `direct-bridge.ts`:
-  separate child native endpoints, concurrent replies, and native lifetime checks.
+- `direct-bridge.m`, `direct-bootstrap.js`, `direct-app.jsx`, `direct-lifecycle.jsx`,
+  `direct-bridge.ts`: separate native endpoints, concurrent replies, retained
+  Promises, cancellation preflight, and nonblocking cleanup checks.
 - `types.ts`: benchmark result shape for editor/typechecking support.
 - `results/2026-09-12/`: original feasibility, benchmark summary, and raw observations.
 - `.artifacts/`: ignored results of local reruns.

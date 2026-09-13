@@ -38,7 +38,7 @@ try {
       "-framework", "AppKit", "-framework", "WebKit", join(root, "direct-bridge.m"), "-o", binary], 30_000);
     if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify(compile));
     for (const origin of [`http://127.0.0.1:${server.port}`, "zapp://probe"]) {
-      for (const scenario of ["round-trip", "owner-close", "owner-reload"]) {
+      for (const scenario of ["round-trip", "owner-close", "owner-reload", "lifecycle"]) {
         const url = `${origin}/direct-owner.html?scenario=${scenario}`;
         const outcome = await run([binary, root, url], 25_000);
         const result = outcome.stdout.split("\n").filter(Boolean).map(line => JSON.parse(line)).find(value => value.kind === "result");

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal, flushSync } from "react-dom";
+import { runLifecycle } from "./direct-lifecycle.jsx";
 
 const owner = globalThis.__directBridge;
 const assertions = [];
@@ -47,6 +48,10 @@ async function hasObserved(marker) {
 async function run() {
   await owner.ready;
   const options = new URLSearchParams(location.search);
+  if (options.get("scenario") === "lifecycle") {
+    await runLifecycle(owner, { openChild, until, assert, sleep, assertions });
+    return;
+  }
   if (options.get("phase") === "replaced") {
     const stats = await owner.invoke("stats");
     assertions.push(...stats.previousAssertions);
@@ -93,9 +98,24 @@ async function run() {
   flushSync(() => setTarget(null));
 
   const scenario = options.get("scenario");
+  if (scenario === "owner-close") {
+    await owner.invoke("veto-close", { target: b.identity, veto: true });
+    const aToken = a.token;
+    const bToken = b.token;
+    const keepA = a.invoke("delayed", { marker: "cancelled-family-a" });
+    const keepB = b.invoke("delayed", { marker: "cancelled-family-b" });
+    await until("family preflight work entered native", async () => await hasObserved("cancelled-family-a") && await hasObserved("cancelled-family-b"));
+    const refused = await owner.invoke("close-owner");
+    const preserved = await owner.invoke("stats");
+    assert("child veto cancels owner closure without partial teardown", refused.cancelled && preserved.closedChildren === 0 && preserved.dropped === 0);
+    assert("family preflight preserves document bindings", owner.isReady && a.isReady && b.isReady && a.token === aToken && b.token === bToken);
+    const kept = await Promise.all([keepA, keepB]);
+    assert("all pending family requests survive a veto", kept[0].sender === a.identity && kept[1].sender === b.identity);
+    await owner.invoke("veto-close", { target: b.identity, veto: false });
+  }
   if (scenario === "owner-close" || scenario === "owner-reload") {
-    void a.invoke("delayed", { marker: "owner-close-a" });
-    void b.invoke("delayed", { marker: "owner-close-b" });
+    void a.invoke("delayed", { marker: "owner-close-a" }).catch(() => {});
+    void b.invoke("delayed", { marker: "owner-close-b" }).catch(() => {});
     await until("both native requests pending", async () =>
       await hasObserved("owner-close-a") && await hasObserved("owner-close-b"));
     // Native output supplies the oracle after the owning JS document is gone.
@@ -122,7 +142,7 @@ async function run() {
 
   // Navigation reuses a native window but replaces its document. An old async
   // reply must not fulfill a new request whose counter has restarted at 1.
-  void a.invoke("delayed", { marker: "old-document" });
+  void a.invoke("delayed", { marker: "old-document" }).catch(() => {});
   await until("old-document request entered native", () => hasObserved("old-document"));
   const oldToken = a.token;
   first.location.href = new URL("direct-child.html?replacement=1", location.href).href;
@@ -146,7 +166,7 @@ async function run() {
   await until("native rejects stale document token", async () => (await owner.invoke("stats")).deniedTokens === 1);
   assert("old document cannot invoke as the replacement", !(await hasObserved("stale-request")));
 
-  void b.invoke("delayed", { marker: "closed-child" });
+  void b.invoke("delayed", { marker: "closed-child" }).catch(() => {});
   await until("closing child request entered native", () => hasObserved("closed-child"));
   await owner.invoke("close-child", { target: b.identity });
   await sleep(400);

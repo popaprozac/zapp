@@ -68,7 +68,8 @@ The lifetime belongs to the owning document: hiding/minimizing preserves the
 family; accepted owner closure or document replacement tears down its children.
 Ordinary cancellation must be resolved before destructive family teardown.
 An owner crash cannot depend on a JavaScript cancellation callback. Long-hidden
-scheduling, failed navigation, and cancellation ordering remain test gates.
+scheduling, failed navigation, and production cancellation integration remain
+test gates; the isolated native preflight is covered below.
 
 ### Direct-child bridge proof
 
@@ -96,9 +97,9 @@ records each assertion and native observation. They verify:
 - Native origin/main-frame checks reject actual cross-origin and subframe
   entry attempts. A fresh document token prevents old-document requests and
   replies from entering replacement state with reused request IDs.
-- Child native closure cancels pending native work without unregistering its
+- Child native closure invalidates pending replies without unregistering its
   owner/sibling bridge. Accepted owner closure/replacement invalidates both
-  children and their pending work; a replacement owner gets a working endpoint.
+  children and their pending replies; a replacement owner gets a working endpoint.
 
 These are platform-oracle results, not a production Zapp decoder, capability
 system, or Z interop implementation. The native operation is an instrumented
@@ -107,13 +108,57 @@ not a substitute for origin checks or a permission credential. Bootstrap is
 installed at document start but this oracle activates it at navigation finish;
 preload-time requests and `about:blank` bridge readiness remain unproven.
 
-Native cancellation and JavaScript promise settlement are separate. A promise
-created by a child may be retained in its owner; deleting native pending work
-does not reject that promise. Document invalidation must also settle those
-retained promises, without relaying ordinary service payloads through the owner.
-This remains an explicit integration gate, as do family close cancellation and
-portal unmount ordering. The oracle conservatively tears down children when
-owner replacement starts; it does not establish failed-navigation UX policy.
+### Retained promises and nonblocking native closure
+
+The expanded [lifecycle suite](../../spikes/related-windows/direct-lifecycle.jsx)
+passes sixteen configurations: the same origins/optimization levels, with a
+fourth lifecycle scenario and native family-veto checks added to owner closure.
+Its [separate evidence](../../spikes/related-windows/results/2026-09-12/direct-lifecycle.json)
+records 344 JS assertions and 36 matched child creations/closures. This is not
+a new performance measurement or a production API.
+
+Native invalidation and JavaScript promise settlement are separate. The oracle
+now keeps document-specific child bridge references in the owner. A small native
+lifecycle notification disposes the old child bridge through that surviving
+owner, rejects its pending promises, and runs cleanup. Ordinary requests and
+replies still travel directly between the calling child and native code.
+
+The tests establish:
+
+- A child-created Promise observed from both the owner and a surviving sibling
+  rejects with the same error object after native closure. Replacement rejects
+  old-document promises without affecting the fresh endpoint.
+- Native closure completes even with frontend lifecycle processing deliberately
+  paused. Releasing that pause rejects the Promise and unmounts the portal.
+  This proves no cleanup-acknowledgement gate, not a real-time JS scheduling bound.
+- A native child-close veto preserves its endpoint, portal, and pending reply.
+  A child veto during owner-close preflight preserves the entire family before
+  any destructive teardown; pending requests then resolve normally.
+- Duplicate disposal, stale-token notifications, callback errors, and removed
+  subscriptions do not strand other cleanup or dispose a replacement document.
+  Family registry entries drain and a retired bridge cannot submit new work.
+- DOM `window.close()` also rejects a retained Promise, but does **not** exercise
+  the native cancellation preflight.
+
+That last distinction needs a public-policy decision before integration.
+[WebKit's delegate contract](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKUIDelegate.h)
+reports DOM `close()` only after it has completed. The oracle treats that callback
+as terminal cleanup; it cannot restore a closed document by vetoing the containing
+native window. Proposed direction: use Zapp's window handle for cancellable close
+requests, and treat intrinsic DOM closure as an already-committed terminal path.
+No DOM interception or public behavior has been adopted here.
+
+`PROBE_DOCUMENT_INVALIDATED`, disposal hooks, and test controls are private fixture
+vocabulary, not proposed Zapp APIs. Public error shape and cross-realm error
+handling still need deliberation. A blocked owner can delay Promise reactions
+and portal cleanup even though native closure is not waiting. Renderer failure
+and prolonged hidden-owner scheduling are not covered by these checks.
+
+The native delayed blocks still run after invalidation and suppress stale replies;
+this is not proof of cancellation propagation into real Z tasks. The oracle
+conservatively tears down children when owner replacement starts and does not
+establish failed-navigation UX policy. Readiness before navigation finish remains
+unproven.
 
 ### Remaining constraints
 
@@ -121,9 +166,10 @@ owner replacement starts; it does not establish failed-navigation UX policy.
    invoke each other's functions and bridges. Do not claim that a low-authority
    child remains isolated from a higher-authority owner. Deliberate compatible
    content/capability policies before granting any native bridge to children.
-2. **Explicit ownership and lifetime.** Decide what happens when an owner hides,
-   closes, reloads, crashes, or navigates. Decide child close cancellation and
-   portal unmount ordering. No accidental orphaned framework roots.
+2. **Explicit ownership and lifetime.** Carry the tested native preflight and
+   nonblocking cleanup into Zapp's existing lifecycle machinery. Deliberate
+   intrinsic DOM closure, owner crashes, and failed navigation; do not assume
+   the platform oracle settles every terminal path.
 3. **Navigation is a security transition.** Test dev/prod origin equivalence,
    redirects, external URLs, CSP, COOP, opener removal, and bridge injection.
    Current negative tests are not a complete navigation security audit.
@@ -147,10 +193,14 @@ owner replacement starts; it does not establish failed-navigation UX policy.
 - [x] Agree on document-owned lifetime and shared family authority in principle.
 - [ ] Deliberate Zapp's optional related-window family shape, authority, owner
       lifetime edge cases, and navigation rules with the project owner. No API is locked.
-- [ ] Settle retained child promises on invalidation and prove cancellation/unmount
+- [x] Settle retained child promises on invalidation and prove cancellation/unmount
       ordering without blocking native window closure on frontend cleanup.
-- [ ] Add independent oracle tests for owner teardown/reload, long-hidden owner,
-      child navigation, capability mismatch, and cleanup/leaks before integration.
+- [x] Native child/family close veto before any teardown, with pending requests
+      preserved on cancellation and invalidated on accepted closure.
+- [ ] Deliberate intrinsic DOM close versus cancellable framework requests, and
+      the public invalidation error/cleanup contract before integration.
+- [ ] Expand oracle tests for renderer failure, long-hidden owner, failed/external
+      navigation, capability mismatch, and cleanup/leaks before integration.
 - [ ] Reproduce the mechanism in checked Z interop; surface any upstream gaps
       instead of growing a production Objective-C implementation.
 - [ ] Integrate only after those gates with the existing window manager and
@@ -173,3 +223,6 @@ Local reruns write ignored artifacts rather than overwriting these snapshots.
 The separate [direct bridge evidence](../../spikes/related-windows/results/2026-09-12/direct-bridge.json)
 records the follow-up identity, reply, and native-lifetime checks; it is not a
 new performance measurement.
+The expanded [lifecycle evidence](../../spikes/related-windows/results/2026-09-12/direct-lifecycle.json)
+preserves retained-Promise, cancellation-preflight, and delayed-cleanup checks
+without overwriting that earlier twelve-case snapshot.

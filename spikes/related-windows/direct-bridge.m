@@ -10,6 +10,7 @@
 @property NSUInteger generation;
 @property BOOL active;
 @property BOOL ready;
+@property BOOL vetoClose;
 @property (weak) WKWebView *view;
 @property WKUserContentController *controller;
 @property NSMutableDictionary<NSNumber *, NSDictionary *> *pending;
@@ -26,6 +27,9 @@
 @property NSUInteger deniedTokens;
 @property BOOL ownerCloseExpected;
 @property NSArray *ownerCloseAssertions;
+@property BOOL finishingFixture;
+@property NSUInteger cancelledCloses;
+@property NSUInteger invalidationNotifications;
 @end
 
 @implementation DirectBridgeProbe
@@ -93,6 +97,7 @@
 }
 - (void)invalidate:(DirectEndpoint *)endpoint closing:(BOOL)closing {
   if (!endpoint) return;
+  NSString *oldToken = endpoint.documentToken;
   endpoint.generation++;
   endpoint.ready = NO;
   endpoint.documentToken = nil;
@@ -101,6 +106,23 @@
   if (closing) {
     endpoint.active = NO;
     [endpoint.controller removeScriptMessageHandlerForName:@"directProbe"];
+  }
+  DirectEndpoint *owner = [self endpointForView:self.mainView];
+  if (oldToken && endpoint != owner && owner.active && owner.ready && !self.finishingFixture) {
+    NSString *ownerToken = owner.documentToken;
+    NSDictionary *event = @{@"windowId": endpoint.identity, @"token": oldToken,
+      @"reason": closing ? @"native-close" : @"document-replaced"};
+    NSString *script = [NSString stringWithFormat:
+      @"(()=>{const b=globalThis.__directBridge;if(b?.token===(%@)[0])b.invalidateChild(%@)})()",
+      [self json:@[ownerToken]], [self json:event]];
+    self.invalidationNotifications++;
+    // Fire-and-forget lifecycle notification, never an acknowledgement gate
+    // for native closure. Ordinary service replies still target the child.
+    [self.mainView evaluateJavaScript:script completionHandler:^(id value, NSError *error) {
+      (void)value;
+      if (error && !self.finished && owner.ready && [owner.documentToken isEqual:ownerToken])
+        [self finish:@{@"pass": @NO, @"error": error.description}];
+    }];
   }
 }
 - (void)webView:(WKWebView *)view didStartProvisionalNavigation:(WKNavigation *)navigation {
@@ -146,8 +168,22 @@
   [self evaluate:[NSString stringWithFormat:@"globalThis.__directBridge.accept(%@);void 0", [self json:reply]] in:endpoint.view];
 }
 - (void)webViewDidClose:(WKWebView *)view {
+  // WebKit reports DOM close() after it succeeds. This is terminal cleanup,
+  // not the cancellable native performClose:/windowShouldClose: path below.
   for (NSWindow *window in [self.windows copy])
     if (window.contentView == view) { [window close]; break; }
+}
+- (BOOL)windowShouldClose:(NSWindow *)window {
+  // Simulates synchronous native closeRequested cancellation, NOT a JS
+  // callback or browser beforeunload. Preflight the whole family before any
+  // invalidation, so a child veto cannot leave its siblings half-destroyed.
+  DirectEndpoint *candidate = [self endpointForView:(WKWebView *)window.contentView];
+  BOOL veto = candidate.vetoClose;
+  if (window == self.parent)
+    for (DirectEndpoint *endpoint in self.endpoints)
+      if (endpoint.active && endpoint.vetoClose) veto = YES;
+  if (veto) self.cancelledCloses++;
+  return !veto;
 }
 - (void)windowWillClose:(NSNotification *)notification {
   NSWindow *window = notification.object;
@@ -203,7 +239,13 @@
       @"deniedFrames": @(self.deniedFrames), @"deniedOrigins": @(self.deniedOrigins),
       @"deniedTokens": @(self.deniedTokens),
       @"previousAssertions": self.ownerCloseAssertions ?: @[],
+      @"cancelledCloses": @(self.cancelledCloses),
+      @"invalidationNotifications": @(self.invalidationNotifications),
       @"closedChildren": @(self.closedChildren)} request:body endpoint:endpoint];
+  } else if (endpoint.view == self.mainView && [method isEqual:@"veto-close"]) {
+    for (DirectEndpoint *target in self.endpoints)
+      if (target.active && [target.identity isEqual:arguments[@"target"]]) target.vetoClose = [arguments[@"veto"] boolValue];
+    [self reply:@{} request:body endpoint:endpoint];
   } else if (endpoint.view == self.mainView && [method isEqual:@"close-child"]) {
     for (NSWindow *window in [self.windows copy]) {
       DirectEndpoint *child = [self endpointForView:(WKWebView *)window.contentView];
@@ -220,6 +262,11 @@
     self.ownerCloseExpected = YES;
     self.ownerCloseAssertions = arguments[@"assertions"];
     [self.parent performClose:nil];
+    if (endpoint.active) {
+      self.ownerCloseExpected = NO;
+      endpoint.pending[requestId] = body;
+      [self reply:@{@"cancelled": @YES} request:body endpoint:endpoint];
+    }
   } else if (endpoint.view == self.mainView && [method isEqual:@"finish"]) {
     [endpoint.pending removeObjectForKey:requestId];
     [self finish:arguments];
@@ -228,11 +275,14 @@
   }
 }
 - (void)finish:(NSDictionary *)payload {
+  self.finishingFixture = YES;
   NSMutableDictionary *result = [payload mutableCopy];
   result[@"dropped"] = @(self.dropped);
   result[@"deniedFrames"] = @(self.deniedFrames);
   result[@"deniedOrigins"] = @(self.deniedOrigins);
   result[@"deniedTokens"] = @(self.deniedTokens);
+  result[@"cancelledCloses"] = @(self.cancelledCloses);
+  result[@"invalidationNotifications"] = @(self.invalidationNotifications);
   result[@"observations"] = self.observations ?: @[];
   for (DirectEndpoint *endpoint in self.endpoints) [self invalidate:endpoint closing:YES];
   [super finish:result];
