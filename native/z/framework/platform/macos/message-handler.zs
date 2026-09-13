@@ -20,6 +20,8 @@ internal type DesktopDeliverResponseOperation = (
 internal readonly class DesktopMessageHandler on thread.main
   implements WebKit.WKScriptMessageHandler {
   readonly windowId: i32;
+  readonly expectedView: WebKit.WKWebView;
+  readonly expectedController: WebKit.WKUserContentController;
   readonly routeMessage: DesktopRouteMessageOperation;
   readonly deliverResponse: DesktopDeliverResponseOperation;
 
@@ -27,6 +29,10 @@ internal readonly class DesktopMessageHandler on thread.main
     in controller: WebKit.WKUserContentController,
     in message: WebKit.WKScriptMessage
   ): void as "userContentController:didReceiveScriptMessage:" {
+    if (controller != this.expectedController || message.webView != this.expectedView) {
+      console.error("blocked native bridge message from an unrelated WebView endpoint");
+      return;
+    }
     const frame = message.frameInfo;
     if (!frame.mainFrame) {
       console.error("blocked native bridge message from a WebView subframe");

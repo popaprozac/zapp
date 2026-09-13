@@ -557,6 +557,7 @@ describe("Z native host inputs", () => {
       "window-geometry.zs",
       "window-resize.zs",
       "window-runtime.zs",
+      "window-registry.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -589,10 +590,21 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(19);
+    expect(macOSModules).toHaveLength(20);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
+    expect(macOSModules[1]).toContain("readonly windows: MacOSWindowRegistry on thread.main");
+    expect(macOSModules[1]).not.toContain("function createWindow(");
+    expect(macOSModules[19]).toContain("internal class MacOSWindowRegistry on thread.main");
+    expect(macOSModules[19]).not.toContain("currentMacOSApplication");
     expect(macOSPlatform).toContain("implements WebKit.WKScriptMessageHandler");
     expect(messageHandler).toContain("if (!frame.mainFrame)");
+    expect(messageHandler).toContain("controller != this.expectedController");
+    expect(messageHandler).toContain("message.webView != this.expectedView");
+    expect(messageHandler.indexOf("message.webView != this.expectedView")).toBeLessThan(
+      messageHandler.indexOf("const body = message.body"),
+    );
+    expect(macOSPlatform).toContain("expectedView: webView");
+    expect(macOSPlatform).toContain("expectedController: contentController");
     expect(messageHandler).toContain("hasConfiguredFrontendOrigin(in sourceURL)");
     expect(messageHandler.indexOf("if (!frame.mainFrame)")).toBeLessThan(
       messageHandler.indexOf("const body = message.body"),
@@ -670,7 +682,7 @@ describe("Z native host inputs", () => {
     expect(notesHTML).toContain('id="window-events"');
     expect(macOSPlatform).toContain("webView.loadRequest(request)");
     expect(macOSPlatform).toContain("authorizeServiceInvocation(");
-    expect(macOSPlatform).toContain("current.capabilitiesForWindow(windowId)");
+    expect(macOSPlatform).toContain("current.windows.capabilitiesForWindow(windowId)");
     expect(macOSPlatform).toContain("unknown window capability profile");
     expect(macOSPlatform).toContain("WindowMessageRoute.handled");
     expect(windowBridge).toContain("export enum WindowBridgeRoute");

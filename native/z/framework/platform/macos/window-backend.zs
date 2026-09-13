@@ -16,47 +16,47 @@ function createMacOSWindowDeferred(
   in options: WindowOptions
 ): void throws WindowError on thread.main {
   const current = currentMacOSApplication();
-  try current.createWindow(in id, in options);
+  try current.windows.createWindow(in id, in options);
 }
 
 function showMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.showWindow(in id);
+  current.windows.showWindow(in id);
 }
 
 function hideMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.hideWindow(in id);
+  current.windows.hideWindow(in id);
 }
 
 function focusMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.focusWindow(in id);
+  current.windows.focusWindow(in id);
 }
 
 function minimizeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.minimizeWindow(in id);
+  current.windows.minimizeWindow(in id);
 }
 
 function unminimizeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.unminimizeWindow(in id);
+  current.windows.unminimizeWindow(in id);
 }
 
 function setMacOSWindowMaximized(in id: String, value: boolean): void on thread.main {
   const current = currentMacOSApplication();
-  current.setWindowMaximized(in id, value);
+  current.windows.setWindowMaximized(in id, value);
 }
 
 function setMacOSWindowFullscreen(in id: String, value: boolean): void on thread.main {
   const current = currentMacOSApplication();
-  current.setWindowFullscreen(in id, value);
+  current.windows.setWindowFullscreen(in id, value);
 }
 
 function closeMacOSWindow(in id: String): void on thread.main {
   const current = currentMacOSApplication();
-  current.requestWindowClose(in id);
+  current.windows.requestWindowClose(in id);
 }
 
 function setMacOSWindowTitle(
@@ -64,7 +64,7 @@ function setMacOSWindowTitle(
   in title: String
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.setWindowTitle(in id, in title);
+  current.windows.setWindowTitle(in id, in title);
 }
 
 internal function macOSWindowBackend(): WindowBackend on thread.main {

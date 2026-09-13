@@ -141,6 +141,8 @@ validation and physical window teardown remain outside this helper.
 - [x] Implement the internal Z registry with native-minted document identities,
       unchanged inherited capabilities, generation-safe request tracking, and
       real-task cancellation tests for retired descendants and live siblings.
+- [x] Split native window ownership/delivery out of the application runtime and
+      bind production message handlers to their exact WebView/controller.
 - [ ] Integrate the checked-Z family/document registry into the window manager;
       do not promote the Objective-C oracle into production.
 - [ ] Implement the readiness handshake and partial-creation cleanup.
@@ -213,7 +215,24 @@ Next, bind this registry to actual WebView/document provenance and the existing
 window-manager routing/close paths. Origin validation, token delivery across
 navigation, partial native creation unwind, renderer loss, and full-family close
 preflight remain integration gates. The headless proof does not authenticate a
-renderer or demonstrate any of those native UI paths. Before growing the runtime,
-split its window/document responsibilities: `application-runtime.zs` already has
-721 lines and fails the existing test's fewer-than-700-lines organization guard.
-That failure predates this checkpoint; the guard has not been relaxed.
+renderer or demonstrate any of those native UI paths.
+
+The macOS ownership split has now landed: `application-runtime.zs` owns
+application/services/workers, while `window-registry.zs` owns live and retired
+native windows, per-window requests, delivery, and presentation operations.
+Both are below 400 lines; the existing fewer-than-700-lines test remains strict
+and passes again. One main-executor registry is allocated per application, not
+per request; it owns the application name without keeping a duplicate String.
+The native bridge now checks the exact WebView and content-controller identity
+before checking main-frame/origin and decoding the body. Those references remain
+under the existing registration's removal lifetime.
+
+The bounded Z Notes packaged smoke passes after the move, including real bridge
+replies, cancellation, origin/subframe rejection, and shutdown. This validates
+the existing independent-window path, not the new related-document factory.
+The next integration must bind a document identity at the validated native
+message boundary and preserve it through scheduled work and response delivery;
+looking up whichever document is current in a later callback is not sufficient.
+Navigation/renderer retirement and the creation handshake must use that same
+identity. The public factory remains gated until those paths and family preflight
+are proven together.

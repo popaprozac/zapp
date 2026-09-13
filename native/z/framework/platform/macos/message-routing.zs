@@ -157,7 +157,7 @@ function attachPendingRequest(
   control: TaskControl
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.attachRequest(windowId, id, control);
+  current.windows.attachRequest(windowId, id, control);
 }
 
 async function routeScheduledMessageAndDeliver(
@@ -191,7 +191,7 @@ async function routeFrameworkOrServiceMessageAndDeliver(
   const current = currentMacOSApplication();
   const permissions = current.permissions;
   const notifications = current.notifications;
-  const selected = current.capabilitiesForWindow(windowId);
+  const selected = current.windows.capabilitiesForWindow(windowId);
   const capabilities = match (selected) {
     some(value) => value;
     none => {
@@ -261,7 +261,7 @@ async function routeFileMessageAndDeliver(
   tracked: boolean
 ): boolean on thread.main {
   const current = currentMacOSApplication();
-  const selected = current.capabilitiesForWindow(windowId);
+  const selected = current.windows.capabilitiesForWindow(windowId);
   const capabilities = match (selected) {
     some(value) => value;
     none => {
@@ -323,12 +323,12 @@ function selectWindowMessageRoute(
 ): WindowMessageRoute on thread.main {
   const current = currentMacOSApplication();
   const permissions = current.permissions;
-  const selected = current.capabilitiesForWindow(windowId);
+  const selected = current.windows.capabilitiesForWindow(windowId);
   const workers = current.applicationWorkers;
   const menu = current.menu;
   const clipboard = current.clipboard;
   const shell = current.shell;
-  const logicalId = current.logicalWindowId(windowId);
+  const logicalId = current.windows.logicalWindowId(windowId);
   match (selected) {
     some(capabilities) => match (logicalId) {
       some(windowName) => return selectWindowMessageRouteWithCapabilities(
@@ -476,7 +476,7 @@ function deliverFrontendMenuCommand(
   in commandId: String
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.deliverMenuCommand(
+  current.windows.deliverMenuCommand(
     nativeWindowId,
     in ownerToken,
     in commandId
@@ -527,7 +527,7 @@ function beginPendingRequest(
   id: u64
 ): u64 on thread.main {
   const current = currentMacOSApplication();
-  return current.beginRequest(windowId, id);
+  return current.windows.beginRequest(windowId, id);
 }
 
 function finishPendingRequest(
@@ -536,7 +536,7 @@ function finishPendingRequest(
   generation: u64
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.finishRequest(windowId, id, generation);
+  current.windows.finishRequest(windowId, id, generation);
 }
 
 function cancelPendingRequest(
@@ -544,7 +544,7 @@ function cancelPendingRequest(
   id: u64
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.cancelRequest(windowId, id);
+  current.windows.cancelRequest(windowId, id);
 }
 
 internal function deliverResponse(
@@ -552,5 +552,5 @@ internal function deliverResponse(
   windowId: i32
 ): void on thread.main {
   const current = currentMacOSApplication();
-  current.deliverResponse(in response, windowId);
+  current.windows.deliverResponse(in response, windowId);
 }

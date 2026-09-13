@@ -48,22 +48,6 @@ internal function createMacOSWindowRuntime(
   menu: ApplicationMenu
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = WebKit.WKUserContentController.alloc().init();
-  const handler = new DesktopMessageHandler({
-    windowId: nativeId,
-    routeMessage,
-    deliverResponse,
-  });
-  const handlerName = Foundation.NSString.alloc().initWithUTF8String("zapp");
-  if (handlerName == null) {
-    throw WindowError({
-      id: copy id,
-      message: "could not construct the WebKit bridge name",
-    });
-  }
-  const registration = objc.register({
-    add: contentController.addScriptMessageHandler(handler, handlerName),
-    remove: contentController.removeScriptMessageHandlerForName(handlerName),
-  });
   const configuration = WebKit.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
   const schemeHandler = createDesktopAssetSchemeHandler();
@@ -89,6 +73,27 @@ internal function createMacOSWindowRuntime(
     frame,
     configuration: configuration
   );
+  // Bind native sender identity before navigation can start. Registration owns
+  // removal of the handler, breaking its retained WebView/controller references
+  // when this runtime is released after native callbacks have unwound.
+  const handler = new DesktopMessageHandler({
+    windowId: nativeId,
+    expectedView: webView,
+    expectedController: contentController,
+    routeMessage,
+    deliverResponse,
+  });
+  const handlerName = Foundation.NSString.alloc().initWithUTF8String("zapp");
+  if (handlerName == null) {
+    throw WindowError({
+      id: copy id,
+      message: "could not construct the WebKit bridge name",
+    });
+  }
+  const registration = objc.register({
+    add: contentController.addScriptMessageHandler(handler, handlerName),
+    remove: contentController.removeScriptMessageHandlerForName(handlerName),
+  });
   let style = WebKit.NSWindowStyleMaskTitled
     | WebKit.NSWindowStyleMaskClosable
     | WebKit.NSWindowStyleMaskMiniaturizable;
