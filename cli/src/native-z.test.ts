@@ -623,7 +623,7 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("webView: WebKit.WKWebView");
     expect(macOSPlatform).toContain("configuration.userContentController = contentController");
     expect(macOSPlatform).toContain(
-      "schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>",
+      "schemeHandler: Option<objc.Adapter<WebKit.WKURLSchemeHandler>>",
     );
     expect(macOSPlatform).toContain("implements WebKit.WKURLSchemeHandler");
     expect(macOSPlatform).toContain("objc.adapt<WebKit.WKURLSchemeHandler>(controller)");

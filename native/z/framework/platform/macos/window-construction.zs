@@ -158,7 +158,7 @@ internal function createMacOSWindowRuntime(
     webView,
     contentController,
     configuration,
-    schemeHandler,
+    schemeHandler: Option.some(schemeHandler),
     navigationDelegate,
     uiDelegate,
     windowDelegate,

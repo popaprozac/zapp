@@ -338,7 +338,7 @@ internal function initializeMacOSApplicationRuntimeState(
     nextNativeWindowId: 1,
     documents,
     creations,
-    related: new MacOSRelatedWindows(documents, creations, routeMessage),
+    related: new MacOSRelatedWindows(documents, creations, routeMessage, weak windowManager, didCloseNativeWindow),
   });
   const value = new MacOSApplicationRuntime({
     permissions,

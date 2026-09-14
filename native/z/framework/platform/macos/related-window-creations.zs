@@ -7,10 +7,13 @@ import { thread } from "std/thread";
 import { BridgeDocument, BridgeDocumentActivated } from "../../bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup,
-  RelatedCreationReply } from "../../related-window-creations.zs";
+  RelatedCreationReply, RelatedCreationResult } from "../../related-window-creations.zs";
+import { WindowManager, WindowOptions } from "../../window.zs";
+import { MacOSWindowRuntime } from "./window-runtime.zs";
+import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import { hasConfiguredFrontendOrigin, resolveLogicalURL } from "./navigation-policy.zs";
-import { MacOSRelatedWindowRuntime, RelatedNativeFailure, RelatedNativeClosed,
+import { RelatedNativeFailure,
   createMacOSRelatedWindowRuntime } from "./related-window-native.zs";
 
 function now(): u64 { return u64(math.trunc(clock.CACurrentMediaTime() * 1000)); }
@@ -24,8 +27,9 @@ class NativeCreation on thread.main {
   readonly width: u32;
   readonly height: u32;
   timer: WebKit.NSTimer | null;
-  runtime: Option<MacOSRelatedWindowRuntime>;
+  runtime: Option<MacOSWindowRuntime>;
   completed: boolean;
+  retiring: boolean;
 
   function stopTimer(inout this): void {
     const timer = this.timer;
@@ -34,7 +38,15 @@ class NativeCreation on thread.main {
   }
   function close(inout this): void {
     this.stopTimer();
-    match (in this.runtime) { some(value) => { let runtime: MacOSRelatedWindowRuntime = value; runtime.close(); } none => {} }
+    match (in this.runtime) {
+      some(value) => {
+        const runtime: MacOSWindowRuntime = value;
+        runtime.document.close();
+        runtime.webView.stopLoading();
+        runtime.window.close();
+      }
+      none => {}
+    }
     this.runtime = Option.none;
   }
 
@@ -43,37 +55,65 @@ class NativeCreation on thread.main {
 
 // Internal production coordinator. Only a native, document-authenticated
 // prepare call can open the one-shot WebKit creation gate. The public factory
-// stays unexported until logical-window adoption and family-close preflight land.
+// stays unexported until family-close preflight and terminal delivery land.
 internal class MacOSRelatedWindows on thread.main {
   readonly documents: RelatedDocuments;
   readonly creations: RelatedWindowCreations;
   readonly route: DesktopRouteMessageOperation;
+  readonly windows: Weak<WindowManager>;
+  readonly didCloseNativeWindow: NativeWindowClosedOperation;
   private records: Map<i32, NativeCreation>;
-  private retired: Array<MacOSRelatedWindowRuntime>;
+  private retired: Array<MacOSWindowRuntime>;
   private closed: boolean;
 
-  constructor(documents: RelatedDocuments, creations: RelatedWindowCreations, route: DesktopRouteMessageOperation) {
+  constructor(documents: RelatedDocuments, creations: RelatedWindowCreations, route: DesktopRouteMessageOperation,
+    windows: Weak<WindowManager>, didCloseNativeWindow: NativeWindowClosedOperation) {
     this.documents = documents;
     this.creations = creations;
     this.route = route;
+    this.windows = windows;
+    this.didCloseNativeWindow = didCloseNativeWindow;
     this.records = Map<i32, NativeCreation>();
-    this.retired = Array<MacOSRelatedWindowRuntime>();
+    this.retired = Array<MacOSWindowRuntime>();
     this.closed = false;
   }
 
   function count(): usize { return this.records.length; }
 
-  function runtime(in identity: RelatedDocumentIdentity): Option<MacOSRelatedWindowRuntime> {
+  function runtime(in identity: RelatedDocumentIdentity): Option<MacOSWindowRuntime> {
     if (!this.documents.isReady(in identity)) return Option.none;
     const found = this.records.get(identity.windowId);
     return match (in found) {
       some(record) => {
         if (record.reservation.child.token != identity.token) return Option.none;
         select match (in record.runtime) {
-          some(runtime) => { const retained: MacOSRelatedWindowRuntime = runtime; select Option.some(retained); }
+          some(runtime) => { const retained: MacOSWindowRuntime = runtime; select Option.some(retained); }
           none => Option.none;
         };
       }
+      none => Option.none;
+    };
+  }
+
+  // Only completed, still-current children participate in logical controls.
+  function nativeWindow(in id: String): Option<MacOSWindowRuntime> {
+    for (const entry of this.records) {
+      const record: NativeCreation = entry.value;
+      if (record.completed && this.documents.isReady(in record.reservation.child)) {
+        match (in record.runtime) {
+          some(runtime) => { if (runtime.id == id) return Option.some(runtime); }
+          none => {}
+        }
+      }
+    }
+    return Option.none;
+  }
+
+  // Also used during retirement, after document routing has been revoked.
+  function logicalWindowId(nativeId: i32): Option<String> {
+    const found = this.records.get(nativeId);
+    return match (in found) {
+      some(record) => record.completed ? Option.some(`related-${nativeId}`) : Option.none;
       none => Option.none;
     };
   }
@@ -94,16 +134,24 @@ internal class MacOSRelatedWindows on thread.main {
     const completion: RelatedCreationReply = move (result): void => {
       // Mark handoff only after the guard accepts readiness/deadline, but
       // before the caller can synchronously close the newly completed child.
-      match (in result) {
+      match (result) {
         ready(child) => {
           match (attempt weakOwner.upgrade()) {
-            success(owner) => owner.didComplete(in child);
+            success(owner) => {
+              if (owner.didComplete(in child)) reply(RelatedCreationResult.ready(child));
+              else {
+                // The manager may have stopped while the native child loaded.
+                // Never report readiness for a child we could not publish.
+                if (owner.failChild(in child)) {
+                  reply(RelatedCreationResult.failed("related window manager is unavailable"));
+                }
+              }
+            }
             failure(_) => {}
           }
         }
-        failed(_) => {}
+        failed(message) => reply(RelatedCreationResult.failed(move message));
       }
-      reply(move result);
     };
     const reservation = match (this.creations.beginWithReply(in identity, nativeId, now(), now() + 10000, completion)) {
       some(value) => value; none => return Option.none;
@@ -115,7 +163,7 @@ internal class MacOSRelatedWindows on thread.main {
     if (absolute == null) { this.creations.fail(in reservation); return Option.none; }
     const address: String = absolute;
     const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, address,
-      title, width, height, timer: null, runtime: Option<MacOSRelatedWindowRuntime>.none, completed: false });
+      title, width, height, timer: null, runtime: Option<MacOSWindowRuntime>.none, completed: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
       timer.invalidate();
@@ -176,7 +224,7 @@ internal class MacOSRelatedWindows on thread.main {
     const failed: RelatedNativeFailure = move (): void => {
       match (attempt weakOwner.upgrade()) { success(owner) => owner.fail(in reservation); failure(_) => {} }
     };
-    const closed: RelatedNativeClosed = move (): void => {
+    const closed: NativeWindowClosedOperation = move (nativeId: i32): void => {
       match (attempt weakOwner.upgrade()) { success(owner) => owner.fail(in reservation); failure(_) => {} }
     };
     const activated: BridgeDocumentActivated = move (identity: RelatedDocumentIdentity): void => {
@@ -185,7 +233,7 @@ internal class MacOSRelatedWindows on thread.main {
     document.whenActivated(activated);
     const runtime = match (attempt createMacOSRelatedWindowRuntime(configuration, document,
       `related-${reservation.child.windowId}`, copy record.address, copy record.title,
-      record.width, record.height, this.route, failed, closed)) {
+      record.width, record.height, this.route, failed, closed, this.windows)) {
       success(value) => value;
       failure(_) => { this.fail(in reservation); return null; }
     };
@@ -208,30 +256,62 @@ internal class MacOSRelatedWindows on thread.main {
     match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => {} }
   }
 
-  private function didComplete(inout this, in identity: RelatedDocumentIdentity): void {
+  private function didComplete(inout this, in identity: RelatedDocumentIdentity): boolean {
     const found = this.records.get(identity.windowId);
     match (in found) {
       some(value) => {
         const record: NativeCreation = value;
-        if (record.reservation.child.token == identity.token) record.completed = true;
+        if (record.reservation.child.token != identity.token || record.completed) return false;
+        const runtime: MacOSWindowRuntime = match (in record.runtime) { some(value) => value; none => return false; };
+        const windows = match (attempt this.windows.upgrade()) { success(value) => value; failure(_) => return false; };
+        let capabilities = Array<String>();
+        for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
+        const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height,
+          url: copy record.address, capabilities: move capabilities });
+        match (windows.adoptNative(copy runtime.id, move options)) {
+          some(_) => { record.completed = true; return true; }
+          none => return false;
+        }
       }
       none => {}
     }
+    return false;
+  }
+
+  private function failChild(inout this, in identity: RelatedDocumentIdentity): boolean {
+    const found = this.records.get(identity.windowId);
+    const reservation = match (in found) { some(record) => copy record.reservation; none => return false; };
+    if (reservation.child.token != identity.token) return false;
+    this.fail(in reservation);
+    return this.documents.isReady(in reservation.owner);
   }
 
   private function rollback(inout this, in reservation: RelatedWindowReservation): void {
     const record = match (this.lookup(in reservation)) { some(value) => value; none => return; };
+    if (record.retiring) return;
+    record.retiring = true;
+    // Revoke the complete document subtree before retiring native/logical
+    // bookkeeping or invoking any user closed listener.
+    match (in record.runtime) {
+      some(value) => { const runtime: MacOSWindowRuntime = value; runtime.document.close(); }
+      none => {}
+    }
+    this.didCloseNativeWindow(reservation.child.windowId);
     this.records.delete(reservation.child.windowId);
     // As with ordinary windows, retain the completed AppKit graph until the
     // application run loop unwinds. Failed unpublished allocations are released
     // before their failure reply instead of accumulating in this retirement list.
     if (record.completed) {
       match (in record.runtime) {
-        some(runtime) => { const retained: MacOSRelatedWindowRuntime = runtime; this.retired.push(retained); }
+        some(runtime) => { const retained: MacOSWindowRuntime = runtime; this.retired.push(retained); }
         none => {}
       }
     }
     record.close();
+    if (record.completed) {
+      const id = `related-${reservation.child.windowId}`;
+      match (attempt this.windows.upgrade()) { success(windows) => windows.closedNative(in id); failure(_) => {} }
+    }
   }
 
   function fail(inout this, in reservation: RelatedWindowReservation): void {

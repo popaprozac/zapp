@@ -34,8 +34,12 @@ const b=globalThis[Symbol.for('zapp.bridge')];
   await b.invoke('rollback',{}, {timeout:0});
   const url=await b.invoke('prepare',{}, {timeout:0});
   const completion=b.invoke('completion',{}, {timeout:0});
+  const stopped=location.search.includes('stopped=1');
+  if(stopped)await b.invoke('stopManager',{}, {timeout:0});
   const child=window.open(url);if(!child)throw Error('missing child');
-  await completion;
+  const completed=await completion;
+  if(stopped){if(completed!==false)throw Error('stopped manager published child');b.post(JSON.stringify({t:3,m:'pass'}));return;}
+  if(completed!==true)throw Error('child adoption failed');
   if(!child.document.head||!child.document.body||child.document.scripts.length||child.document.body.children.length)throw Error('shell not empty/ready');
   if(child.opener.shared!==shared||child.document===document)throw Error('wrong document family');
   const result=await child[Symbol.for('zapp.bridge')].invoke('echo',{}, {timeout:0});
@@ -86,15 +90,19 @@ try {
         "-framework", "CoreFoundation", "-framework", "QuartzCore", "-lcompression", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
       if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify({ frontend, compile }));
       for (const mode of ["vite", "packaged"]) {
-        const origin = mode === "vite" ? `http://127.0.0.1:${address.port}` : "zapp://app";
-        const outcome = await runBoundedCommand([binary, origin, bootstrap, "--shell"], { cwd: root, timeoutMs: 15_000 });
-        const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""
-          && outcome.stdout === (production
-            ? "related production WebKit: pass=true completed=1 failed=1 echoes=1\n"
-            : "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1 rolledBack=1 released=1\n");
-        results.push({ frontend, optimization, mode, pass, ...outcome });
-        console.log(`${pass ? "PASS" : "FAIL"} related shell ${frontend} ${optimization} ${mode}`);
-        if (!pass) console.log(outcome);
+        for (const scenario of production ? ["adopted", "stopped"] : ["readiness"]) {
+          const origin = mode === "vite" ? `http://127.0.0.1:${address.port}` : "zapp://app";
+          const outcome = await runBoundedCommand([binary, origin, bootstrap, "--shell", ...(scenario === "stopped" ? ["--stopped"] : [])], { cwd: root, timeoutMs: 15_000 });
+          const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""
+            && outcome.stdout === (production
+              ? scenario === "stopped"
+                ? "related production WebKit: pass=true completed=0 failed=2 echoes=0 closed=0 vetoed=0\n"
+                : "related production WebKit: pass=true completed=1 failed=1 echoes=1 closed=1 vetoed=1\n"
+              : "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1 rolledBack=1 released=1\n");
+          results.push({ frontend, optimization, mode, scenario, pass, ...outcome });
+          console.log(`${pass ? "PASS" : "FAIL"} related shell ${frontend} ${optimization} ${mode} ${scenario}`);
+          if (!pass) console.log(outcome);
+        }
       }
     }
   }

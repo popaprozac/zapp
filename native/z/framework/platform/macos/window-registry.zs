@@ -142,7 +142,15 @@ internal class MacOSWindowRegistry on thread.main {
           stopMacOSRunLoop();
         }
       }
-      none => {}
+      none => {
+        match (this.related.logicalWindowId(nativeId)) {
+          some(id) => {
+            this.contextMenus.invalidateWindow(in id);
+            this.menu.invalidateFrontendOwner(in id);
+          }
+          none => {}
+        }
+      }
     }
   }
 
@@ -235,13 +243,13 @@ internal class MacOSWindowRegistry on thread.main {
   }
 
   function requestWindowClose(in id: String): void on thread.main {
-    for (const entry of this.nativeWindows) {
-      if (entry.value.id == id) {
+    match (this.nativeWindow(in id)) {
+      some(window) => {
         // performClose follows AppKit's normal delegate decision path and
         // therefore reaches WindowCloseRequestedEvent before committing.
-        entry.value.window.performClose(null);
-        return;
+        window.window.performClose(null);
       }
+      none => {}
     }
   }
 
@@ -249,11 +257,9 @@ internal class MacOSWindowRegistry on thread.main {
     in id: String,
     in title: String
   ): void on thread.main {
-    for (const entry of this.nativeWindows) {
-      if (entry.value.id == id) {
-        entry.value.window.title = copy title;
-        return;
-      }
+    match (this.nativeWindow(in id)) {
+      some(window) => window.window.title = copy title;
+      none => {}
     }
   }
 
@@ -261,7 +267,7 @@ internal class MacOSWindowRegistry on thread.main {
     for (const entry of this.nativeWindows) {
       if (entry.value.id == id) return Option.some(entry.value);
     }
-    return Option.none;
+    return this.related.nativeWindow(in id);
   }
 
   function logicalWindowId(
@@ -270,7 +276,7 @@ internal class MacOSWindowRegistry on thread.main {
     const found = this.nativeWindows.get(nativeWindowId);
     return match (in found) {
       some(window) => Option.some(copy window.id);
-      none => Option.none;
+      none => this.related.logicalWindowId(nativeWindowId);
     };
   }
 

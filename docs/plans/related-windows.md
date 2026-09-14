@@ -13,6 +13,8 @@ The private minimal shell is served by Vite and embedded by Z packaging, with
 actual WebKit readiness verified through both delivery paths.
 Production checked-Z allocation, one-shot completion/failure replies, and native
 creation deadlines are now wired and exercised by a private WebKit harness.
+Activated children are adopted into `app.windows` without another native
+allocation, using the ordinary window controls and Z event lifecycle.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -191,8 +193,8 @@ validation and physical window teardown remain outside this helper.
       embedded-asset handler, without loading another frontend entry or HMR client.
 - [x] Wire the production native allocator/UI delegate, inherited endpoint,
       activation acknowledgement, deadline, and partial-creation rollback.
-- [ ] Adopt completed related children into the logical window manager and its
-      controls/events; expose authenticated public creation only after the gates below.
+- [x] Adopt completed related children into the logical window manager and its
+      existing controls/Z events, without allocating a second native window.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
       checks, renderer loss, and navigation gates through native integration.
 - [ ] Expose the public factory and add a Z Notes demonstration.
@@ -209,6 +211,8 @@ bun run spikes/related-windows/document-routing.ts --related
 bun run spikes/related-windows/shell.ts
 bun run spikes/related-windows/shell.ts --production
 bun run spikes/related-windows/registry.ts --creations
+bun native/z/testing/window-focus.ts
+bun native/z/testing/window-focus.ts --native
 bun run check
 ```
 
@@ -492,8 +496,55 @@ normal services, worker activity, permission checks, and shutdown. Z commit
 optional header-provenance emission gaps encountered here; the framework does
 not carry handwritten native replacements for those valid Z shapes.
 
-The public `createRelatedWindow` factory is still unexported. Next gates are
-logical `WindowManager` adoption, family-wide cancellable close preflight,
+At that checkpoint, the public `createRelatedWindow` factory remained unexported.
+The next gates were logical adoption, family-wide cancellable close preflight,
 document-bound unsolicited events, and broader renderer/owner retirement cases.
 Nested related-owner creation is also not exposed by the registry's root-only
 prepare entry. No new public API, permission, or configuration was added here.
+
+### Logical window adoption checkpoint
+
+An activated child now enters the existing `WindowManager` before its successful
+creation reply. Internal adoption rejects inactive managers, empty identifiers,
+and duplicate identifiers; it does not call the native allocator or publish
+callbacks. The coordinator mints the related-window identifier, preserves the
+document's validated capability selection, and does not change ordinary window
+numbering. `app.windows.get()` and `all()` return the same logical identity.
+
+The production allocator now returns the shared `MacOSWindowRuntime`, with the
+ordinary close/focus/minimize/resize delegate and presentation observer. A
+related configuration already retains its inherited scheme handler, so the
+runtime's explicit handler owner is optional. Logical controls use the existing
+platform lookup; there is no second related-only implementation of each control.
+
+Retirement latches before external cleanup, revokes the document subtree before
+user closed listeners, and removes the logical record exactly once. Reentrant
+native cleanup cannot recursively retire it. Completed AppKit graphs remain
+retained until the application run loop unwinds, matching ordinary windows;
+failed unpublished creations are rolled back before rejection. If the manager
+stops while a child loads, activation rejects instead of publishing an unusable
+window. Stale handles cannot resurrect native controls.
+
+Validation at this checkpoint:
+
+- 24 headless window cases cover the existing control/event surface plus
+  adoption identity, duplicate/inactive rejection, close veto, reentrant close,
+  stale handles, and unchanged ordinary allocation.
+- Eight ordinary AppKit focus/presentation cases pass after sharing the runtime.
+- Sixteen production WebKit cases cover native/Stage 0, `-O0`/`-O2`, Vite/packaged,
+  and successful/stopped-manager adoption with strict warnings and UBSan. They
+  verify adoption before reply, native hide/show/title, a cancelled close,
+  committed DOM closure, terminal routing before the Z closed callback, and
+  reentrant native retirement. Each case uses a bounded process group.
+
+The [adoption matrix](../../spikes/related-windows/results/2026-09-13/window-adoption.json)
+is separate from earlier allocation/readiness evidence. Optional protocol-adapter
+storage exposed upstream compiler inference, generated-name, and ARC field
+cleanup gaps, fixed in Z commit `20bfaf18`. Z now tests both frontends at both optimization levels, including
+exactly-once destruction of the adapter's Z controller. This is not a claim of
+identical optional layouts, whole-app leak freedom, or first-paint performance.
+
+Public creation remains gated on family-wide cancellable close preflight,
+document-bound unsolicited events/terminal delivery, and broader owner,
+navigation, and renderer retirement coverage. The private prepare entry is still
+root-owner-only. No new public API, configuration, or permission was introduced.

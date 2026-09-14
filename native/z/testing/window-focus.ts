@@ -18,7 +18,7 @@ async function run(command: string[], timeoutMs: number): Promise<string> {
 try {
   if (native && process.platform !== "darwin") throw new Error("native focus probe requires macOS");
   const fixtures = native ? ["window-focus-native-smoke", "window-presentation-native-smoke"]
-    : ["window-focus-smoke", "window-controls-smoke", "window-presentation-smoke", "window-manager-smoke", "window-events-smoke"];
+    : ["window-focus-smoke", "window-controls-smoke", "window-presentation-smoke", "window-manager-smoke", "window-events-smoke", "window-adoption-smoke"];
   for (const fixture of fixtures) {
     if (presentationOnly && !fixture.includes("presentation")) continue;
     const input = resolve(root, `native/z/tests/${fixture}.zs`);

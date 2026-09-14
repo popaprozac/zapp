@@ -41,12 +41,13 @@ class DesktopWindowDelegate on thread.main
     // the application runtime retains its graph until the run loop returns.
     const id = copy this.id;
     const nativeId = this.nativeId;
+    // Revoke document routing before a user closed listener can reenter.
+    this.didCloseNativeWindow(nativeId);
     const current = attempt this.windows.upgrade();
     match (current) {
       success(windows) => windows.closedNative(in id);
       failure(_) => {}
     }
-    this.didCloseNativeWindow(nativeId);
   }
 
   function didBecomeKey(

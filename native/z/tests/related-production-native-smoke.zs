@@ -16,6 +16,37 @@ import { DesktopMessageHandler } from "../framework/platform/macos/message-handl
 import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
 import { installWebViewScripts } from "../framework/platform/macos/webview-injections.zs";
 import { createDesktopAssetSchemeHandler } from "../framework/platform/macos/scheme-handler.zs";
+import { WindowManager, WindowBackend, WindowCreateOperation, WindowOperation, WindowTitleOperation, createWindowManager } from "../framework/window.zs";
+import { WindowError } from "../framework/application-error.zs";
+import { WindowCloseRequestedEvent, WindowClosedEvent } from "../framework/events.zs";
+import { WindowEventSubscription } from "../framework/window-events.zs";
+
+function backend(owner: Weak<MacOSRelatedWindows>): WindowBackend on thread.main {
+  const create: WindowCreateOperation = (in id: String, in options): void => {};
+  const show: WindowOperation = move (in id: String): void => {
+    const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
+    match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.orderFront(null); none => {} }
+  };
+  const hide: WindowOperation = move (in id: String): void => {
+    const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
+    match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.orderOut(null); none => {} }
+  };
+  const close: WindowOperation = move (in id: String): void => {
+    const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
+    match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.performClose(null); none => {} }
+  };
+  const setTitle: WindowTitleOperation = move (in id: String, in title: String): void => {
+    const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
+    match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.title = copy title; none => {} }
+  };
+  const state: (in id: String, value: boolean) => void on thread.main = (in id: String, value: boolean): void => {};
+  return WindowBackend({ create, show, focus: show, hide, close, setTitle,
+    minimize: hide, unminimize: show, setMaximized: state, setFullscreen: state });
+}
+function count(windows: WindowManager): usize on thread.main {
+  const values = windows.all();
+  return values.length;
+}
 
 readonly struct Request { t: i32 = 0; id: u64 = 0; m: String = ""; }
 function reply(view: WebKit.WKWebView, in identity: RelatedDocumentIdentity, id: u64, payload: String): void on thread.main {
@@ -28,6 +59,8 @@ function reply(view: WebKit.WKWebView, in identity: RelatedDocumentIdentity, id:
 class State on thread.main {
   readonly owner: BridgeDocument;
   readonly view: WebKit.WKWebView;
+  readonly windows: WindowManager;
+  subscriptions: Array<WindowEventSubscription>;
   coordinator: Option<MacOSRelatedWindows>;
   reservation: Option<RelatedWindowReservation>;
   identity: Option<RelatedDocumentIdentity>;
@@ -37,6 +70,8 @@ class State on thread.main {
   echoes: i32;
   passed: boolean;
   failed: boolean;
+  closes: i32;
+  closeRequests: i32;
 
   function current(): Option<MacOSRelatedWindows> {
     return match (in this.coordinator) {
@@ -49,6 +84,28 @@ class State on thread.main {
     match (result) {
       ready(child) => {
         this.completions = this.completions + 1;
+        const id = "related-2";
+        const window = match (this.windows.get(in id)) { some(value) => value; none => { this.failed = true; return; } };
+        const weakState = weak this;
+        const request = match (attempt window.events.closeRequested.subscribe(move (in event: WindowCloseRequestedEvent): void => {
+          event.cancel();
+          match (attempt weakState.upgrade()) { success(state) => { state.closeRequests = state.closeRequests + 1; } failure(_) => {} }
+        })) { success(value) => value; failure(_) => { this.failed = true; return; } };
+        this.subscriptions.push(request);
+        const closed = match (attempt window.events.closed.subscribe(move (in event: WindowClosedEvent): void => {
+          match (attempt weakState.upgrade()) {
+            success(state) => {
+              state.closes = state.closes + 1;
+              const coordinator = match (state.current()) { some(value) => value; none => { state.failed = true; return; } };
+              if (coordinator.count() != 0 || count(state.windows) != 0) state.failed = true;
+              const reservation = match (copy state.reservation) { some(value) => value; none => { state.failed = true; return; } };
+              if (coordinator.documents.isReady(in reservation.child)) state.failed = true;
+              match (coordinator.nativeWindow(in event.windowId)) { some(_) => { state.failed = true; } none => {} }
+            }
+            failure(_) => {}
+          }
+        })) { success(value) => value; failure(_) => { this.failed = true; return; } };
+        this.subscriptions.push(closed);
         const identity = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
         if (this.completionId == 0 || !this.owner.isCurrent(in identity)) { this.failed = true; return; }
         reply(this.view, in identity, this.completionId, "true");
@@ -56,7 +113,12 @@ class State on thread.main {
       failed(_) => {
         this.failures = this.failures + 1;
         const coordinator = match (this.current()) { some(value) => value; none => { this.failed = true; return; } };
-        if (coordinator.count() != 0) this.failed = true;
+        if (coordinator.count() != 0 || count(this.windows) != 0) this.failed = true;
+        if (this.completionId != 0) {
+          const identity = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
+          if (!this.owner.isCurrent(in identity)) { this.failed = true; return; }
+          reply(this.view, in identity, this.completionId, "false");
+        }
       }
     }
   }
@@ -91,6 +153,7 @@ class State on thread.main {
         return;
       }
       if (request.m == "completion") { this.completionId = request.id; return; }
+      if (request.m == "stopManager") { this.windows.stop(); reply(this.view, in identity, request.id, "true"); return; }
       if (request.m == "pass") { this.passed = true; return; }
     }
     if (request.m == "echo" && identity.windowId == 2 && this.completions == 1) {
@@ -98,6 +161,16 @@ class State on thread.main {
       if (!runtime.document.isActivated(in identity) || !runtime.document.capabilities.allowsService("notes.list")
         || runtime.document.capabilities.allowsService("admin.erase")) { this.failed = true; return; }
       this.echoes = this.echoes + 1;
+      const id = "related-2";
+      const window = match (this.windows.get(in id)) { some(value) => value; none => { this.failed = true; return; } };
+      window.hide();
+      if (runtime.window.visible) { this.failed = true; return; }
+      window.show();
+      window.setTitle("Adopted inspector");
+      const title: String = runtime.window.title;
+      if (!runtime.window.visible || title != "Adopted inspector") { this.failed = true; return; }
+      window.close();
+      if (this.closeRequests != 1 || this.closes != 0 || !runtime.document.isActivated(in identity)) { this.failed = true; return; }
       reply(runtime.webView, in identity, request.id, "42");
       return;
     }
@@ -117,7 +190,8 @@ class RootNavigation on thread.main implements WebKit.WKNavigationDelegate {
 
 function main(): i32 on thread.main {
   const args = process.args();
-  if (args.length != 2 && args.length != 3) return 2;
+  if (args.length < 2 || args.length > 4) return 2;
+  const stopped = args.length == 4;
   const app = WebKit.NSApplication.sharedApplication;
   app.setActivationPolicy(WebKit.NSApplicationActivationPolicyRegular);
   app.finishLaunching();
@@ -143,14 +217,28 @@ function main(): i32 on thread.main {
   const scheme = createDesktopAssetSchemeHandler();
   configuration.setURLSchemeHandler(scheme, forURLScheme: "zapp");
   const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 320, 200), configuration: configuration);
-  const state = new State({ owner, view, coordinator: Option<MacOSRelatedWindows>.none,
+  const windows = createWindowManager();
+  const state = new State({ owner, view, windows, subscriptions: Array<WindowEventSubscription>(), coordinator: Option<MacOSRelatedWindows>.none,
     reservation: Option<RelatedWindowReservation>.none, identity: Option<RelatedDocumentIdentity>.none,
-    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false });
+    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0 });
   const weakState = weak state;
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => {
     match (attempt weakState.upgrade()) { success(state) => state.route(move message, identity); failure(_) => {} }
   };
-  const related = new MacOSRelatedWindows(documents, creations, route);
+  const retiring: (nativeId: i32) => void on thread.main = move (nativeId: i32): void => {
+    // Model reentrant framework cleanup while native retirement still holds
+    // the old record. It must not recursively retire or publish it again.
+    match (attempt weakState.upgrade()) {
+      success(state) => {
+        const coordinator = match (state.current()) { some(value) => value; none => return; };
+        const reservation = match (copy state.reservation) { some(value) => value; none => return; };
+        if (reservation.child.windowId == nativeId) coordinator.fail(in reservation);
+      }
+      failure(_) => {}
+    }
+  };
+  const related = new MacOSRelatedWindows(documents, creations, route, weak windows, retiring);
+  match (attempt windows.start(backend(weak related), false)) { success => {} failure(_) => return 5; }
   state.coordinator = Option.some(related);
   const handler = new DesktopMessageHandler({ document: owner, expectedView: view, expectedController: controller, routeMessage: route });
   const registration = objc.register({ add: controller.addScriptMessageHandler(handler, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
@@ -164,7 +252,8 @@ function main(): i32 on thread.main {
   window.releasedWhenClosed = false;
   window.contentView = view;
   window.makeKeyAndOrderFront(null);
-  const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html`);
+  const suffix = stopped ? "?stopped=1" : "";
+  const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html${suffix}`);
   if (url == null) return 4;
   view.loadRequest(WebKit.NSURLRequest.requestWithURL(url));
   let ticks: i32 = 0;
@@ -172,12 +261,16 @@ function main(): i32 on thread.main {
     WebKit.NSRunLoop.currentRunLoop.runUntilDate(WebKit.NSDate.dateWithTimeIntervalSinceNow(0.05));
     ticks = ticks + 1;
   }
-  const pass = !state.failed && state.passed && state.completions == 1 && state.failures == 1
-    && state.echoes == 1 && related.count() == 0 && creations.count() == 0 && documents.count() == 1;
+  const expected = stopped
+    ? state.completions == 0 && state.failures == 2 && state.echoes == 0 && state.closes == 0 && state.closeRequests == 0
+    : state.completions == 1 && state.failures == 1 && state.echoes == 1 && state.closes == 1 && state.closeRequests == 1;
+  const pass = !state.failed && state.passed && expected
+    && count(windows) == 0 && related.count() == 0 && creations.count() == 0 && documents.count() == 1;
   related.closeAll();
+  windows.stop();
   owner.close();
   view.stopLoading();
   window.close();
-  console.log(`related production WebKit: pass=${pass} completed=${state.completions} failed=${state.failures} echoes=${state.echoes}`);
+  console.log(`related production WebKit: pass=${pass} completed=${state.completions} failed=${state.failures} echoes=${state.echoes} closed=${state.closes} vetoed=${state.closeRequests}`);
   return pass ? 0 : 1;
 }

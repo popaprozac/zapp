@@ -8,30 +8,12 @@ import { DesktopMessageHandler } from "./message-handler.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindow } from "./window-resize.zs";
 import { installWebViewScripts } from "./webview-injections.zs";
+import { WindowManager } from "../../window.zs";
+import { MacOSWindowRuntime } from "./window-runtime.zs";
+import { createDesktopWindowDelegate, NativeWindowClosedOperation } from "./window-delegate.zs";
+import { observeWindowPresentation } from "./window-presentation.zs";
 
 internal type RelatedNativeFailure = () => void on thread.main;
-internal type RelatedNativeClosed = () => void on thread.main;
-
-// An unpublished child owns exactly the same native registration boundary as
-// an ordinary window. This separate runtime cannot accidentally load an app
-// entry or override the inherited origin/capability selection.
-internal class MacOSRelatedWindowRuntime on thread.main {
-  readonly window: MacOSWindow;
-  readonly webView: WebKit.WKWebView;
-  readonly controller: WebKit.WKUserContentController;
-  readonly configuration: WebKit.WKWebViewConfiguration;
-  readonly document: BridgeDocument;
-  readonly navigation: objc.Adapter<WebKit.WKNavigationDelegate>;
-  readonly ui: objc.Adapter<WebKit.WKUIDelegate>;
-  readonly delegate: objc.Adapter<WebKit.NSWindowDelegate>;
-  readonly registration: objc.Registration;
-
-  function close(inout this): void {
-    this.document.close();
-    this.webView.stopLoading();
-    this.window.close();
-  }
-}
 
 class RelatedNavigation on thread.main implements WebKit.WKNavigationDelegate {
   readonly view: WebKit.WKWebView;
@@ -91,15 +73,6 @@ class RelatedUI on thread.main implements WebKit.WKUIDelegate {
   }
 }
 
-class RelatedWindowDelegate on thread.main implements WebKit.NSWindowDelegate {
-  readonly document: BridgeDocument;
-  readonly closed: RelatedNativeClosed;
-  function didClose(inout this, in notification: WebKit.NSNotification): void as "windowWillClose:" {
-    this.document.close();
-    this.closed();
-  }
-}
-
 // The caller must already have claimed a creation reservation against the
 // actual sending WebView/frame/origin. WebKit owns navigation of the returned
 // view: do not allocate a replacement configuration or call loadRequest here.
@@ -113,8 +86,9 @@ internal function createMacOSRelatedWindowRuntime(
   height: u32,
   route: DesktopRouteMessageOperation,
   failed: RelatedNativeFailure,
-  closed: RelatedNativeClosed
-): MacOSRelatedWindowRuntime throws String on thread.main {
+  closed: NativeWindowClosedOperation,
+  windows: Weak<WindowManager>
+): MacOSWindowRuntime throws String on thread.main {
   const controller = WebKit.WKUserContentController.alloc().init();
   configuration.userContentController = controller;
   const inject = Array<String>();
@@ -134,15 +108,17 @@ internal function createMacOSRelatedWindowRuntime(
   window.contentView = view;
   const navigationController = new RelatedNavigation({ view, address, document, failed });
   const uiController = new RelatedUI({ view, window });
-  const windowController = new RelatedWindowDelegate({ document, closed });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);
   const ui = objc.adapt<WebKit.WKUIDelegate>(uiController);
-  const delegate = objc.adapt<WebKit.NSWindowDelegate>(windowController);
+  const delegate = createDesktopWindowDelegate(copy id, document.windowId, window, view, windows, closed);
+  const presentationObserver = observeWindowPresentation(copy id, window, view, windows);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;
   window.delegate = delegate;
   // The creation coordinator retains this graph before exposing the WebView.
   // Presentation waits for the acknowledged child activation.
-  return new MacOSRelatedWindowRuntime({ window, webView: view, controller,
-    configuration, document, navigation, ui, delegate, registration });
+  return new MacOSWindowRuntime({ id, nativeId: document.windowId, window, webView: view,
+    contentController: controller, configuration, document, schemeHandler: Option.none,
+    navigationDelegate: navigation, uiDelegate: ui, windowDelegate: delegate,
+    presentationObserver, registration, capabilitySelection: document.capabilities });
 }

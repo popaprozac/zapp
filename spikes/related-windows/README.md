@@ -11,8 +11,8 @@ Start with [why, findings, and next steps](../../docs/experiments/related-window
 See [BENCHMARKS.md](BENCHMARKS.md) for the three-way measurements and limits.
 The [approved public contract](../../docs/plans/related-windows.md) now has runtime
 types and a separately tested lifetime helper. Production document routing and
-private native child allocation are integrated and tested separately from this
-oracle; the public factory remains gated.
+private native child allocation and logical window adoption are integrated and
+tested separately from this oracle; the public factory remains gated.
 
 ## Why Objective-C here?
 
@@ -140,23 +140,30 @@ Z child allocator, supplied WebKit configuration, retained delegates, separate
 message registration, sender validation, and one-shot creation coordinator.
 Only the owner's prepare route and echo response are test instrumentation.
 
-Eight native/Stage 0 × `-O0`/`-O2` × Vite/packaged cases pass with UBSan and
-strict warnings. They reject unprepared creation, roll back and retry a partial
-allocation, wait for acknowledged bridge activation, verify the empty shell
-and shared owner state, deliver a reply directly to the child, and close it.
-Native completion must precede that child reply; shell readiness alone is not
-enough. Timers, views, and the Vite server have bounded cleanup.
+Sixteen native/Stage 0 × `-O0`/`-O2` × Vite/packaged × successful/stopped-manager
+cases pass with UBSan and strict warnings. They reject unprepared creation,
+roll back and retry a partial allocation, wait for acknowledged bridge activation
+and logical adoption, verify the empty shell and shared owner state, and deliver
+a reply directly to the child. The adopted child uses ordinary logical controls:
+native hide/show/title, a vetoed framework close, then committed DOM closure.
+Routing and manager lookup are terminal before its Z closed callback, including
+reentrant native cleanup. A manager stopped during loading cannot publish the
+child. Timers, views, and the Vite server have bounded cleanup.
 
 [Production output](results/2026-09-13/production-creations.json),
 [early-call activation output](results/2026-09-13/activation-shell.json), and
 [headless completion output](results/2026-09-13/creation-completion.json) preserve
-the evidence separately. The headless fixture covers failure ordering, expiry,
+the earlier evidence separately. The current
+[adoption output](results/2026-09-13/window-adoption.json) adds the two manager
+scenarios. The headless fixture covers failure ordering, expiry,
 and stale owner replies; the production fixture does not wait for its real
 ten-second deadline. This is not a first-paint or allocation benchmark.
 
-The public factory remains gated on logical-window adoption, family close
-preflight, and complete unsolicited event/retirement integration. See the
-[current checkpoint](../../docs/plans/related-windows.md#production-allocation-and-completion-checkpoint).
+The public factory remains gated on family close preflight and complete
+document-bound event/retirement integration. See the
+[current checkpoint](../../docs/plans/related-windows.md#logical-window-adoption-checkpoint).
+For logical adoption and ordinary-window regressions, run
+`bun native/z/testing/window-focus.ts` and add `--native` for the AppKit cases.
 
 ## Headless native document registry
 
@@ -188,8 +195,8 @@ attachment, and cancellation of suspended Z work. An explicit task-start check
 prevents a cancellation-before-start case from masquerading as in-flight proof.
 
 The registry now backs ordinary macOS document routing and the related-readiness
-fixture below. No public related-window factory is exposed. Production related
-creation and family close veto are still separate integration gates.
+fixture below. No public related-window factory is exposed. Production
+family close veto and complete terminal delivery are still integration gates.
 Results go to ignored `.artifacts/registry-results.json`; the
 [dated evidence](results/2026-09-13/registry.json) is retained separately.
 

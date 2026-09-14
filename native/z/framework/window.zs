@@ -230,6 +230,13 @@ class WindowManagerState on thread.main {
   active: boolean;
   pendingFocus: String;
 
+  function adoptNative(inout this, owner: Weak<WindowManager>, id: String, options: WindowOptions): Option<Window> {
+    if (!this.active || id == "" || this.windows.has(id)) return Option.none;
+    const window = new Window(copy id, owner);
+    this.windows.set(move id, WindowRecord({ window, options: move options }));
+    return Option.some(window);
+  }
+
   function create(
     inout this,
     owner: Weak<WindowManager>,
@@ -644,6 +651,13 @@ export readonly class WindowManager on thread.main {
 
   function get(in id: String): Option<Window> on thread.main {
     return this.state.get(in id);
+  }
+
+  // Adopt a platform-created, ready window without allocating another native
+  // window. Only the platform coordinator assigns these ids; renderer input
+  // must never select one. Adoption publishes no callbacks.
+  internal function adoptNative(inout this, id: String, options: WindowOptions): Option<Window> on thread.main {
+    return this.state.adoptNative(weak this, move id, move options);
   }
 
   internal function showContextMenu(
