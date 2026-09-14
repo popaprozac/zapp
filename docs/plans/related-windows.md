@@ -95,6 +95,13 @@ An owner-defined callback rendered through a portal is still owner code and
 uses the owner's imports/bridge. A child-defined function uses that child's
 bridge, even when called by the owner. DOM placement does not change provenance.
 
+The current allocator selects no application injection profiles; it still
+installs the framework bridge and document/window identity scripts. It does not
+automatically inherit owner profiles or synchronize application CSS. Explicit
+child injection and natural component styling are a separate
+[unapproved design track](related-window-styling.md), not part of the implemented
+behavior or an approved factory option. Close/lifetime integration remains next.
+
 ## What creation promises
 
 The factory resolves only when all of these hold:
