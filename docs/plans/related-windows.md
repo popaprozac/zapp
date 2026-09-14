@@ -949,11 +949,9 @@ release. These runs use the newly rebuilt native compiler. No ASan process is
 used; all GUI tests run sequentially with enforced deadlines.
 
 An additional generated-code audit noticed that `window.title = move title`
-converts to NSString without an apparent release of the original Z String
-buffer. This is queued upstream for an isolated allocation-ledger regression
-covering moves, temporary copies, and borrows; it is not yet claimed fixed or
-runtime-reproduced. The weak graph probes do not measure those buffers. Close
-that separate conversion issue before claiming allocation-stable window churn.
+converted to NSString without releasing the original Z String buffer. That
+follow-up was isolated and fixed upstream; the evidence is recorded below.
+Weak graph probes alone do not measure those buffers.
 
 The supplied September 14 00:31 crash report was an older `native-O0` harness
 run: owner closure called `stopMacOSRunLoop`, which aborted in
@@ -968,3 +966,73 @@ after the reported run. Final owner closure remains in the regression matrix.
 approval and native lifetime checks. Do not extrapolate related-window evidence
 to that path. Automatic stylesheet/theme/HMR synchronization and explicit child
 `inject` selection likewise remain proposals for deliberation, not new defaults.
+
+## String bridge lifetime verification — 2026-09-14
+
+Z commit `8d27d298` distinguishes borrowed String storage from transferred
+buffers at the NSString copy boundary. The Foundation allocation ledger
+reproduced the leak in both compilers before the fix, then passed 68 executions
+(17 cases × native/Stage 0 × `-O0`/`-O2`) with UBSan and zero outstanding tracked
+Z allocations. Named borrows remain usable; explicit moves, copies, call results,
+templates, and selected owned conditional results are cleaned exactly once.
+The native cleanup planner preserves lexical cleanup when contextual conversion
+borrows a source that return/call syntax had otherwise treated as transferred.
+
+The 73 closure/adapter regressions, three existing String/borrow tests, and
+standalone async resource/cancellation check pass. The tested compiler reaches
+a byte-identical 11,961,526-byte C fixed point and is the same binary promoted
+for Zapp integration. Its generated related-window title assignment now calls
+`z_stage1_nsstring_from_owned_string(title)`.
+
+The [56-case lifetime rerun](../../spikes/related-windows/results/2026-09-14/string-bridge-lifetime.json)
+passes in full. Controlled churn observes zero weak Z/native objects; animated
+churn observes zero Z runtime graphs, with 4–8 native animation-owned objects
+at these sampled batch boundaries. Those native counts remain observations,
+not a release-time bound or a constant-RSS claim.
+
+Two cold preparations exceeded their
+[120-second](../../spikes/related-windows/results/2026-09-14/string-bridge-compile-timeout.json)
+and [180-second](../../spikes/related-windows/results/2026-09-14/string-bridge-cold-emission-timeout.json)
+emission deadlines before native execution. The harness had deleted all header
+metadata with its workspace. It now retains only producer/dependency-validated
+foreign metadata, while recopying current sources and re-emitting/recompiling
+the entire program. `--cold` retains the full-reset check. The passing run used
+restored metadata and recorded 52.9 seconds native / 104.3 seconds Stage 0
+emission. This is a runtime safety gate with preparation observations, not a
+controlled cold-build benchmark; failures are preserved separately.
+Cold header preparation remains an explicit performance follow-up; retaining
+validated metadata for repeated lifetime tests does not resolve those cold
+timeouts.
+
+The packaged and dev Z Notes launch regressions also pass against the rebuilt
+compiler: one primary application, one forwarded secondary launch, worker and
+WebView checks, ordered service shutdown, and endpoint cleanup. The dev check
+additionally verifies that shutdown releases Vite port 5173.
+
+No framework ownership workaround, new public API, or styling default was
+introduced by the conversion fix.
+
+### Next user-facing demonstration
+
+Upgrade the existing small related-inspector demo into a note information panel:
+show the selected note's available metadata, with selection and edits owned by
+the main frontend and reflected in the related document. This should demonstrate
+shared application state without another frontend bootstrap or a duplicated
+store. Review the exact UI and styling behavior together before implementation;
+this request does not approve automatic stylesheet/theme/HMR synchronization or
+new injection defaults. The upstream String bridge lifetime prerequisite is
+complete at this checkpoint.
+
+Use Svelte for this integration: it is the author's preferred framework and
+turns Z Notes into a recognizable application example rather than only DOM
+probes. Keep Zapp's public related-window contract framework-neutral. The
+initial experiment should use ordinary shared owner state and Svelte's
+[mount/unmount API](https://svelte.dev/docs/svelte/imperative-component-api),
+then verify cross-document events, reactivity, styles, HMR, and teardown rather
+than assume that a different DOM target redirects globals or bridge authority.
+Review any public adapter API or automatic styling policy before adding it.
+Later, split focused framework demos out of the growing Z Notes pressure test.
+As part of that frontend integration, resolve the current Vite native-config
+loader forward-compatibility warnings around extensionless imports and module
+format. Do not suppress the warnings or change the repository-wide module
+format without checking the companion packages.

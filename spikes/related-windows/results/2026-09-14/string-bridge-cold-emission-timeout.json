@@ -1,0 +1,10 @@
+{
+  "frontend": "native",
+  "emissionMilliseconds": 180060.276083,
+  "emission": {
+    "status": 137,
+    "stdout": "",
+    "stderr": "",
+    "timedOut": true
+  }
+}

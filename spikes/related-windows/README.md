@@ -19,6 +19,15 @@ the 56-case public-factory/reclamation matrix. Controlled churn isolates native
 ordering animations; animated churn tests Z graph release without promising
 immediate native-object deallocation or constant process RSS.
 
+The integration harness recopies current source and re-emits/recompiles the
+program each run. It retains only native header metadata, whose producer checks
+header/dependency, declaration-contract, target, and producer fingerprints on
+every use. Add `--cold` to discard that cache too. Compiler preparation has a
+three-minute bound; native runtime deadlines and lifetime assertions are
+independent. Results record emission time and whether a foreign cache was
+restored; failed emission is saved separately. A cached runtime gate is not a
+cold-build performance result.
+
 ## Why Objective-C here?
 
 The small native host isolates public WebKit behavior from compiler/framework

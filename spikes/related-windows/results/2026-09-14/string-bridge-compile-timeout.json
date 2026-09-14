@@ -1,0 +1,14 @@
+{
+  "matrix": "lifetime",
+  "stage": "emission",
+  "frontend": "native",
+  "timeoutMilliseconds": 120000,
+  "emission": {
+    "status": 137,
+    "stdout": "",
+    "stderr": "",
+    "timedOut": true
+  },
+  "nativeExecutionsStarted": 0,
+  "note": "Observed first run after installing the String-bridge fixed-point compiler. This is a failed compiler-preparation attempt, not a passing lifetime result. The retry records emission timing with a 180-second compile-only bound."
+}

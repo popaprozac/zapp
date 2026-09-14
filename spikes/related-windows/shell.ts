@@ -1,7 +1,8 @@
 // Real WebKit readiness against Vite and the production embedded-asset handler.
 // --factory exercises the exported API; other modes retain private phase probes.
 import { join, resolve } from "node:path";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, rename, rm } from "node:fs/promises";
 import { RELATED_DOCUMENT_SHELL_PATH } from "../../bootstrap/related-document";
 import { bundleWebviewBootstrapRaw } from "../../bootstrap/codegen";
 import { generateAssetManifestZ } from "../../cli/src/assets";
@@ -17,10 +18,22 @@ const factory = process.argv.includes("--factory") || churn || lifetime;
 const authority = process.argv.includes("--authority") || factory;
 const production = process.argv.includes("--production") || retirement || authority;
 const artifacts = join(import.meta.dir, ".artifacts", lifetime ? "lifetime" : churn ? "churn" : factory ? "factory" : authority ? "authority" : retirement ? "retirement" : production ? "production" : "shell");
-// All rewritten/generated compiler inputs stay in the ignored probe workspace.
-await rm(artifacts, { recursive: true, force: true });
 const workspace = join(artifacts, "native", "z");
+const foreignCache = join(workspace, ".z-cache", "foreign");
+const heldForeignCache = `${artifacts}-foreign-cache`;
+const foreignCacheRestored = !process.argv.includes("--cold") && existsSync(foreignCache);
+await rm(heldForeignCache, { recursive: true, force: true });
+if (foreignCacheRestored) await rename(foreignCache, heldForeignCache);
+// All rewritten/generated compiler inputs stay in the ignored probe workspace.
+// Preserve only ABI metadata, which the producer revalidates against header,
+// contract, target and producer fingerprints on every request. Never reuse
+// emitted program code. --cold also discards that metadata for cold-build probes.
+await rm(artifacts, { recursive: true, force: true });
 await mkdir(join(workspace, "tests"), { recursive: true });
+if (foreignCacheRestored) {
+  await mkdir(join(workspace, ".z-cache"), { recursive: true });
+  await rename(heldForeignCache, foreignCache);
+}
 await cp(join(root, "native/z/framework"), join(workspace, "framework"), { recursive: true });
 await cp(join(root, "native/z/api"), join(workspace, "api"), { recursive: true });
 await cp(join(root, "native/z/z.json"), join(workspace, "z.json"));
@@ -84,8 +97,13 @@ try {
     const driver = frontend === "native"
       ? [process.env.Z_NATIVE_COMPILER ?? join(zRoot, ".z-cache/bootstrap/z")]
       : [process.execPath, join(zRoot, "compiler/src/cli.ts")];
-    const emission = await runBoundedCommand([...driver, "emit", join(workspace, "tests/probe.zs")], { cwd: root, timeoutMs: 120_000 });
-    if (emission.status !== 0 || emission.timedOut) throw new Error(JSON.stringify({ frontend, emission }));
+    const emissionStarted = performance.now();
+    const emission = await runBoundedCommand([...driver, "emit", join(workspace, "tests/probe.zs")], { cwd: root, timeoutMs: 180_000 });
+    const emissionMilliseconds = performance.now() - emissionStarted;
+    if (emission.status !== 0 || emission.timedOut) {
+      await Bun.write(join(artifacts, "emission-failure.json"), JSON.stringify({ frontend, foreignCacheRestored, emissionMilliseconds, emission }, null, 2) + "\n");
+      throw new Error(JSON.stringify({ frontend, emissionMilliseconds, emission }));
+    }
     const source = join(artifacts, `${frontend}.m`);
     await Bun.write(source, emission.stdout);
     for (const optimization of ["-O0", "-O2"]) {
@@ -127,7 +145,7 @@ try {
                 ? "related production WebKit: pass=true completed=0 failed=2 echoes=0 closed=0 vetoed=0\n"
                 : `related production WebKit: pass=true completed=1 failed=1 echoes=${scenario === "immediate" ? 0 : 1} closed=1 vetoed=${scenario === "immediate" ? 0 : scenario === "family" ? 3 : 1}\n`
               : "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1 rolledBack=1 released=1\n"));
-          results.push({ frontend, optimization, mode, scenario, pass, ...outcome });
+          results.push({ frontend, optimization, mode, scenario, pass, foreignCacheRestored, emissionMilliseconds, ...outcome });
           console.log(`${pass ? "PASS" : "FAIL"} related shell ${frontend} ${optimization} ${mode} ${scenario}`);
           if (!pass) console.log(outcome);
           if (!pass && authority) throw new Error("Related authority case failed; see the saved partial results.");
