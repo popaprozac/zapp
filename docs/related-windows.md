@@ -72,6 +72,13 @@ unrelated windows stay alive. A Z `closeRequested` listener may veto the closure
 Reloading/navigating a related child retires that original document rather than
 retargeting the handle.
 
+Current native-memory limitation: macOS keeps the closed, published window's
+native runtime graph until application shutdown. Routing and callbacks are
+retired, but repeatedly opening and closing inspectors still grows retained
+native objects. Prompt reclamation is under review; do not treat this tier as
+constant-memory window churn. Releasing your own DOM/handle references remains
+important independently of that framework limitation.
+
 ## Shared state does not change where code runs
 
 An owner-defined callback remains owner code when its element is placed in the

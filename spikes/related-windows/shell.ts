@@ -11,10 +11,12 @@ if (process.platform !== "darwin") throw new Error("The related-shell probe requ
 const root = resolve(import.meta.dir, "../..");
 const zRoot = resolve(root, "../z-lang");
 const retirement = process.argv.includes("--retirement");
-const factory = process.argv.includes("--factory");
+const retainedBaseline = process.argv.includes("--retained-baseline");
+const churn = process.argv.includes("--churn") || retainedBaseline;
+const factory = process.argv.includes("--factory") || churn;
 const authority = process.argv.includes("--authority") || factory;
 const production = process.argv.includes("--production") || retirement || authority;
-const artifacts = join(import.meta.dir, ".artifacts", factory ? "factory" : authority ? "authority" : retirement ? "retirement" : production ? "production" : "shell");
+const artifacts = join(import.meta.dir, ".artifacts", churn ? "churn" : factory ? "factory" : authority ? "authority" : retirement ? "retirement" : production ? "production" : "shell");
 // All rewritten/generated compiler inputs stay in the ignored probe workspace.
 await rm(artifacts, { recursive: true, force: true });
 const workspace = join(artifacts, "native", "z");
@@ -67,7 +69,7 @@ try {
   }
   const address = await Bun.file(readiness).json() as { port: number };
   if (!Number.isInteger(address.port) || address.port <= 0) throw new Error("invalid Vite probe port");
-  for (const frontend of ["native", "stage0"]) {
+  for (const frontend of process.argv.includes("--stage0-only") ? ["stage0"] : ["native", "stage0"]) {
     const driver = frontend === "native"
       ? [process.env.Z_NATIVE_COMPILER ?? join(zRoot, ".z-cache/bootstrap/z")]
       : [process.execPath, join(zRoot, "compiler/src/cli.ts")];
@@ -84,7 +86,7 @@ try {
         "-framework", "CoreFoundation", "-framework", "QuartzCore", "-lcompression", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
       if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify({ frontend, compile }));
       for (const mode of ["vite", "packaged"]) {
-        for (const scenario of factory ? ["factory-ready", "factory-rollback", "factory-invalid", "factory-veto", "factory-denied"] : authority
+        for (const scenario of churn ? [retainedBaseline ? "factory-retained-churn" : "factory-churn"] : factory ? ["factory-ready", "factory-rollback", "factory-invalid", "factory-veto", "factory-denied"] : authority
           ? ["subframe", "denied", "nested-child-close", "nested-owner-close"]
           : retirement
           ? ["owner-replace", "owner-terminate", "child-replace", "child-terminate", "child-navigation"]
@@ -95,7 +97,9 @@ try {
           const expectedStderr = authority && scenario === "subframe"
             ? "blocked native bridge message from a WebView subframe\n" : "";
           const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === expectedStderr
-            && outcome.stdout === (authority
+            && outcome.stdout === (churn
+              ? [4, 8, 12, 16].map(count => `related churn: observed=${count} alive=${retainedBaseline ? count : 0} native=${retainedBaseline ? count * 2 : 0}`).join("\n") + "\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n"
+              : authority
               ? factory
                 ? `related authority WebKit: pass=true completed=${scenario === "factory-ready" ? 2 : scenario === "factory-veto" ? 1 : 0} closed=${scenario === "factory-ready" ? 2 : scenario === "factory-denied" ? 0 : 1} vetoes=${scenario === "factory-veto" ? 1 : 0}\n`
                 : `related authority WebKit: pass=true completed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} closed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} vetoes=${scenario.startsWith("nested-") ? 1 : 0}\n`

@@ -1,0 +1,13 @@
+[
+  {
+    "frontend": "stage0",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-churn",
+    "pass": false,
+    "status": 1,
+    "stdout": "related churn: observed=4 alive=4\nrelated churn: observed=8 alive=8\nrelated churn: observed=12 alive=12\nrelated churn: observed=16 alive=16\nrelated authority WebKit: pass=false completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  }
+]

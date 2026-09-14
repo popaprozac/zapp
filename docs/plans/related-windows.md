@@ -826,3 +826,51 @@ not yet a claim of constant native memory under long-lived window churn. Test
 whether published graphs can be safely released sooner rather than concealing
 that lifetime cost in a startup benchmark. Broader renderer-crash/recovery and
 Windows/Linux coverage remain separate hardening work.
+
+## Open/close ownership baseline — 2026-09-14
+
+The public factory now has a bounded churn probe. It opens and closes four
+batches of four children while the owner stays alive. Each child makes a direct
+bridge call to register weak observations before closing. A `Weak<MacOSWindowRuntime>`
+tracks Z ownership, and a weak `NSHashTable` separately observes `NSWindow` and
+`WKWebView`; neither tracker retains its target. The fixture drains a scoped
+autorelease pool each run-loop turn, matching the native application's normal
+pool discipline rather than deferring all autoreleases to test exit.
+
+| Closed children | Live Z runtime graphs | Live observed native objects |
+| --- | --- | --- |
+| 4 | 4 | 8 |
+| 8 | 8 | 16 |
+| 12 | 12 | 24 |
+| 16 | 16 | 32 |
+
+This is explicit retention by `MacOSRelatedWindows.retired`, not an inference
+from process RSS or a claim about all WebKit allocations. Logical/document
+registries reach their expected empty-child state while these graphs survive.
+The original [zero-retention assertion](../../spikes/related-windows/results/2026-09-14/churn-before.json)
+failed as expected; `bun run spikes/related-windows/shell.ts --retained-baseline`
+reproduces the current retention counts. `--churn` instead asserts zero remaining
+graphs/native objects and is intentionally a failing future acceptance gate
+until the retirement policy is changed. `--stage0-only` is an optional diagnostic
+shortcut, not a substitute for the two-compiler matrix.
+
+All [eight baseline runs](../../spikes/related-windows/results/2026-09-14/churn-retained-baseline.json)
+pass their **retained-count** expectations: native/Stage 0 × `-O0`/`-O2` ×
+Vite/packaged, with strict warnings, UBSan, and per-process deadlines. That is
+128 accepted child opens/closes across the matrix, not evidence of reclamation.
+Both TypeScript checks pass. No ASan probe or unsupervised native process is used.
+
+The probe also found two upstream Z bugs: native weak-handle array storage lost
+its lowered type identity, and generated protocol entries did not pin the Z
+receiver across removal of its last native owner. Both now have independent
+regressions and compiler fixes; callbacks use a precise-lifetime native retain,
+with no extra allocation or new public syntax.
+
+**Decision pending:** replace application-lifetime graph retention with prompt
+native teardown after routing revocation, while keeping in-flight callback
+receivers alive. The framework policy has not changed. Before shipping that
+change, verify delegate detachment, registration/presentation cleanup, accepted
+and vetoed closure, reentrant completion/close, owner/subtree invalidation,
+unpublished rollback, and shutdown at both optimization levels. Do not claim
+the compiler repair alone proves AppKit/WebKit teardown safety. Styling remains
+the following, separately deliberated workstream.

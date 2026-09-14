@@ -1,0 +1,90 @@
+[
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "packaged",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O2",
+    "mode": "vite",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O2",
+    "mode": "packaged",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O0",
+    "mode": "packaged",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O2",
+    "mode": "vite",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "stage0",
+    "optimization": "-O2",
+    "mode": "packaged",
+    "scenario": "factory-retained-churn",
+    "pass": true,
+    "status": 0,
+    "stdout": "related churn: observed=4 alive=4 native=8\nrelated churn: observed=8 alive=8 native=16\nrelated churn: observed=12 alive=12 native=24\nrelated churn: observed=16 alive=16 native=32\nrelated authority WebKit: pass=true completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  }
+]

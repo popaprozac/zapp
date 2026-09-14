@@ -35,12 +35,32 @@ readonly struct Prepared {
   address: String; windowId: String; documentToken: String; ownerToken: String; nativeId: i32;
 }
 
+// Probe-only weak native observations; neither these nor Weak<T> keep the
+// window graph alive. Model the per-turn autorelease pools of NSApplication.
+function createNativeObservations(): WebKit.NSObject = raw objc {
+  return [[NSHashTable alloc] initWithOptions:NSPointerFunctionsWeakMemory capacity:0];
+}
+function observeNative(in tracker: WebKit.NSObject, in window: WebKit.NSWindow, in view: WebKit.WKWebView): void = raw objc {
+  [(NSHashTable *)tracker addObject:window];
+  [(NSHashTable *)tracker addObject:view];
+}
+function nativeObservationCount(in tracker: WebKit.NSObject): usize = raw objc {
+  return [(NSHashTable *)tracker allObjects].count;
+}
+function pulseRunLoop(): void = raw objc {
+  @autoreleasepool {
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+  }
+}
+
 class State on thread.main {
   readonly windows: WindowManager;
   registry: Option<MacOSWindowRegistry>;
   waiting: Map<i32, Waiter>;
   ready: Set<i32>;
   subscriptions: Array<WindowEventSubscription>;
+  observed: Array<Weak<MacOSWindowRuntime>>;
+  readonly nativeObserved: WebKit.NSObject;
   completed: i32;
   closed: i32;
   vetoes: i32;
@@ -101,6 +121,22 @@ class State on thread.main {
     const request = match (attempt json.decode<Request>(message)) { success(value) => value; failure(_) => { this.failed = true; return; } };
     if (request.t == 4 && request.m == "ready") return;
     const registry = match (this.current()) { some(value) => value; none => { this.failed = true; return; } };
+    if (request.m == "watchRuntime") {
+      const runtime = match (this.runtime(in identity)) { some(value) => value; none => { this.failed = true; return; } };
+      const observed: Weak<MacOSWindowRuntime> = weak runtime;
+      this.observed.push(observed);
+      observeNative(this.nativeObserved, runtime.window, runtime.webView);
+      this.reply(in identity, request.id, "true"); return;
+    }
+    if (request.m == "sampleRuntime") {
+      let alive = 0;
+      for (const observed of this.observed) {
+        match (attempt observed.upgrade()) { success(_) => { alive = alive + 1; } failure(_) => {} }
+      }
+      const nativeAlive = nativeObservationCount(this.nativeObserved);
+      console.log(`related churn: observed=${this.observed.length} alive=${alive} native=${nativeAlive}`);
+      this.reply(in identity, request.id, `${usize(alive) + nativeAlive}`); return;
+    }
     if (request.m == "__window:prepare-related" || request.m == "__window:abort-related" || request.m == "__window:publish-related") {
       const decoded = match (attempt decodeBridgeMessage(in message)) { success(value) => value; failure(_) => { this.failed = true; return; } };
       const permissions = ApplicationPermissions();
@@ -209,7 +245,8 @@ function main(): i32 on thread.main {
   const factoryVeto = args[3] == "--factory-veto";
   const factoryDenied = args[3] == "--factory-denied";
   const factoryInvalid = args[3] == "--factory-invalid";
-  const factory = factoryReady || factoryRollback || factoryVeto || factoryDenied || factoryInvalid;
+  const factoryChurn = args[3] == "--factory-churn" || args[3] == "--factory-retained-churn";
+  const factory = factoryReady || factoryRollback || factoryVeto || factoryDenied || factoryInvalid || factoryChurn;
   const events = createApplicationEvents();
   const host = initializeMacOSApplicationHost(events);
   const app = WebKit.NSApplication.sharedApplication;
@@ -226,7 +263,8 @@ function main(): i32 on thread.main {
   const documents = createRelatedDocuments();
   const creations = new RelatedWindowCreations(documents);
   const state = new State({ windows, registry: Option<MacOSWindowRegistry>.none, waiting: Map<i32, Waiter>(),
-    ready: Set<i32>(), subscriptions: Array<WindowEventSubscription>(),
+    ready: Set<i32>(), subscriptions: Array<WindowEventSubscription>(), observed: Array<Weak<MacOSWindowRuntime>>(),
+    nativeObserved: createNativeObservations(),
     completed: 0, closed: 0, vetoes: 0, veto: true, passed: false, failed: false });
   const weakState = weak state;
   const route: DesktopRouteMessageOperation = move (message, identity): void => {
@@ -255,10 +293,10 @@ function main(): i32 on thread.main {
   match (windows.adoptNative(copy id, move options)) { some(_) => {} none => return 4; }
   let ticks = 0;
   while (!state.failed && !(state.passed && related.count() == 0) && ticks < 200) {
-    WebKit.NSRunLoop.currentRunLoop.runUntilDate(WebKit.NSDate.dateWithTimeIntervalSinceNow(0.05));
+    pulseRunLoop();
     ticks = ticks + 1;
   }
-  const expected = factory ? (factoryReady ? 2 : factoryVeto ? 1 : 0) : denied ? 0 : (subframe ? 1 : 3);
+  const expected = factory ? (factoryChurn ? 16 : factoryReady ? 2 : factoryVeto ? 1 : 0) : denied ? 0 : (subframe ? 1 : 3);
   const expectedClosed = (factoryRollback || factoryInvalid) ? 1 : expected;
   const remaining = usize(ownerClose ? 0 : 1);
   const all = windows.all();
