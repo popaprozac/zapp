@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "bun test frontend/notes-model.test.ts frontend/style-experiment/css-urls.test.ts"
+    "test": "bun test frontend/notes-model.test.ts frontend/style-experiment/css-urls.test.ts frontend/style-experiment/readiness.test.ts"
   },
   "devDependencies": {
     "svelte": "5.57.0",

@@ -7,7 +7,7 @@ import type { NotesModel } from "./notes-model";
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(`Svelte inspector: ${message}`);
 }
-export async function verifySvelteInspectors(model: NotesModel) {
+export async function verifySvelteInspectors(model: NotesModel, pulse: () => Promise<unknown>) {
   const deadline = Date.now() + 15_000;
   async function until(check: () => boolean, description: string) {
     while (!check()) {
@@ -89,7 +89,7 @@ export async function verifySvelteInspectors(model: NotesModel) {
     assert(!get(model.state).error, "restoring the seed title");
     if (import.meta.env.VITE_ZAPP_STYLE_SMOKE === "1") {
       const { verifyStyleSharing } = await import("./style-experiment/webkit-smoke");
-      await verifyStyleSharing();
+      await verifyStyleSharing(pulse);
     }
     document.body.dataset.svelteInspector = "ok";
   } finally { manager.dispose(); }

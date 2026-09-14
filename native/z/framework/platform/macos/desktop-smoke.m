@@ -144,12 +144,29 @@ void zapp_desktop_smoke_observe_response(
           @"deepLinkNote:document.body?.dataset?.deepLinkNote??null,"
           @"svelteInspector:document.body?.dataset?.svelteInspector??null,"
           @"styleExperiment:document.body?.dataset?.styleExperiment??null,"
+          @"styleHmrPhase:document.body?.dataset?.styleHmrPhase??null,"
           @"styleMetrics:document.body?.dataset?.styleMetrics??null,"
           @"requestedNote:new URLSearchParams(location.search).get('note'),"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
         completionHandler:^(id state, NSError *state_error) {
+          // Private fixture handshake only: the host edits disposable files.
+          // Keep factory/readiness and all production bridge APIs unchanged.
+          if (native_id == 1 && zapp_svelte_smoke_enabled()
+              && [state isKindOfClass:[NSString class]]
+              && [(NSString *)state containsString:@"\"styleHmrPhase\":\""]) {
+            static unsigned reported_phases = 0;
+            NSArray<NSString *> *phases = @[@"ready", @"updated", @"pruned"];
+            for (NSUInteger i = 0; i < phases.count; i++) {
+              NSString *marker = [NSString stringWithFormat:@"\"styleHmrPhase\":\"%@\"", phases[i]];
+              if (!(reported_phases & (1u << i)) && [(NSString *)state containsString:marker]) {
+                reported_phases |= 1u << i;
+                printf("Style HMR checkpoint: {%s}\n", marker.UTF8String);
+                fflush(stdout);
+              }
+            }
+          }
           NSString *expected_hmr = development
             ? @"\"hmr\":\"ready\""
             : @"\"hmr\":\"packaged\"";

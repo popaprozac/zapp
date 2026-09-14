@@ -1,6 +1,6 @@
 # Related-window injection and styling
 
-Status: **private DOM stylesheet proof passed; public API and styling defaults still require
+Status: **private DOM stylesheet, real Vite HMR, scoped theme, and link-readiness proofs passed; public API and styling defaults still require
 deliberation**, updated 2026-09-14. Captured from the side-chat handoff. This work does not replace the
 shipped [factory and close/lifetime contract](related-windows.md).
 
@@ -13,7 +13,7 @@ code, not the future framework styling model.
 
 General, framework-neutral related-window stylesheet sharing is the agreed
 workstream (option 3 from that discussion). The first private proof below is now
-complete. Agree on the public defaults, independent
+complete, with the follow-up HMR/theme/readiness evidence below. Agree on the public defaults, independent
 styling, ordering, readiness, theme and HMR behavior before shipping them.
 This does not approve automatic JavaScript injection or a new `inject` option.
 
@@ -159,7 +159,7 @@ single coarse-timer observations, not a benchmark or a large-application bound.
 The prototype still rescans the head per mutation delivery; source parsing and
 fan-out need profiling against realistic stylesheet sizes before promotion.
 
-### Boundaries exposed, not solved
+### Boundaries exposed by the first checkpoint
 
 This is **DOM stylesheet synchronization**, not complete CSS synchronization.
 The URL scanner covers `url()` and string `@import` with comments/escapes, with
@@ -170,9 +170,9 @@ semantics, and coverage of additional URL-bearing constructs. Only head-owned
 DOM styles are observed; CSSOM `insertRule`, `adoptedStyleSheets`, body styles,
 shadow roots, head replacement, and CSS-in-JS are not implemented.
 
-Real lazy Vite imports pass; **file-watcher-driven CSS HMR has not been proved**.
-Replacement/removal tests exercise the DOM mechanisms, not the whole HMR path.
-Theme attributes/variables are not synchronized. Copying all owner sheets also
+At this first checkpoint, real lazy Vite imports passed but file-watcher-driven
+CSS HMR and scoped theme synchronization had not been proved. The follow-up
+below closes those two experimental gaps. Copying all owner sheets also
 copies global `body`/`main` rules: independent child structure and local resets
 still matter; this is not computed-style isolation.
 
@@ -181,7 +181,79 @@ The implementation deliberately follows the browser's
 and tests [Vite's CSS/CSS Modules paths](https://vite.dev/guide/features.html#css),
 without depending on private framework style registries.
 
-Next: a real file-edit/HMR gate, scoped theme experiment, stylesheet/font/paint
-readiness and visual checks, then decide default/opt-out and ordering with the
-user. Keep CSS-in-JS/constructed-sheet adapters separate. Do not ship automatic
-sharing or infer a new `inject` option from this checkpoint.
+## Private HMR, theme, and readiness checkpoint — 2026-09-14
+
+The same opt-in commands now exercise the follow-up. All helpers remain under
+the Notes private experiment; no runtime exports, factory behavior, public
+options, configuration keys, or automatic styling defaults changed.
+
+Validation: packaged WebKit passed, and the real HMR dev gate passed twice
+(including final cleanup/logging changes). Twenty Notes/model/URL/readiness tests
+and 31 related-window/lifetime/transport/Vite-command regressions passed. Svelte
+reported zero errors or warnings; repository TypeScript checks passed. The normal
+149-module frontend build still emits 93.50 kB of JS (31.19 kB gzip), with all
+private probe modules/assets absent. Test processes, Vite port, disposable HMR
+files, and per-run application state were released. Vite still reports the
+previously recorded future-native-config-loader compatibility warning; this
+checkpoint does not suppress it or change the workspace module format.
+
+### Real Vite updates, without a reload
+
+The development harness creates disposable CSS and a self-accepting module in
+its unique test directory. After a DOM checkpoint travels through the ordinary
+native health-response path, the CLI edits the CSS file. It then removes the
+CSS import from the module. These use Vite's actual file watcher, WebSocket HMR,
+and CSS pruning—not synthetic update events or a test mutation HTTP endpoint.
+Tracked developer stylesheets are never modified.
+
+Both real child documents receive the update and removal. The owner CSS node
+keeps its identity during a text edit and is removed when its import is pruned.
+The child documents and their unsaved input state survive, with no full reload.
+The packaged build excludes this dev-only HMR fixture.
+
+Two development runs observed 127 and 148 ms for the update handshake and 85 ms
+for pruning in each. These include native response delivery, host file writes, Vite watching,
+network delivery, and probe polling; they are **not** stylesheet fan-out timings
+or a latency guarantee. Two-child attachment was about 1–2 ms and the fifty-edit
+mutation burst about 1 ms. Repeatable performance benchmarks remain future
+work. The test follows [Vite's documented HMR API](https://vite.dev/guide/api-hmr.html).
+
+### Selected theme state, not arbitrary document copying
+
+The private fixture names exactly one root attribute (`data-style-theme`), one
+class token (`style-theme-dark`), and one inline custom property (`--style-accent`).
+Their values, removals, and custom-property priority synchronize to two children.
+Unrelated attributes, classes, variables, and an unattached child stay unchanged.
+This fixed allowlist is a test policy, **not a proposed public spelling/default**.
+
+Disposal drops queued observer updates and clears the helper's root references.
+It restores a child's original selected values only where the mirror still owns
+the last value; a newer child-local edit is preserved. A live sibling continues
+updating. Each attachment currently has a separate theme observer; consolidation
+and a production ownership/conflict policy need review before promotion.
+
+### Bounded stylesheet snapshots
+
+The private readiness helper waits for the currently tracked external stylesheet
+link generations. It distinguishes ready, failed, changed, disposed, and timeout.
+An initial snapshot, actual linked-sheet loads, media changes, link retargeting,
+an actual browser load failure, failed-sheet removal, timeout, and invalidation
+cleanup are covered. Retargeting a link creates a fresh node so a late old
+load/error event cannot settle its replacement; pending old snapshots are
+invalidated. Failed snapshots do not wait for unrelated unfinished links.
+
+Six focused regressions check listener/waiter cleanup, repeated bounded timeouts,
+generation changes, disposal, and already-loaded/empty snapshots. Invalidating a
+native child leaves no tracked links, listeners, or waiters. These are local
+ownership checks, not proof of whole-document garbage collection or constant RSS.
+
+Readiness is deliberately a **snapshot of external links**, not a guarantee that
+future lazy styles, an inline sheet's asynchronous `@import`, fonts, layout, or
+first paint are finished. It does not delay `createRelatedWindow` or native close.
+Visual cold/warm loading, fonts, and unstyled flashes still need a separate gate
+and user feedback before choosing a presentation policy.
+
+Next: use this evidence to deliberate shared/independent styling defaults,
+cascade order, selected theme ownership, and whether presentation waits for
+anything. Keep CSS-in-JS/constructed-sheet adapters separate. Do not infer an
+`inject` option or production styling promise from the private experiment.

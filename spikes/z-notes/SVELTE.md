@@ -4,8 +4,10 @@ Status: explicit child-stylesheet integration (2026-09-14).
 General related-window stylesheet sharing is the agreed future workstream, not
 a default introduced by this demo.
 
-The first **private DOM stylesheet proof** now passes in packaged and Vite
-WebKit. It is opt-in testing only; see the [styling checkpoint](../../docs/plans/related-window-styling.md#private-dom-stylesheet-checkpoint--2026-09-14).
+The **private DOM stylesheet proof** now covers real file-watcher-driven Vite
+HMR/pruning, selected theme state, and bounded external-link readiness in addition
+to the packaged/dev sharing checks. It is opt-in testing only; see the
+[styling checkpoint](../../docs/plans/related-window-styling.md#private-hmr-theme-and-readiness-checkpoint--2026-09-14).
 Run it with `VITE_ZAPP_STYLE_SMOKE=1 bun cli/src/test-notes-launch-macos.ts`
 from the repository root (or append `packaged` / `dev`).
 
@@ -47,7 +49,7 @@ promised in this tier. Svelte component HMR alone is not proof of that behavior.
   unsaved edits during refresh/save, successful save, errors, duplicate in-flight
   mutations, deletion, and out-of-order refreshes.
 - Svelte diagnostics: zero errors and warnings; repository TypeScript checks.
-- The 33 existing related-window API/lifetime/transport and local Vite command
+- The 31 existing related-window API/lifetime/transport and local Vite command
   regressions pass unchanged.
 - Actual macOS WebKit, packaged and Vite dev launch: two related inspectors,
   child-to-child/owner and owner-to-child input events and reactivity, component
@@ -97,8 +99,11 @@ the agreed follow-up, with the remaining choices recorded in the
 
 No Svelte internals were patched or called. No production automatic CSS/theme synchronization,
 `inject` option, framework adapter API, or change to factory readiness was added.
-Live CSS HMR, font/paint readiness, and complete closed-document collection
-remain separate validation work. The private proof now covers lazy DOM styling,
-relative URLs, ordering, queued updates, and disposal but is not enabled in the
-ordinary app. Removing this known registry path
+Font/paint readiness and complete closed-document collection remain separate
+validation work. The private proof covers lazy DOM styling, relative URLs,
+ordering, real Vite file edits and CSS pruning without losing child input state,
+explicitly selected theme values, bounded link readiness, queued updates, and
+disposal. It is not enabled in the ordinary app. The Notes test command includes
+eight model, six CSS URL, and six readiness regressions (20 total).
+Removing this known registry path
 and proving local cleanup is not a whole-process memory or constant-RSS claim.

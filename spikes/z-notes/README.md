@@ -252,8 +252,9 @@ CSS-registry retention found during the initial experiment. The [Svelte checkpoi
 explains the implementation and tests. General related-window CSS sharing is the
 agreed future direction; automatic application CSS/theme/HMR sharing is not
 implemented by this demo. No new Zapp API was added.
-The first [private stylesheet proof](../../docs/plans/related-window-styling.md#private-dom-stylesheet-checkpoint--2026-09-14)
-passes in packaged and Vite WebKit; it remains behind an explicit test flag.
+The [private stylesheet proof](../../docs/plans/related-window-styling.md#private-hmr-theme-and-readiness-checkpoint--2026-09-14)
+also checks real Vite CSS HMR/pruning, selected theme state, and bounded external
+stylesheet readiness; it remains behind an explicit test flag, not a demo default.
 The normal inspector uses a softer, translucent-looking panel treatment in CSS,
 not native vibrancy or window transparency.
 See the [related-window guide](../../docs/related-windows.md) for the public contract.

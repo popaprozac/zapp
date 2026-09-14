@@ -741,7 +741,7 @@ refreshNotes().then(async () => {
     if (currentWindowId === "win-1") {
       try {
         const { verifySvelteInspectors } = await import("./svelte-smoke");
-        await verifySvelteInspectors(notesModel);
+        await verifySvelteInspectors(notesModel, () => health.status());
       } catch (error) {
         document.body.dataset.svelteInspector = "error";
         status.textContent = String(error);

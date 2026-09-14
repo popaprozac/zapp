@@ -5,12 +5,14 @@ import { createStyleMirror } from "./mirror";
 import styles from "./fixture.module.css";
 import dotURL from "./dot.svg?no-inline";
 import externalURL from "./external.css?url&no-inline";
+import { verifySelectedTheme } from './theme-smoke';
+import { createStylesheetReadiness } from './readiness';
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(`Style experiment: ${message}`);
 }
 const flush = async () => { await new Promise(resolve => setTimeout(resolve, 0)); };
-export async function verifyStyleSharing() {
+export async function verifyStyleSharing(pulse: () => Promise<unknown>) {
   const deadline = performance.now() + 8_000;
   const handles: RelatedWindowHandle[] = [];
   const subscriptions: WindowEventSubscription[] = [];
@@ -53,6 +55,7 @@ export async function verifyStyleSharing() {
     const attachMs = performance.now() - attachStart;
     subscriptions.push(small.handle.subscribe(RelatedWindowEvent.INVALIDATED, () => a.dispose()),
       wide.handle.subscribe(RelatedWindowEvent.INVALIDATED, () => b.dispose()));
+    assert(await a.ready(1_000) === 'ready' && await b.ready(1_000) === 'ready', 'initial stylesheet snapshots loaded');
     await until(() => small.value('--style-module') === 'yes' && wide.value('--style-module') === 'yes', 'CSS Modules');
     assert(small.value('--style-order') === 'second', 'initial cascade order');
     assert(small.value('--style-width') === 'narrow' && wide.value('--style-width') === 'wide', 'child-local media queries');
@@ -67,22 +70,53 @@ export async function verifyStyleSharing() {
     // A real external stylesheet stays a link (not an eager fetch/inline copy).
     const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = externalURL;
     document.head.append(link); owned.push(link);
+    await flush();
+    assert(await a.ready(1_000) === 'ready' && await b.ready(1_000) === 'ready', 'linked stylesheet readiness');
     await until(() => small.value('--style-link') === 'yes' && wide.value('--style-link') === 'yes', 'linked stylesheet load');
     const childLink = [...small.doc.querySelectorAll<HTMLLinkElement>('link[data-style-experiment]')].find(node => node.href === link.href);
     assert(childLink && childLink !== link, 'independent link with original absolute URL');
     link.media = 'not all'; await until(() => small.value('--style-link') === '', 'media attribute update');
     link.media = ''; await until(() => small.value('--style-link') === 'yes', 'media restored');
     assert(childLink.isConnected, 'attribute change preserves link identity');
+    link.href = externalURL + '?generation=2'; await flush();
+    assert(!childLink.isConnected, 'link retarget creates a fresh request generation');
+    assert(await a.ready(1_000) === 'ready', 'new link generation loads');
+    const retargetedLink = [...small.doc.querySelectorAll<HTMLLinkElement>('link[data-style-experiment]')].find(node => node.href === link.href);
+    assert(retargetedLink, 'retargeted link remains tracked');
+    link.remove(); await flush();
+
+    // The actual browser delivers a load error for an invalid stylesheet.
+    const broken = document.createElement('link'); broken.rel = 'stylesheet';
+    broken.href = 'data:text/css;base64,%%%invalid-base64'; document.head.append(broken); owned.push(broken);
+    await flush(); assert(await a.ready(1_000) === 'failed', 'load failure is distinct from timeout');
+    broken.remove(); await flush(); assert(await a.ready(1_000) === 'ready', 'removing failed sheet leaves a fresh ready snapshot');
+
+    // Real DOM link, deliberately never connected: no network or indefinite
+    // wait. Invalidation must terminate its waiter and remove listeners.
+    const pending = createStylesheetReadiness();
+    const neverConnected = small.doc.createElement('link'); neverConnected.rel = 'stylesheet';
+    pending.watch(neverConnected);
+    assert(await pending.ready(5) === 'timeout', 'bounded readiness timeout');
+    const cancelled = pending.ready(1_000); pending.dispose();
+    assert(await cancelled === 'disposed', 'disposal releases an unfinished readiness wait');
+    assert(pending.stats().waits === 0 && pending.stats().listeners === 0, 'readiness handlers released');
+
+    await verifySelectedTheme(small, wide, independent);
 
     const lazy = await import('./lazy'); assert(lazy.loaded, 'real lazy module import');
     await until(() => small.value('--style-lazy') === 'yes' && wide.value('--style-lazy') === 'yes', 'lazy CSS insertion');
+    let hmr: { updateMs: number; pruneMs: number } | undefined;
+    if (import.meta.env.DEV) {
+      const { verifyFileHmr } = await import('./hmr-smoke');
+      hmr = await verifyFileHmr([small, wide], pulse, until);
+    }
     const beforeBurst = mirror.stats(); const updateStart = performance.now();
     for (let i = 0; i < 50; i++) secondStyle.textContent = `[data-style-probe]{--style-order:update-${i}}`;
     await flush(); const updateMs = performance.now() - updateStart;
     assert(small.value('--style-order') === 'update-49' && wide.value('--style-order') === 'update-49', 'batched text replacements reach siblings');
     assert(mirror.stats().passes === beforeBurst.passes + 1, 'one observer pass per synchronous burst');
     assert(mirror.stats().created === beforeBurst.created, 'no recreated sheets during text updates');
-    assert(childLink.isConnected, 'unrelated inline edit does not recreate links');
+    assert(!retargetedLink.isConnected, 'removed linked sheet stays removed during later edits');
     document.head.insertBefore(secondStyle, firstStyle); await flush();
     assert(small.value('--style-order') === 'first', 'source reordering preserved');
     firstStyle.remove(); await flush(); assert(small.value('--style-order') === 'update-49', 'removed source disappears');
@@ -105,6 +139,8 @@ export async function verifyStyleSharing() {
     }
     wide.handle.close(); await until(() => mirror.stats().documents === 0, 'native invalidation releases target');
     assert(!wide.doc.querySelector('[data-style-experiment]'), 'native close removes mirrored sheets');
+    assert(await b.ready(100) === 'disposed', 'native invalidation also disposes readiness');
+    assert(b.readinessStats().links === 0 && b.readinessStats().listeners === 0 && b.readinessStats().waits === 0, 'native invalidation releases readiness resources');
     const beforeDispose = mirror.stats();
     replacement.textContent = '[data-style-probe]{--style-order:late}'; mirror.dispose(); await flush();
     const final = mirror.stats();
@@ -112,7 +148,7 @@ export async function verifyStyleSharing() {
     assert(final.passes === beforeDispose.passes, 'disconnect drops queued observer work');
     assert(!final.error, String(final.error));
     document.body.dataset.styleExperiment = 'ok';
-    document.body.dataset.styleMetrics = JSON.stringify({ attachMs, updateMs, ...final });
+    document.body.dataset.styleMetrics = JSON.stringify({ attachMs, updateMs, hmr, ...final });
   } finally {
     mirror.dispose(); for (const sub of subscriptions) sub.unsubscribe();
     for (const node of owned) node.remove();
