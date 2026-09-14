@@ -11,6 +11,7 @@ import { thread } from "std/thread";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
 import { BridgeDocument } from "../framework/bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } from "../framework/related-documents.zs";
+import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup } from "../framework/related-window-creations.zs";
 import { DesktopRouteMessageOperation, routeDocumentMessage, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
 import { createDesktopAssetSchemeHandler } from "../framework/platform/macos/scheme-handler.zs";
 
@@ -30,16 +31,26 @@ class ChildEndpoint on thread.main {
   readonly ui: objc.Adapter<WebKit.WKUIDelegate>;
 }
 
+readonly struct ClaimedCreation {
+  reservation: RelatedWindowReservation;
+  document: BridgeDocument;
+  failAfterAllocation: boolean;
+}
+
 class Observations on thread.main {
   readonly documents: RelatedDocuments;
   readonly owner: BridgeDocument;
-  preparing: Option<BridgeDocument>;
+  readonly creations: RelatedWindowCreations;
+  preparing: Option<RelatedWindowReservation>;
   ownerIdentity: Option<RelatedDocumentIdentity>;
+  failAfterAllocation: boolean;
   children: Array<ChildEndpoint>;
   created: i32;
   rejected: i32;
   replies: i32;
   closed: i32;
+  rolledBack: i32;
+  releasedMessages: i32;
   childPassed: boolean;
   failed: boolean;
 
@@ -47,18 +58,31 @@ class Observations on thread.main {
   function reject(inout this): void { this.rejected = this.rejected + 1; }
   function finished(): boolean { return this.failed || (this.childPassed && this.closed == 1); }
 
-  function claim(inout this): Option<BridgeDocument> {
+  function claim(inout this): Option<ClaimedCreation> {
     const identity = match (copy this.ownerIdentity) { some(value) => value; none => return Option.none; };
     if (!this.owner.isCurrent(in identity)) return Option.none;
-    return this.takePreparing();
+    const reservation = match (copy this.preparing) { some(value) => value; none => return Option.none; };
+    const document = match (this.creations.claim(in identity, in reservation, 1)) {
+      some(value) => value;
+      none => return Option.none;
+    };
+    return Option.some(ClaimedCreation({ reservation, document, failAfterAllocation: this.failAfterAllocation }));
   }
 
-  private function takePreparing(inout this): Option<BridgeDocument> {
-    // Retain the direct ARC endpoint before clearing its optional reservation.
-    // Whole-Option replace still requires nested ARC alias-transfer support.
-    const document = match (in this.preparing) { some(value) => value; none => return Option.none; };
+  function released(inout this): void { this.releasedMessages = this.releasedMessages + 1; }
+
+  function rollback(inout this, child: ChildEndpoint, in reservation: RelatedWindowReservation): void {
+    // The guard must revoke routing before native cleanup can reenter the host.
+    if (this.documents.isLive(in reservation.child)) this.fail();
+    child.view.stopLoading();
+    child.window.close();
+    this.rolledBack = this.rolledBack + 1;
+  }
+
+  function failCreation(inout this, in reservation: RelatedWindowReservation): void {
+    if (!this.creations.fail(in reservation)) this.fail();
     this.preparing = Option.none;
-    return Option.some(document);
+    if (this.creations.count() != 0 || this.documents.count() != 1) this.fail();
   }
 
   function add(inout this, child: ChildEndpoint): void {
@@ -89,14 +113,20 @@ class Observations on thread.main {
       failure(_) => { this.fail(); return; }
     };
     if (request.t == 4 && request.m == "ready") return;
-    if (request.m == "prepare" && identity.windowId == 1 && this.created == 0) {
+    if ((request.m == "prepare" || request.m == "prepareFailure") && identity.windowId == 1 && this.created == 0) {
       if (!this.owner.isCurrent(in identity)) { this.fail(); return; }
+      if (request.m == "prepare" && (this.rolledBack != 1 || this.releasedMessages != 1)) { this.fail(); return; }
       this.ownerIdentity = Option.some(copy identity);
-      this.preparing = BridgeDocument.beginRelated(2, this.documents, in identity);
+      this.failAfterAllocation = request.m == "prepareFailure";
+      this.preparing = this.creations.begin(in identity, 2, 0, 100);
+      match (copy this.preparing) { some(_) => {} none => { this.fail(); return; } }
       reply(view, in identity, request.id, "true");
       return;
     }
     if (request.m == "echo" && identity.windowId == 2) {
+      const reservation = match (copy this.preparing) { some(value) => value; none => { this.fail(); return; } };
+      if (reservation.child.token != identity.token || !this.creations.complete(in reservation, 2)) { this.fail(); return; }
+      this.preparing = Option.none;
       const authority = match (this.documents.capabilitiesFor(in identity)) {
         some(value) => value;
         none => { this.fail(); return; }
@@ -111,7 +141,8 @@ class Observations on thread.main {
   }
 
   function cleanup(inout this): void {
-    match (this.takePreparing()) { some(document) => document.close(); none => {} }
+    this.creations.cancelAll();
+    this.preparing = Option.none;
     let index: usize = 0;
     while (index < this.children.length) {
       const child = this.children[index];
@@ -133,6 +164,9 @@ class Messages on thread.main implements WebKit.WKScriptMessageHandler {
   readonly controller: WebKit.WKUserContentController;
   readonly address: String;
   readonly route: DesktopRouteMessageOperation;
+  readonly tracksRollback: boolean;
+
+  deinit { if (this.tracksRollback) this.state.released(); }
 
   function receive(inout this, in controller: WebKit.WKUserContentController, in message: WebKit.WKScriptMessage): void as "userContentController:didReceiveScriptMessage:" {
     if (controller != this.controller || message.webView != this.view || !message.frameInfo.mainFrame) { this.state.fail(); return; }
@@ -191,10 +225,12 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
     if (absolute == null) return null;
     const address: String = absolute;
     if (address != this.address) return null;
-    const document = match (this.state.claim()) {
+    const claimed = match (this.state.claim()) {
       some(value) => value;
       none => { this.state.reject(); return null; }
     };
+    const document = claimed.document;
+    const reservation = claimed.reservation;
     const controller = WebKit.WKUserContentController.alloc().init();
     configuration.userContentController = controller;
     install(controller, in this.bootstrap);
@@ -208,7 +244,7 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
     const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 300, 180), configuration: configuration);
     const state = this.state;
     const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => state.route(view, move message, identity);
-    const messages = new Messages({ state, document, view, controller, address, route });
+    const messages = new Messages({ state, document, view, controller, address, route, tracksRollback: claimed.failAfterAllocation });
     const registration = objc.register({ add: controller.addScriptMessageHandler(messages, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
     const nav = new Navigation({ document });
     const navigation = objc.adapt<WebKit.WKNavigationDelegate>(nav);
@@ -220,7 +256,14 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
     window.releasedWhenClosed = false;
     window.title = "Zapp related readiness child";
     window.contentView = view;
-    this.state.add(new ChildEndpoint({ view, window, document, registration, navigation, ui }));
+    const child = new ChildEndpoint({ view, window, document, registration, navigation, ui });
+    const cleanup: RelatedCreationCleanup = move (): void => state.rollback(child, in reservation);
+    if (!state.creations.attach(in reservation, cleanup, 1)) { state.fail(); return null; }
+    if (claimed.failAfterAllocation) {
+      state.failCreation(in reservation);
+      return null;
+    }
+    this.state.add(child);
     window.makeKeyAndOrderFront(null);
     return view;
   }
@@ -231,7 +274,7 @@ function selection(): CapabilitySelection {
   let permissions = Set<String>();
   let services = Set<String>();
   let workers = Set<String>();
-  permissions.add("window.create");
+  permissions.add("window:create");
   services.add("notes.list");
   return new CapabilitySelection({ names: names.freeze(), permissions: permissions.freeze(), serviceMethods: services.freeze(), workerIds: workers.freeze() });
 }
@@ -260,11 +303,12 @@ function main(): i32 on thread.main {
   const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 300, 180), configuration: config);
   const documents = createRelatedDocuments();
   const document = new BridgeDocument(1, documents, selection());
-  const state = new Observations({ documents, owner: document, preparing: Option<BridgeDocument>.none,
+  const state = new Observations({ documents, owner: document, creations: new RelatedWindowCreations(documents),
+    preparing: Option<RelatedWindowReservation>.none, failAfterAllocation: false,
     ownerIdentity: Option<RelatedDocumentIdentity>.none, children: Array<ChildEndpoint>(),
-    created: 0, rejected: 0, replies: 0, closed: 0, childPassed: false, failed: false });
+    created: 0, rejected: 0, replies: 0, closed: 0, rolledBack: 0, releasedMessages: 0, childPassed: false, failed: false });
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => state.route(view, move message, identity);
-  const messages = new Messages({ state, document, view, controller, address, route });
+  const messages = new Messages({ state, document, view, controller, address, route, tracksRollback: false });
   const registration = objc.register({ add: controller.addScriptMessageHandler(messages, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
   const nav = new Navigation({ document });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(nav);
@@ -288,7 +332,8 @@ function main(): i32 on thread.main {
   view.stopLoading();
   window.close();
   const pass = state.finished() && !state.failed && state.created == 1 && state.rejected == 1
-    && state.replies == 1 && state.closed == 1 && documents.count() == 0;
-  console.log(`related readiness WebKit: pass=${pass} created=${state.created} rejected=${state.rejected} replies=${state.replies} closed=${state.closed}`);
+    && state.replies == 1 && state.closed == 1 && documents.count() == 0
+    && state.rolledBack == 1 && state.releasedMessages == 1 && state.creations.count() == 0;
+  console.log(`related readiness WebKit: pass=${pass} created=${state.created} rejected=${state.rejected} replies=${state.replies} closed=${state.closed} rolledBack=${state.rolledBack} released=${state.releasedMessages}`);
   return pass ? 0 : 1;
 }

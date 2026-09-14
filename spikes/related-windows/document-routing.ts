@@ -17,7 +17,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   if (related && (path === "/owner.html" || path === "/child.html")) {
     const owner = path === "/owner.html";
     const script = owner
-      ? `globalThis.shared={value:41};const denied=window.open('/child.html');if(denied!==null)throw Error('unprepared child accepted');b.invoke('prepare',{}, {timeout:0}).then(()=>{if(!window.open('/child.html'))b.post(JSON.stringify({t:3,m:'fail'}))});`
+      ? `globalThis.shared={value:41};const denied=window.open('/child.html');if(denied!==null)throw Error('unprepared child accepted');b.invoke('prepareFailure',{}, {timeout:0}).then(()=>{if(window.open('/child.html')!==null)throw Error('failed child accepted');return b.invoke('prepare',{}, {timeout:0})}).then(()=>{if(!window.open('/child.html'))b.post(JSON.stringify({t:3,m:'fail'}))}).catch(()=>b.post(JSON.stringify({t:3,m:'fail'})));`
       : `b.invoke('echo',{}, {timeout:0}).then(value=>{const pass=value===42&&!!document.head&&!!document.body&&opener.shared.value===41&&opener.document!==document; b.post(JSON.stringify({t:3,m:pass?'pass':'fail'}));window.close();});`;
     // The child's invocation is intentionally in its head, before body parsing.
     return new Response(`<!doctype html><head><title>Related readiness</title><script>const b=globalThis[Symbol.for('zapp.bridge')];${script}</script></head><body><h1>${owner ? "Owner" : "Child"}</h1></body>`,
@@ -46,7 +46,7 @@ try {
       const outcome = await runBoundedCommand([binary, `http://127.0.0.1:${server.port}`, bootstrap], { cwd: root, timeoutMs: 15_000 });
       const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""
         && outcome.stdout === (related
-          ? "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1\n"
+          ? "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1 rolledBack=1 released=1\n"
           : "document routing WebKit: pass=true commits=2 staleIgnored=true\n");
       results.push({ frontend, optimization, pass, ...outcome });
       console.log(`${pass ? "PASS" : "FAIL"} ${name} ${frontend} ${optimization}`);

@@ -358,8 +358,10 @@ emission declares Objective-C block adapters before nested callable bodies.
 Nested block capture of an outer callback parameter was subsequently fixed in
 Z commit `bc27e0a7`, with stored callable ownership and native iteration parity
 regressions. Whole-aggregate `replace` of ARC-bearing `Option` storage
-remains restricted; the fixture retains a direct endpoint before clearing its
-one-shot reservation. The remaining restriction is not hidden by a native shim.
+remains restricted; the original fixture retained a direct endpoint before
+clearing its optional storage. The creation guard below now stores plain
+reservation identities separately from ARC endpoints; it does not require or
+claim a general nested-ARC exchange operation.
 
 ### Vite and packaged shell checkpoint
 
@@ -391,3 +393,47 @@ This broader asset-host test also exposed and fixed Stage 0's inferred-borrow
 argument ABI for Objective-C protocol values: `helper(task)` now passes the
 same object pointer as `helper(in task)`. Zapp's valid helper calls did not need
 a workaround or new language syntax. The fix is Z commit `ad73dc7b`.
+
+### Creation reservation and rollback checkpoint
+
+`RelatedWindowCreations` is an internal main-executor guard owned by the macOS
+window registry. It reserves a child only under the exact ready owner identity
+with `window:create`, inherits that owner's selection without overrides, and
+allows the matching native callback to claim the reservation once. A reservation
+is correlation data, not proof of a trusted sender: callers still validate the
+actual WebView, frame, and origin before claiming it.
+
+The guard owns rollback until both readiness signals have completed and the
+platform has retained the native runtime. Failure removes the reservation and
+retires routing before invoking cleanup. Stale completion cannot affect a new
+document with the same window ID. Late or duplicate resource attachment cleans
+up the supplied resources instead of leaking them. Deadline checks, owner loss,
+reentrant cleanup, fallback destruction, and terminal shutdown have deterministic
+headless tests. Production native close prunes invalidated reservations, and
+application shutdown cancels the table before closing native windows.
+
+Run `bun run spikes/related-windows/registry.ts --creations` for the four-way
+native/Stage 0 × `-O0`/`-O2` UBSan matrix. The real WebKit readiness and shell
+fixtures now also force a failure after native view/window/registration
+allocation. Before accepting a retry, they require revoked routing, closed
+partial native state, and destruction of that registration's Z message handler.
+The fresh child then receives `42` directly and closes normally. All four HTTP
+and eight Vite/packaged cases pass. Evidence:
+[headless](../../spikes/related-windows/results/2026-09-13/creations.json),
+[HTTP](../../spikes/related-windows/results/2026-09-13/creation-rollback-http.json),
+[Vite/packaged](../../spikes/related-windows/results/2026-09-13/creation-rollback-shell.json).
+
+This revealed two Stage 0 compiler bugs, fixed in Z: immutable synthetic
+`deinit` receivers rejected ordinary synchronous cleanup, and an owned capture
+whose first body use passed a class argument emitted a duplicate retain.
+Z commit `60230f39` fixes both with destructor-count regressions. The fixture does not wait for
+arbitrary Objective-C autorelease draining to claim failed-registration cleanup.
+
+Scope remains deliberately narrow: the production registry **owns** this guard,
+but the real allocation/claim proof is still in the checked-Z WebKit fixture.
+Automatic platform deadline scheduling, prepare/claim/readiness wiring into the
+production UI delegate, failure replies, family close preflight, and complete
+document-bound event/retirement integration are still gates. The fixture injects
+deterministic deadline ticks; it does not claim a production timeout timer.
+`createRelatedWindow` remains unexported. No new public API or configuration was
+introduced, and ordinary service calls do not touch the creation table.

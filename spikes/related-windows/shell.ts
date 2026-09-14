@@ -27,7 +27,7 @@ await Bun.write(join(assets, "owner.html"), `<!doctype html><head><title>Related
 globalThis.shared={value:41};
 const b=globalThis[Symbol.for('zapp.bridge')];
 if(window.open(${JSON.stringify(RELATED_DOCUMENT_SHELL_PATH)})!==null)throw Error('unprepared child accepted');
-b.invoke('prepare',{}, {timeout:0}).then(()=>{if(!window.open(${JSON.stringify(RELATED_DOCUMENT_SHELL_PATH)}))b.post(JSON.stringify({t:3,m:'fail'}))});
+b.invoke('prepareFailure',{}, {timeout:0}).then(()=>{if(window.open(${JSON.stringify(RELATED_DOCUMENT_SHELL_PATH)})!==null)throw Error('failed child accepted');return b.invoke('prepare',{}, {timeout:0})}).then(()=>{if(!window.open(${JSON.stringify(RELATED_DOCUMENT_SHELL_PATH)}))b.post(JSON.stringify({t:3,m:'fail'}))}).catch(()=>b.post(JSON.stringify({t:3,m:'fail'})));
 </script></body>`);
 await generateAssetManifestZ(artifacts, "frontend", { embed: true, compress: true,
   outputPath: join(workspace, "framework/platform/macos/configured-assets.zs") });
@@ -60,7 +60,7 @@ try {
         const origin = mode === "vite" ? `http://127.0.0.1:${address.port}` : "zapp://app";
         const outcome = await runBoundedCommand([binary, origin, bootstrap, "--shell"], { cwd: root, timeoutMs: 15_000 });
         const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""
-          && outcome.stdout === "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1\n";
+          && outcome.stdout === "related readiness WebKit: pass=true created=1 rejected=1 replies=1 closed=1 rolledBack=1 released=1\n";
         results.push({ frontend, optimization, mode, pass, ...outcome });
         console.log(`${pass ? "PASS" : "FAIL"} related shell ${frontend} ${optimization} ${mode}`);
         if (!pass) console.log(outcome);

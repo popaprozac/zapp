@@ -38,6 +38,7 @@ bun run test:bridge
 bun run test:checked-z
 bun run test:checked-lifetime
 bun run test:registry
+bun run test:creations
 bun run test:document-routing
 bun run test:related-readiness
 bun run test:shell
@@ -131,6 +132,21 @@ This is shell-delivery evidence, not the public factory or full-family close
 integration. See the [remaining gates](../../docs/plans/related-windows.md#vite-and-packaged-shell-checkpoint).
 
 ## Headless native document registry
+
+For one-shot native creation ownership, `bun run test:creations` exercises the
+production internal guard without WebKit. It covers wrong/stale owners,
+readiness, duplicate/late attachment, expiry, reentrant cleanup, and shutdown.
+The guard belongs to the production macOS registry; full creation routing is
+still gated. [Saved headless results](results/2026-09-13/creations.json) include
+both compilers and optimization levels.
+
+The current readiness/shell runners additionally fail a real native allocation
+before returning it to WebKit, verify its Z message registration was released
+before retry, then successfully create and close the replacement child. This
+extends—not overwrites—the earlier readiness-only evidence:
+[HTTP rollback](results/2026-09-13/creation-rollback-http.json) and
+[Vite/packaged rollback](results/2026-09-13/creation-rollback-shell.json).
+See the [scope and remaining gates](../../docs/plans/related-windows.md#creation-reservation-and-rollback-checkpoint).
 
 `bun run test:registry` needs no WebKit, visible desktop, or network server. It
 executes the framework's internal Z registry, using the actual immutable

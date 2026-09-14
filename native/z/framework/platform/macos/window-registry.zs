@@ -10,6 +10,7 @@ import { ContextMenuSessions } from "../../context-menu.zs";
 import { BridgeResponse } from "../../bridge.zs";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
+import { RelatedWindowCreations } from "../../related-window-creations.zs";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowManager, WindowOptions } from "../../window.zs";
@@ -33,6 +34,7 @@ internal class MacOSWindowRegistry on thread.main {
   readonly contextMenus: ContextMenuSessions;
   readonly routeMessage: DesktopRouteMessageOperation;
   readonly documents: RelatedDocuments;
+  readonly creations: RelatedWindowCreations;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
   nativeWindows: Map<i32, MacOSWindowRuntime>;
   retiredNativeWindows: Array<MacOSWindowRuntime>;
@@ -116,6 +118,7 @@ internal class MacOSWindowRegistry on thread.main {
         let window = value;
         this.contextMenus.invalidateWindow(in window.id);
         window.document.close();
+        this.creations.pruneInvalidated();
         let menu = this.menu;
         menu.invalidateFrontendOwner(in window.id);
         this.retiredNativeWindows.push(move window);
@@ -128,6 +131,7 @@ internal class MacOSWindowRegistry on thread.main {
   }
 
   function closeAllNativeWindows(inout this): void on thread.main {
+    this.creations.cancelAll();
     this.contextMenus.invalidateAll();
     // Teardown is already committed, so it bypasses cancellable user close
     // requests. Snapshot the native windows first because close callbacks

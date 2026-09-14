@@ -57,6 +57,16 @@ internal class BridgeDocument on thread.main {
 
   function requiresShell(): boolean { return this.related; }
 
+  // Native creation bookkeeping may identify a reserved child before readiness.
+  // This is not an acceptance path for renderer messages.
+  function creationIdentity(): Option<RelatedDocumentIdentity> {
+    if (!this.related || this.closed) return Option.none;
+    return match (in this.identity) {
+      some(identity) => this.documents.isLive(in identity) ? Option.some(copy identity) : Option.none;
+      none => Option.none;
+    };
+  }
+
   function retire(inout this): void {
     if (this.related) this.closed = true;
     match (copy this.identity) {

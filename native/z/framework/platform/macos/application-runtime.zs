@@ -11,6 +11,7 @@ import { ShellManager } from "../../shell.zs";
 import { FileManager } from "../../files.zs";
 import { bridgeFailure } from "../../bridge.zs";
 import { createRelatedDocuments } from "../../related-documents.zs";
+import { RelatedWindowCreations } from "../../related-window-creations.zs";
 import { MacOSWindowRegistry } from "./window-registry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
@@ -321,6 +322,7 @@ internal function initializeMacOSApplicationRuntimeState(
   ): void => cancelAllApplicationWorkerServiceRequests(in requests);
   const contextMenus = createContextMenuSessions();
   const didCloseNativeWindow: NativeWindowClosedOperation = recordClosedNativeWindow;
+  const documents = createRelatedDocuments();
   const windows = new MacOSWindowRegistry({
     name: move name,
     capabilities,
@@ -332,7 +334,8 @@ internal function initializeMacOSApplicationRuntimeState(
     nativeWindows: Map<i32, MacOSWindowRuntime>(),
     retiredNativeWindows: Array<MacOSWindowRuntime>(),
     nextNativeWindowId: 1,
-    documents: createRelatedDocuments(),
+    documents,
+    creations: new RelatedWindowCreations(documents),
   });
   const value = new MacOSApplicationRuntime({
     permissions,
