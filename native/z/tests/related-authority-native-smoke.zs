@@ -128,14 +128,15 @@ class State on thread.main {
       observeNative(this.nativeObserved, runtime.window, runtime.webView);
       this.reply(in identity, request.id, "true"); return;
     }
-    if (request.m == "sampleRuntime") {
+    if (request.m == "sampleRuntime" || request.m == "sampleOwnedRuntime" || request.m == "countRuntime") {
       let alive = 0;
       for (const observed of this.observed) {
         match (attempt observed.upgrade()) { success(_) => { alive = alive + 1; } failure(_) => {} }
       }
       const nativeAlive = nativeObservationCount(this.nativeObserved);
-      console.log(`related churn: observed=${this.observed.length} alive=${alive} native=${nativeAlive}`);
-      this.reply(in identity, request.id, `${usize(alive) + nativeAlive}`); return;
+      if (request.m != "countRuntime") console.log(`related churn: observed=${this.observed.length} alive=${alive} native=${nativeAlive}`);
+      const counted = request.m == "sampleOwnedRuntime" ? usize(alive) : usize(alive) + nativeAlive;
+      this.reply(in identity, request.id, `${counted}`); return;
     }
     if (request.m == "__window:prepare-related" || request.m == "__window:abort-related" || request.m == "__window:publish-related") {
       const decoded = match (attempt decodeBridgeMessage(in message)) { success(value) => value; failure(_) => { this.failed = true; return; } };
@@ -245,7 +246,7 @@ function main(): i32 on thread.main {
   const factoryVeto = args[3] == "--factory-veto";
   const factoryDenied = args[3] == "--factory-denied";
   const factoryInvalid = args[3] == "--factory-invalid";
-  const factoryChurn = args[3] == "--factory-churn" || args[3] == "--factory-retained-churn";
+  const factoryChurn = args[3] == "--factory-churn" || args[3] == "--factory-animated-churn";
   const factory = factoryReady || factoryRollback || factoryVeto || factoryDenied || factoryInvalid || factoryChurn;
   const events = createApplicationEvents();
   const host = initializeMacOSApplicationHost(events);
@@ -292,7 +293,7 @@ function main(): i32 on thread.main {
   match (attempt registry.createWindow(in id, in options)) { success => {} failure(_) => return 5; }
   match (windows.adoptNative(copy id, move options)) { some(_) => {} none => return 4; }
   let ticks = 0;
-  while (!state.failed && !(state.passed && related.count() == 0) && ticks < 200) {
+  while (!state.failed && !(state.passed && related.count() == 0) && ticks < (factoryChurn ? 500 : 200)) {
     pulseRunLoop();
     ticks = ticks + 1;
   }

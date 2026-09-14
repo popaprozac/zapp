@@ -68,7 +68,6 @@ internal class MacOSRelatedWindows on thread.main {
   readonly windows: Weak<WindowManager>;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
   private records: Map<i32, NativeCreation>;
-  private retired: Array<MacOSWindowRuntime>;
   private closed: boolean;
 
   constructor(documents: RelatedDocuments, creations: RelatedWindowCreations, route: DesktopRouteMessageOperation,
@@ -79,7 +78,6 @@ internal class MacOSRelatedWindows on thread.main {
     this.windows = windows;
     this.didCloseNativeWindow = didCloseNativeWindow;
     this.records = Map<i32, NativeCreation>();
-    this.retired = Array<MacOSWindowRuntime>();
     this.closed = false;
   }
 
@@ -332,7 +330,7 @@ internal class MacOSRelatedWindows on thread.main {
           some(_) => {
             record.completed = true;
             // Legacy native callers publish via their completion callback;
-            // preserve their reentrant close/retention semantics as well.
+            // establish that state before a callback can close reentrantly.
             record.published = !record.deferPublication;
             return true;
           }
@@ -364,22 +362,15 @@ internal class MacOSRelatedWindows on thread.main {
     }
     this.didCloseNativeWindow(reservation.child.windowId);
     this.records.delete(reservation.child.windowId);
-    // As with ordinary windows, retain the completed AppKit graph until the
-    // application run loop unwinds. Failed unpublished allocations are released
-    // before their failure reply instead of accumulating in this retirement list.
-    if (record.published) {
-      match (in record.runtime) {
-        some(runtime) => { const retained: MacOSWindowRuntime = runtime; this.retired.push(retained); }
-        none => {}
-      }
-    }
+    // The record owns its graph through native close. Generated callback
+    // entries protect their own receivers if this removes the final owner.
     record.close();
     if (record.completed) {
       const id = `related-${reservation.child.windowId}`;
       match (attempt this.windows.upgrade()) { success(windows) => windows.closedNative(in id); failure(_) => {} }
     }
-    // Unpublished creation failures also retire an observing factory. Cleanup
-    // has finished before this notice, exactly as for completed children.
+    // Unpublished creation failures also retire an observing factory. Routing
+    // and framework ownership are retired without waiting for this notice.
     deliverRelatedDocumentInvalidated(record.ownerView, record.owner, in reservation.owner, in reservation.child);
   }
 

@@ -550,11 +550,14 @@ platform lookup; there is no second related-only implementation of each control.
 
 Retirement latches before external cleanup, revokes the document subtree before
 user closed listeners, and removes the logical record exactly once. Reentrant
-native cleanup cannot recursively retire it. Completed AppKit graphs remain
-retained until the application run loop unwinds, matching ordinary windows;
+native cleanup cannot recursively retire it. At this checkpoint, completed
+AppKit graphs remained retained until the application run loop unwound, matching
+ordinary windows;
 failed unpublished creations are rolled back before rejection. If the manager
 stops while a child loads, activation rejects instead of publishing an unusable
 window. Stale handles cannot resurrect native controls.
+The September 14 prompt-reclamation checkpoint below replaces this related-only
+retirement hold; ordinary windows are unchanged.
 
 Validation at this checkpoint:
 
@@ -818,8 +821,8 @@ with `bun run spikes/related-windows/shell.ts --factory`.
 This also exposed and fixed Z's parenthesized-conditional/closure lookahead
 ambiguity (`e205edd5`); the framework test keeps its original valid expression.
 
-Before expanding styling, keep repeated open/close memory pressure in the next
-checkpoint: the existing native host conservatively retains **published** retired
+At this checkpoint, repeated open/close memory pressure was the next gate:
+the native host conservatively retained **published** retired
 AppKit runtime graphs until the application loop unwinds. Routing/cancellation
 is already terminal, and unpublished failure graphs are released, but this is
 not yet a claim of constant native memory under long-lived window churn. Test
@@ -848,11 +851,12 @@ This is explicit retention by `MacOSRelatedWindows.retired`, not an inference
 from process RSS or a claim about all WebKit allocations. Logical/document
 registries reach their expected empty-child state while these graphs survive.
 The original [zero-retention assertion](../../spikes/related-windows/results/2026-09-14/churn-before.json)
-failed as expected; `bun run spikes/related-windows/shell.ts --retained-baseline`
-reproduces the current retention counts. `--churn` instead asserts zero remaining
-graphs/native objects and is intentionally a failing future acceptance gate
-until the retirement policy is changed. `--stage0-only` is an optional diagnostic
-shortcut, not a substitute for the two-compiler matrix.
+failed as expected. At commit `76cca03a`, the probe's `--retained-baseline` mode
+reproduced those retention counts. That historical mode has now been removed:
+`--churn` is the zero-retention acceptance gate, and `--lifetime` combines it with
+the public-factory scenarios without recompiling the same fixture twice.
+`--stage0-only` is an optional diagnostic shortcut, not a substitute for the
+two-compiler matrix.
 
 All [eight baseline runs](../../spikes/related-windows/results/2026-09-14/churn-retained-baseline.json)
 pass their **retained-count** expectations: native/Stage 0 × `-O0`/`-O2` ×
@@ -866,11 +870,101 @@ receiver across removal of its last native owner. Both now have independent
 regressions and compiler fixes; callbacks use a precise-lifetime native retain,
 with no extra allocation or new public syntax.
 
-**Decision pending:** replace application-lifetime graph retention with prompt
-native teardown after routing revocation, while keeping in-flight callback
-receivers alive. The framework policy has not changed. Before shipping that
-change, verify delegate detachment, registration/presentation cleanup, accepted
-and vetoed closure, reentrant completion/close, owner/subtree invalidation,
-unpublished rollback, and shutdown at both optimization levels. Do not claim
-the compiler repair alone proves AppKit/WebKit teardown safety. Styling remains
-the following, separately deliberated workstream.
+The related-window policy change was subsequently approved; its implementation
+and evidence follow below. The baseline alone did not prove AppKit/WebKit teardown
+safety. Styling remains a separately deliberated workstream.
+
+## Prompt related-window reclamation — 2026-09-14
+
+Closed related windows no longer enter an application-lifetime retirement array.
+Routing/subtree authority is revoked first. The creation record holds the graph
+through native close; `MacOSWindowRuntime.deinit` detaches the non-owning window,
+navigation, and UI delegate slots before releasing adapters, the message
+registration, presentation observers, and the content graph. The generated
+protocol/subclass entry pins protect callbacks that reenter this teardown.
+Publication, veto, rollback, and terminal invalidation semantics are unchanged;
+native teardown does not wait for a JavaScript cleanup acknowledgement.
+
+The first native churn run exposed a separate compiler leak after removal of
+the deliberate hold: Z runtimes reached zero, but one native object per child
+remained. The [failing trace](../../spikes/related-windows/results/2026-09-14/reclamation-native-before.json)
+is preserved. Z commit `d43ae498` fixes the native cleanup planner's treatment of
+imported ARC classes and callable aliases. The protocol registration retained
+its imported Z handler correctly, but the caller's original handle missed its
+release. A cross-module destructor regression reproduces the failure; a separate
+allocation ledger covers ordinary imported class/callable ownership. Neither
+fix introduces framework-specific language rules.
+
+The native-object observation is deliberately separate from logical close and
+Z ownership. A [1.5-second observation deadline](../../spikes/related-windows/results/2026-09-14/reclamation-close-deadline.json)
+once left two native objects in the final batch; five repeats of that unchanged
+optimized binary reached zero. Increasing the deadline did not solve it:
+[another run retained every native pair](../../spikes/related-windows/results/2026-09-14/reclamation-animation-held.json)
+despite zero Z runtimes. Explicit snapshot autorelease pools and AppKit event
+draining also did not change that reproducer.
+
+A macOS `leaks --traceTree` inspection found a direct strong reference from
+AppKit's `_NSWindowTransformAnimation._animatingWindow` to a closed native window.
+Disabling ordering animations in the diagnostic binary then produced zero
+objects at every checkpoint in three runs. No private API was called. The final
+gate therefore separates two claims:
+
+- `factory-churn` disables AppKit ordering animations **only in the ignored test
+  workspace** and requires zero weak Z runtimes and native window/WebView objects
+  after each batch. It allows at most three seconds per batch to observe release,
+  under a 30-second process deadline.
+- `factory-animated-churn` keeps normal production animations, requires zero weak
+  Z runtimes, and records native counts without promising when AppKit releases
+  its animation-owned objects. All other factory/close scenarios likewise retain
+  the normal production presentation path.
+
+`--lifetime` runs both. This is not a framework animation change, teardown delay,
+synchronous native destruction guarantee, or process-RSS benchmark. The failed
+traces are retained rather than relabeled as successful reclamation.
+
+The [56-case lifetime matrix](../../spikes/related-windows/results/2026-09-14/reclamation-lifetime.json)
+passes across native/Stage 0, `-O0`/`-O2`, and Vite/packaged delivery. All eight
+controlled churn runs observe zero Z runtimes and native objects after 4, 8, 12,
+and 16 closes. All eight animated churn runs observe zero Z runtimes; this run
+recorded eight native objects at each batch boundary, an observation rather than
+a promised retention bound. The [four registry](../../spikes/related-windows/results/2026-09-14/reclamation-registry.json)
+and [four reservation](../../spikes/related-windows/results/2026-09-14/reclamation-reservations.json)
+headless cases also pass. There are 104 passing focused runtime/CLI tests, both
+TypeScript checks pass, and Z has 73 passing cleanup/adapter regressions plus a
+byte-identical native compiler fixed point (11,957,872 generated C bytes).
+
+The existing [32 authority](../../spikes/related-windows/results/2026-09-14/reclamation-authority.json),
+[32 production-creation](../../spikes/related-windows/results/2026-09-14/reclamation-production.json),
+and [40 retirement](../../spikes/related-windows/results/2026-09-14/reclamation-retirement.json)
+WebKit cases pass too: 160 real native executions in total. The first Stage 0
+retirement emission reached its 120-second compilation deadline. Retrying only
+that half passed under the unchanged deadline; the archive combines its 20
+cases with the first run's 20 passing native cases. That timeout occurred during
+compilation, not native execution.
+
+`bun cli/src/test-notes-launch-macos.ts` passes both packaged and dev Z Notes
+launches: secondary launch forwarding, native worker/service calls, WebView
+checks, ordered service/worker shutdown, endpoint cleanup, and Vite port 5173
+release. These runs use the newly rebuilt native compiler. No ASan process is
+used; all GUI tests run sequentially with enforced deadlines.
+
+An additional generated-code audit noticed that `window.title = move title`
+converts to NSString without an apparent release of the original Z String
+buffer. This is queued upstream for an isolated allocation-ledger regression
+covering moves, temporary copies, and borrows; it is not yet claimed fixed or
+runtime-reproduced. The weak graph probes do not measure those buffers. Close
+that separate conversion issue before claiming allocation-stable window churn.
+
+The supplied September 14 00:31 crash report was an older `native-O0` harness
+run: owner closure called `stopMacOSRunLoop`, which aborted in
+`Once<MacOSApplicationHost>.get()`. It shows an explicit guard abort, not a
+memory-access fault. The report lacks the guard's stderr, so the precise Once
+state cannot be recovered. The current authority fixture initializes the host
+and keeps its lifetime alive through `closeAllNativeWindows`; that setup landed
+after the reported run. Final owner closure remains in the regression matrix.
+
+**Scope boundary:** ordinary independent windows still use
+`MacOSWindowRegistry.retiredNativeWindows`. Removing that hold needs its own
+approval and native lifetime checks. Do not extrapolate related-window evidence
+to that path. Automatic stylesheet/theme/HMR synchronization and explicit child
+`inject` selection likewise remain proposals for deliberation, not new defaults.

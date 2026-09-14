@@ -72,12 +72,13 @@ unrelated windows stay alive. A Z `closeRequested` listener may veto the closure
 Reloading/navigating a related child retires that original document rather than
 retargeting the handle.
 
-Current native-memory limitation: macOS keeps the closed, published window's
-native runtime graph until application shutdown. Routing and callbacks are
-retired, but repeatedly opening and closing inspectors still grows retained
-native objects. Prompt reclamation is under review; do not treat this tier as
-constant-memory window churn. Releasing your own DOM/handle references remains
-important independently of that framework limitation.
+On macOS, accepted closure releases the related window's framework-owned runtime
+graph after revoking routing; closed related windows are not held until application
+shutdown. In-flight native callbacks keep their receivers alive through return.
+AppKit/WebKit may finish native object release on subsequent run-loop turns, so
+`INVALIDATED` is not a native deallocation barrier. Releasing your own DOM/handle
+references remains important. This does not promise constant process RSS: WebKit,
+JavaScript garbage collection, and native allocators have independent lifetimes.
 
 ## Shared state does not change where code runs
 

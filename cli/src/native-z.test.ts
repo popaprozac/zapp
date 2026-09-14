@@ -639,6 +639,10 @@ describe("Z native host inputs", () => {
     expect(macOSPlatform).toContain("startConfiguredWindowSmokeSupport(");
     expect(macOSPlatform).toContain("observeConfiguredWebViewResponse(");
     expect(macOSPlatform).toContain("retiredNativeWindows: Array<MacOSWindowRuntime>");
+    expect(macOSPlatform).not.toContain("private retired: Array<MacOSWindowRuntime>");
+    expect(macOSPlatform).toContain("this.webView.navigationDelegate = null");
+    expect(macOSPlatform).toContain("this.webView.UIDelegate = null");
+    expect(macOSPlatform).toContain("this.window.delegate = null");
     expect(macOSPlatform).toContain("recordClosedNativeWindow");
     expect(macOSPlatform).toContain("stopMacOSRunLoop()");
     expect(macOSPlatform).toContain("application.stop(null)");

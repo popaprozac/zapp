@@ -1,0 +1,68 @@
+[
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-ready",
+    "pass": true,
+    "status": 0,
+    "stdout": "related authority WebKit: pass=true completed=2 closed=2 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-rollback",
+    "pass": true,
+    "status": 0,
+    "stdout": "related authority WebKit: pass=true completed=0 closed=1 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-invalid",
+    "pass": true,
+    "status": 0,
+    "stdout": "related authority WebKit: pass=true completed=0 closed=1 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-veto",
+    "pass": true,
+    "status": 0,
+    "stdout": "related authority WebKit: pass=true completed=1 closed=1 vetoes=1\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-denied",
+    "pass": true,
+    "status": 0,
+    "stdout": "related authority WebKit: pass=true completed=0 closed=0 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  },
+  {
+    "frontend": "native",
+    "optimization": "-O0",
+    "mode": "vite",
+    "scenario": "factory-churn",
+    "pass": false,
+    "status": 1,
+    "stdout": "related churn: observed=4 alive=0 native=4\nrelated churn: observed=8 alive=0 native=8\nrelated churn: observed=12 alive=0 native=12\nrelated churn: observed=16 alive=0 native=16\nrelated authority WebKit: pass=false completed=16 closed=16 vetoes=0\n",
+    "stderr": "",
+    "timedOut": false
+  }
+]

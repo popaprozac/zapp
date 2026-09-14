@@ -22,4 +22,15 @@ internal class MacOSWindowRuntime on thread.main {
   readonly registration: objc.Registration;
   readonly document: BridgeDocument;
   readonly capabilitySelection: CapabilitySelection;
+
+  deinit {
+    // Routing has already been revoked. Clear non-owning native delegate
+    // slots before releasing their owned adapters and the content graph.
+    // Generated protocol/subclass entries pin in-flight receivers through
+    // reentrant close, allowing related runtimes to be reclaimed promptly.
+    this.webView.navigationDelegate = null;
+    this.webView.UIDelegate = null;
+    this.window.delegate = null;
+    this.webView.stopLoading();
+  }
 }

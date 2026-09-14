@@ -9,10 +9,15 @@ document, with ordinary object/function references and same-origin enforcement.
 
 Start with [why, findings, and next steps](../../docs/experiments/related-windows.md).
 See [BENCHMARKS.md](BENCHMARKS.md) for the three-way measurements and limits.
-The [approved public contract](../../docs/plans/related-windows.md) now has runtime
-types and a separately tested lifetime helper. Production document routing and
-private native child allocation and logical window adoption are integrated and
-tested separately from this oracle; the public factory remains gated.
+The production [RelatedWindow guide](../../docs/related-windows.md) documents the
+implemented public factory. This directory retains the independent research
+oracle and the production integration harness; historical findings below are
+not the current API status. See the [checkpoint plan](../../docs/plans/related-windows.md)
+for routing, authority, creation, and lifetime evidence. Run
+`bun run spikes/related-windows/shell.ts --lifetime` from the repository root for
+the 56-case public-factory/reclamation matrix. Controlled churn isolates native
+ordering animations; animated churn tests Z graph release without promising
+immediate native-object deallocation or constant process RSS.
 
 ## Why Objective-C here?
 
@@ -438,7 +443,8 @@ Renderer process identities are not measured or promised.
 Related windows share trust and owner/scheduling coupling. They are not a
 replacement for independently isolated windows, and a headless JS worker cannot
 provide the missing DOM owner. Public syntax and lifecycle rules are recorded in
-the approved contract; the production factory remains gated on integration.
+the approved contract. Production integration has separate evidence linked at
+the top of this document; the early oracle alone does not establish those claims.
 
 ## Files
 

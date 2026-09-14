@@ -36,9 +36,9 @@ class DesktopWindowDelegate on thread.main
   function willClose(
     in notification: WebKit.NSNotification
   ): void as "windowWillClose:" {
-    // Keep the Z-owned AppKit graph alive until NSApplication.run has fully
-    // unwound its autorelease pools. Native routing stops immediately, while
-    // the application runtime retains its graph until the run loop returns.
+    // The generated protocol entry pins this receiver through reentrant
+    // removal of a related runtime. Routing stops now; that graph need not
+    // remain alive until the application run loop exits.
     const id = copy this.id;
     const nativeId = this.nativeId;
     // Revoke document routing before a user closed listener can reenter.

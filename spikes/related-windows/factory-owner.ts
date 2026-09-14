@@ -13,7 +13,8 @@ bridge.invoke = (method: string, args?: Record<string, unknown>, options?: any) 
 function require(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 async function run() {
   const scenario = new URLSearchParams(location.search).keys().next().value;
-  if (scenario === "factory-churn" || scenario === "factory-retained-churn") {
+  if (scenario === "factory-churn" || scenario === "factory-animated-churn") {
+    const animated = scenario === "factory-animated-churn";
     const samples: number[] = [];
     for (let batch = 0; batch < 4; batch++) {
       for (let index = 0; index < 4; index++) {
@@ -24,13 +25,17 @@ async function run() {
         child.close();
         await invalidated;
       }
-      // Let native callbacks and the next run-loop iteration unwind. The
-      // assertion observes weak Z owners, not allocator/process RSS heuristics.
-      await new Promise(resolve => setTimeout(resolve, 100));
-      samples.push(await bridge.invoke("sampleRuntime"));
+      // Native close processing and autoreleased objects can finish on a later
+      // run-loop turn, especially under compiler/test load. This is a bounded
+      // observation deadline, never a framework teardown delay or RSS heuristic.
+      const until = Date.now() + 3_000;
+      do {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (animated || await bridge.invoke("countRuntime") === 0) break;
+      } while (Date.now() < until);
+      samples.push(await bridge.invoke(animated ? "sampleOwnedRuntime" : "sampleRuntime"));
     }
-    const baseline = scenario === "factory-retained-churn";
-    require(samples.every((count, index) => count === (baseline ? (index + 1) * 12 : 0)),
+    require(samples.every(count => count === 0),
       `retained closed runtime/native graphs: ${samples.join(",")}`);
   } else if (scenario === "factory-denied") {
     let denied = false;
