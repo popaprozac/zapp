@@ -87,6 +87,10 @@ export async function verifySvelteInspectors(model: NotesModel) {
     // Restore persisted seed data so this probe composes with launch tests.
     model.setTitle(note.id, note.title); await model.save(note.id);
     assert(!get(model.state).error, "restoring the seed title");
+    if (import.meta.env.VITE_ZAPP_STYLE_SMOKE === "1") {
+      const { verifyStyleSharing } = await import("./style-experiment/webkit-smoke");
+      await verifyStyleSharing();
+    }
     document.body.dataset.svelteInspector = "ok";
   } finally { manager.dispose(); }
 }

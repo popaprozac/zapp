@@ -1,37 +1,69 @@
-/* Demo-owned child stylesheet. Keep selectors scoped to the inspector;
-   this is not an application-style or theme inheritance mechanism. */
+/* Demo-owned CSS: translucent surfaces WITHIN an opaque web document.
+   This does not enable native window transparency or macOS vibrancy. */
 [data-note-inspector] {
   --inspector-style-ready: yes;
+  --ink: light-dark(#242b37, #eef1f7);
+  --muted: light-dark(#626b7b, #aeb9cb);
+  --line: light-dark(rgb(83 104 142 / 15%), rgb(192 211 240 / 15%));
+  --surface: light-dark(rgb(255 255 255 / 66%), rgb(36 45 63 / 70%));
   box-sizing: border-box;
   min-height: 100vh;
-  padding: 24px;
-  color-scheme: light dark;
-  color: light-dark(#20242b, #ecedf0);
-  background: light-dark(#f6f8fc, #202329);
-  font: 15px/1.5 system-ui, sans-serif;
-}
-[data-note-inspector] h1 { margin: 0; font-size: 24px; }
-[data-note-inspector] .eyebrow { margin: 0; font-size: 12px; opacity: .6; }
-[data-note-inspector] .hint { opacity: .7; }
-[data-note-inspector] dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
-[data-note-inspector] dt { opacity: .65; }
-[data-note-inspector] dd { margin: 0; overflow-wrap: anywhere; }
-[data-note-inspector] label { display: block; margin: 20px 0 6px; }
-[data-note-inspector] input {
-  box-sizing: border-box;
   width: 100%;
-  padding: 10px;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid #80808070;
-  border-radius: 8px;
+  padding: 22px;
+  color-scheme: light dark;
+  color: var(--ink);
+  background:
+    radial-gradient(ellipse at 0 0, light-dark(#e0e8fa, #283851), transparent 70%),
+    linear-gradient(145deg, light-dark(#f3f5fa, #1b2433), light-dark(#e8edf3, #202731));
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
-[data-note-inspector] button { padding: 8px 12px; margin-top: 12px; font: inherit; cursor: pointer; }
-[data-note-inspector] footer { margin-top: 20px; border-top: 1px solid #80808040; }
+[data-note-inspector] *, [data-note-inspector] *::before { box-sizing: border-box; }
+[data-note-inspector] header { display: flex; align-items: center; gap: 12px; }
+[data-note-inspector] h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.4px; }
+[data-note-inspector] .eyebrow { margin: 0; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; }
+[data-note-inspector] .inspector-icon {
+  display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--surface);
+  color: light-dark(#4265a1, #a4c3ff); font: 600 21px Georgia, serif;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 3%);
+}
+[data-note-inspector] .connected { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: 11px; }
+[data-note-inspector] .connected span { width: 6px; height: 6px; border-radius: 50%; background: light-dark(#368359, #70c69a); }
+[data-note-inspector] .hint { color: var(--muted); margin: 16px 0 20px; font-size: 12px; }
+[data-note-inspector] .details {
+  border: 1px solid var(--line); border-radius: 13px; background: var(--surface);
+  box-shadow: 0 1px 1px rgb(255 255 255 / 8%) inset, 0 5px 18px rgb(27 39 63 / 3%);
+}
+[data-note-inspector] h2 { margin: 0; padding: 12px 14px 8px; font-size: 11px; color: var(--muted); font-weight: 650; }
+[data-note-inspector] dl { margin: 0; padding: 0 14px 6px; }
+[data-note-inspector] dl > div { display: grid; grid-template-columns: 1fr minmax(0, 1.2fr); gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
+[data-note-inspector] dt { color: var(--muted); }
+[data-note-inspector] dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+[data-note-inspector] .identifier { font-family: ui-monospace, monospace; font-size: 12px; }
+[data-note-inspector] .badge { padding: 2px 7px; border-radius: 5px; background: light-dark(#e6ebf2, #344156); font-size: 11px; }
+[data-note-inspector] .unsaved { color: light-dark(#8a590b, #f1c36e); }
+[data-note-inspector] .edit { margin: 20px 0; }
+[data-note-inspector] label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+[data-note-inspector] input {
+  width: 100%; min-width: 0; padding: 9px 11px; font: inherit; color: inherit;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%) inset;
+}
+[data-note-inspector] button {
+  padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer; color: inherit;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+[data-note-inspector] button:hover:not(:disabled) { background: light-dark(#fff, #39475b); }
+[data-note-inspector] button.primary { width: 100%; margin-top: 10px; color: white; background: #426ba9; border-color: transparent; }
+[data-note-inspector] button.primary:hover:not(:disabled) { background: #365f9d; }
+[data-note-inspector] button:disabled { cursor: default; opacity: .45; }
+[data-note-inspector] :is(button, input):focus-visible { outline: 2px solid light-dark(#527aba, #a2c2fc); outline-offset: 3px; }
+[data-note-inspector] footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+[data-note-inspector] footer > span { max-width: 150px; font-size: 10px; color: var(--muted); }
 [data-note-inspector] [role="alert"] { color: light-dark(#ad2222, #ffaaaa); }
 @media (max-width: 360px) {
   [data-note-inspector] { padding: 16px; }
-  [data-note-inspector] dl { grid-template-columns: 1fr; gap: 2px; }
-  [data-note-inspector] dd { margin-bottom: 8px; }
+  [data-note-inspector] dl > div { grid-template-columns: 1fr 1fr; }
+  [data-note-inspector] .connected { font-size: 0; }
 }

@@ -33,7 +33,8 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     ZAPP_Z_NOTES_IDENTIFIER: identifier,
     ZAPP_NATIVE_LANG: "z",
     ZAPP_APPLICATION_WORKER_SMOKE: "1",
-    VITE_ZAPP_SVELTE_SMOKE: process.env.VITE_ZAPP_SVELTE_SMOKE ?? "0",
+    VITE_ZAPP_SVELTE_SMOKE: process.env.VITE_ZAPP_STYLE_SMOKE === "1" ? "1" : process.env.VITE_ZAPP_SVELTE_SMOKE ?? "0",
+    VITE_ZAPP_STYLE_SMOKE: process.env.VITE_ZAPP_STYLE_SMOKE ?? "0",
   };
   const primary = Bun.spawn([process.execPath, path.join(notes, mode === "dev" ? "dev.ts" : "run.ts"), "--smoke"], {
     cwd: repo, env, detached: true, stdout: "pipe", stderr: "pipe",
@@ -99,6 +100,9 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     if (env.VITE_ZAPP_SVELTE_SMOKE === "1") {
       assert.ok(output.includes("Svelte inspector WebKit checks passed window=1"),
         "The primary must complete the cross-document Svelte probe");
+    }
+    if (env.VITE_ZAPP_STYLE_SMOKE === "1") {
+      assert.ok(output.includes('"styleExperiment":"ok"'), "The private stylesheet experiment must pass");
     }
     assert.ok(!output.includes("deep link opened note"), "URL-looking arguments must not become implicit URL events");
     if (mode === "dev") assert.ok(output.includes("Z Notes dev smoke released Vite port 5173"), output);

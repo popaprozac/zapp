@@ -4,6 +4,11 @@ Status: explicit child-stylesheet integration (2026-09-14).
 General related-window stylesheet sharing is the agreed future workstream, not
 a default introduced by this demo.
 
+The first **private DOM stylesheet proof** now passes in packaged and Vite
+WebKit. It is opt-in testing only; see the [styling checkpoint](../../docs/plans/related-window-styling.md#private-dom-stylesheet-checkpoint--2026-09-14).
+Run it with `VITE_ZAPP_STYLE_SMOKE=1 bun cli/src/test-notes-launch-macos.ts`
+from the repository root (or append `packaged` / `dev`).
+
 The application uses Svelte 5.57.0 and its Vite plugin 7.3.0, pinned only in the
 Notes workspace. The reusable Zapp runtime has no Svelte dependency. The notes
 list/editor and metadata inspector share one owner-held Svelte store. Persistent
@@ -26,6 +31,10 @@ one element in the child head before mounting, removes it on invalidation or
 creation rollback, and creates a fresh element when reopening. No observer or
 global style-node registry is added. Closing one inspector does not remove its
 siblings' styles.
+
+The normal inspector's grouped panel treatment uses translucent-looking CSS
+surfaces within an opaque document. It does not turn on macOS vibrancy or native
+window transparency. Its initial size is 440 × 600, with narrow-layout rules.
 
 This is deliberately explicit application code. It does not inherit the owner's
 CSS, theme, or injection profiles. Changes to the imported CSS follow the host's
@@ -86,8 +95,10 @@ private CSS registry. A general framework-neutral stylesheet-sharing layer is
 the agreed follow-up, with the remaining choices recorded in the
 [styling plan](../../docs/plans/related-window-styling.md).
 
-No Svelte internals were patched or called. No automatic CSS/theme synchronization,
+No Svelte internals were patched or called. No production automatic CSS/theme synchronization,
 `inject` option, framework adapter API, or change to factory readiness was added.
-Live CSS HMR, lazy styling, font/paint readiness, and complete closed-document
-collection remain separate validation work. Removing this known registry path
+Live CSS HMR, font/paint readiness, and complete closed-document collection
+remain separate validation work. The private proof now covers lazy DOM styling,
+relative URLs, ordering, queued updates, and disposal but is not enabled in the
+ordinary app. Removing this known registry path
 and proving local cleanup is not a whole-process memory or constant-RSS claim.

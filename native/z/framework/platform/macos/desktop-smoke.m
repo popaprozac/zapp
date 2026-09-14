@@ -143,6 +143,8 @@ void zapp_desktop_smoke_observe_response(
           @"shellReveal:document.body?.dataset?.shellReveal??null,"
           @"deepLinkNote:document.body?.dataset?.deepLinkNote??null,"
           @"svelteInspector:document.body?.dataset?.svelteInspector??null,"
+          @"styleExperiment:document.body?.dataset?.styleExperiment??null,"
+          @"styleMetrics:document.body?.dataset?.styleMetrics??null,"
           @"requestedNote:new URLSearchParams(location.search).get('note'),"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
@@ -208,6 +210,9 @@ void zapp_desktop_smoke_observe_response(
           [zapp_desktop_smoke_responses() addObject:@(native_id)];
           if (zapp_svelte_smoke_enabled()) {
             printf("Svelte inspector WebKit checks passed window=%d\n", native_id);
+            if ([(NSString *)state containsString:@"\"styleExperiment\":\"ok\""]) {
+              printf("Private style WebKit report: %s\n", [(NSString *)state UTF8String]);
+            }
           }
           if ([(NSString *)state containsString:@"\"deepLinkNote\":\"1\""]) {
             printf("activation WebView selected note 1\n");

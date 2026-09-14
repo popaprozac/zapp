@@ -22,7 +22,7 @@ export function createInspectorManager(model: NotesModel) {
     let target: HTMLDivElement | undefined;
     let rollback: (() => void) | undefined;
     try {
-      handle = await createRelatedWindow({ title: "Note inspector", width: 440, height: 520 });
+      handle = await createRelatedWindow({ title: "Note inspector", width: 440, height: 600 });
       if (disposed) { handle.close(); return; }
       const windowHandle = handle;
       target = handle.document.createElement("div");
