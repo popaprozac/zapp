@@ -152,7 +152,7 @@ mouse-up may not be delivered, so cleanup must not depend solely on mouse-up.
 The next checkpoint is the bounded native gesture hookup and per-window layout
 insets, followed by the custom Notes header and user visual review.
 
-## Native gesture prototype: upstream deliberation required
+## Native gesture prototype: observer installation still pending
 
 The one-shot DOM snapshot component and unit tests now exist in
 `bootstrap/window-drag.ts`. It requires a trusted left mouse-down, matching
@@ -165,19 +165,30 @@ The native integration draft is saved in
 Do not apply it as a working implementation: it did not pass Z checking.
 Production native source has been restored to the last working checkpoint.
 
-Confirmed blockers:
+The two original upstream blockers are resolved in Z commits `9faef330` and
+`2b2883cd`: ordinary Z weak observer fields and private synchronous Z-only
+helpers now execute with guarded receivers in both compiler paths.
 
-- `Option<Weak<MacOSWindowGestures>>` is rejected as a native stored field
-  (Z0814: only String, scalars, plain native records and strong imported ObjC
-  references are accepted). The observer owns window/view; the window must
-  refer back weakly to avoid a retain cycle.
-- Every native-subclass method, even a private Z helper, requires a native
-  selector. Z-only helper methods need an explicit upstream design decision.
+Resuming integration exposed one additional boundary, verified with minimal
+`z check` probes through Stage 0 and the native driver:
 
-The proposed upstream scope is captured in the Z repository's
-`docs/native-subclass-z-state-design.md`: managed Z state plus ordinary private
-Z helpers in native subclasses, with native `as` entries retaining their ABI
-and receiver guards. No framework-specific registry or raw pointer workaround.
+- The runtime constructs and owns the observer, then must install its weak
+  handle on the native window. A non-private Z-only setter is still rejected.
+- Giving that setter `as "selector:"` correctly rejects its `Weak<T>` parameter:
+  an ordinary Z weak handle is not an Objective-C parameter ABI.
+- Making the setter private prevents the runtime from calling it. The earlier
+  upstream fixtures created observers inside native entries, so they did not
+  exercise this external installation step.
+
+Proposed next upstream extension, awaiting approval: allow ordinary Z visibility
+on synchronous Z-only instance methods while retaining the existing effect,
+receiver-access, lifetime and executor rules. No `as` means a Z call; explicit
+`as` remains the native ABI boundary. Do not route this through a registry,
+raw pointer, invented selector ABI, or a constructor workaround.
+
+The Z repository's `docs/native-subclass-z-state-design.md` describes the landed
+bounded tiers. The saved prototype remains uncompiled and unapplied; its
+temporary selector annotations are not an approved implementation.
 
 Once approved and implemented upstream, resume by validating native event/input
 ordering, callback expiration, document retirement, first-click behavior and
