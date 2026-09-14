@@ -16,12 +16,14 @@ import { DesktopMessageHandler } from "../framework/platform/macos/message-handl
 import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
 import { installWebViewScripts } from "../framework/platform/macos/webview-injections.zs";
 import { createDesktopAssetSchemeHandler } from "../framework/platform/macos/scheme-handler.zs";
-import { WindowManager, WindowBackend, WindowCreateOperation, WindowOperation, WindowTitleOperation, createWindowManager } from "../framework/window.zs";
+import { WindowManager, WindowOptions, WindowBackend, WindowCreateOperation, WindowOperation, WindowTitleOperation, createWindowManager } from "../framework/window.zs";
 import { WindowError } from "../framework/application-error.zs";
 import { WindowCloseRequestedEvent, WindowClosedEvent } from "../framework/events.zs";
 import { WindowEventSubscription } from "../framework/window-events.zs";
+import { MacOSWindow } from "../framework/platform/macos/window-resize.zs";
+import { createDesktopWindowDelegate, NativeWindowClosedOperation } from "../framework/platform/macos/window-delegate.zs";
 
-function backend(owner: Weak<MacOSRelatedWindows>): WindowBackend on thread.main {
+function backend(owner: Weak<MacOSRelatedWindows>, root: MacOSWindow): WindowBackend on thread.main {
   const create: WindowCreateOperation = (in id: String, in options): void => {};
   const show: WindowOperation = move (in id: String): void => {
     const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
@@ -32,6 +34,7 @@ function backend(owner: Weak<MacOSRelatedWindows>): WindowBackend on thread.main
     match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.orderOut(null); none => {} }
   };
   const close: WindowOperation = move (in id: String): void => {
+    if (id == "owner") { root.performClose(null); return; }
     const windows = match (attempt owner.upgrade()) { success(value) => value; failure(_) => return; };
     match (windows.nativeWindow(in id)) { some(runtime) => runtime.window.performClose(null); none => {} }
   };
@@ -72,6 +75,7 @@ class State on thread.main {
   failed: boolean;
   closes: i32;
   closeRequests: i32;
+  allowClose: boolean;
 
   function current(): Option<MacOSRelatedWindows> {
     return match (in this.coordinator) {
@@ -88,8 +92,13 @@ class State on thread.main {
         const window = match (this.windows.get(in id)) { some(value) => value; none => { this.failed = true; return; } };
         const weakState = weak this;
         const request = match (attempt window.events.closeRequested.subscribe(move (in event: WindowCloseRequestedEvent): void => {
-          event.cancel();
-          match (attempt weakState.upgrade()) { success(state) => { state.closeRequests = state.closeRequests + 1; } failure(_) => {} }
+          match (attempt weakState.upgrade()) {
+            success(state) => {
+              state.closeRequests = state.closeRequests + 1;
+              if (!state.allowClose) event.cancel();
+            }
+            failure(_) => {}
+          }
         })) { success(value) => value; failure(_) => { this.failed = true; return; } };
         this.subscriptions.push(request);
         const closed = match (attempt window.events.closed.subscribe(move (in event: WindowClosedEvent): void => {
@@ -97,7 +106,7 @@ class State on thread.main {
             success(state) => {
               state.closes = state.closes + 1;
               const coordinator = match (state.current()) { some(value) => value; none => { state.failed = true; return; } };
-              if (coordinator.count() != 0 || count(state.windows) != 0) state.failed = true;
+              if (coordinator.count() != 0 || count(state.windows) != 1) state.failed = true;
               const reservation = match (copy state.reservation) { some(value) => value; none => { state.failed = true; return; } };
               if (coordinator.documents.isReady(in reservation.child)) state.failed = true;
               match (coordinator.nativeWindow(in event.windowId)) { some(_) => { state.failed = true; } none => {} }
@@ -113,7 +122,7 @@ class State on thread.main {
       failed(_) => {
         this.failures = this.failures + 1;
         const coordinator = match (this.current()) { some(value) => value; none => { this.failed = true; return; } };
-        if (coordinator.count() != 0 || count(this.windows) != 0) this.failed = true;
+        if (coordinator.count() != 0 || count(this.windows) != 1) this.failed = true;
         if (this.completionId != 0) {
           const identity = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
           if (!this.owner.isCurrent(in identity)) { this.failed = true; return; }
@@ -135,7 +144,9 @@ class State on thread.main {
         const completion: RelatedCreationReply = move (result: RelatedCreationResult): void => {
           match (attempt weakOwner.upgrade()) { success(owner) => owner.completed(move result); failure(_) => {} }
         };
-        const reservation = match (coordinator.prepare(this.owner, this.view, in identity, 2,
+        const ownerId = "owner";
+        const logicalOwner = match (this.windows.get(in ownerId)) { some(value) => value; none => { this.failed = true; return; } };
+        const reservation = match (coordinator.prepare(this.owner, this.view, logicalOwner, in identity, 2,
           "Zapp production related child", 320, 200, completion)) {
           some(value) => value; none => { this.failed = true; return; }
         };
@@ -154,6 +165,26 @@ class State on thread.main {
       }
       if (request.m == "completion") { this.completionId = request.id; return; }
       if (request.m == "stopManager") { this.windows.stop(); reply(this.view, in identity, request.id, "true"); return; }
+      if (request.m == "familyVeto") {
+        const id = "owner";
+        const root = match (this.windows.get(in id)) { some(value) => value; none => { this.failed = true; return; } };
+        root.close();
+        const child = match (copy this.reservation) { some(value) => value; none => { this.failed = true; return; } };
+        if (this.closeRequests != 2 || this.closes != 0 || count(this.windows) != 2
+          || !this.owner.isCurrent(in identity) || !coordinator.documents.isReady(in child.child)) { this.failed = true; return; }
+        reply(this.view, in identity, request.id, "false");
+        return;
+      }
+      if (request.m == "familyAccept") {
+        this.allowClose = true;
+        const id = "owner";
+        const root = match (this.windows.get(in id)) { some(value) => value; none => { this.failed = true; return; } };
+        root.close();
+        if (this.closeRequests != 3 || this.closes != 1 || count(this.windows) != 0
+          || this.owner.isCurrent(in identity) || coordinator.count() != 0) this.failed = true;
+        this.passed = true;
+        return;
+      }
       if (request.m == "pass") { this.passed = true; return; }
     }
     if (request.m == "echo" && identity.windowId == 2 && this.completions == 1) {
@@ -191,7 +222,8 @@ class RootNavigation on thread.main implements WebKit.WKNavigationDelegate {
 function main(): i32 on thread.main {
   const args = process.args();
   if (args.length < 2 || args.length > 4) return 2;
-  const stopped = args.length == 4;
+  const stopped = args.length == 4 && args[3] == "--stopped";
+  const family = args.length == 4 && args[3] == "--family";
   const app = WebKit.NSApplication.sharedApplication;
   app.setActivationPolicy(WebKit.NSApplicationActivationPolicyRegular);
   app.finishLaunching();
@@ -217,10 +249,13 @@ function main(): i32 on thread.main {
   const scheme = createDesktopAssetSchemeHandler();
   configuration.setURLSchemeHandler(scheme, forURLScheme: "zapp");
   const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 320, 200), configuration: configuration);
+  const window = new MacOSWindow(WebKit.NSMakeRect(100, 100, 320, 200),
+    WebKit.NSWindowStyleMaskTitled | WebKit.NSWindowStyleMaskClosable);
+  window.contentView = view;
   const windows = createWindowManager();
   const state = new State({ owner, view, windows, subscriptions: Array<WindowEventSubscription>(), coordinator: Option<MacOSRelatedWindows>.none,
     reservation: Option<RelatedWindowReservation>.none, identity: Option<RelatedDocumentIdentity>.none,
-    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0 });
+    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0, allowClose: false });
   const weakState = weak state;
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => {
     match (attempt weakState.upgrade()) { success(state) => state.route(move message, identity); failure(_) => {} }
@@ -238,7 +273,8 @@ function main(): i32 on thread.main {
     }
   };
   const related = new MacOSRelatedWindows(documents, creations, route, weak windows, retiring);
-  match (attempt windows.start(backend(weak related), false)) { success => {} failure(_) => return 5; }
+  match (attempt windows.start(backend(weak related, window), false)) { success => {} failure(_) => return 5; }
+  match (windows.adoptNative("owner", WindowOptions())) { some(_) => {} none => return 6; }
   state.coordinator = Option.some(related);
   const handler = new DesktopMessageHandler({ document: owner, expectedView: view, expectedController: controller, routeMessage: route });
   const registration = objc.register({ add: controller.addScriptMessageHandler(handler, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
@@ -247,12 +283,13 @@ function main(): i32 on thread.main {
   const ui = createRelatedWindowUIDelegate(related);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;
-  const window = WebKit.NSWindow.alloc().initWithContentRect(WebKit.NSMakeRect(100, 100, 320, 200),
-    styleMask: WebKit.NSWindowStyleMaskTitled, backing: WebKit.NSBackingStoreBuffered, defer: false);
-  window.releasedWhenClosed = false;
-  window.contentView = view;
+  const closed: NativeWindowClosedOperation = move (nativeId: i32): void => {
+    owner.close(); related.pruneInvalidated();
+  };
+  const delegate = createDesktopWindowDelegate("owner", 1, window, view, weak windows, closed);
+  window.delegate = delegate;
   window.makeKeyAndOrderFront(null);
-  const suffix = stopped ? "?stopped=1" : "";
+  const suffix = stopped ? "?stopped=1" : (family ? "?family=1" : "");
   const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html${suffix}`);
   if (url == null) return 4;
   view.loadRequest(WebKit.NSURLRequest.requestWithURL(url));
@@ -263,9 +300,10 @@ function main(): i32 on thread.main {
   }
   const expected = stopped
     ? state.completions == 0 && state.failures == 2 && state.echoes == 0 && state.closes == 0 && state.closeRequests == 0
-    : state.completions == 1 && state.failures == 1 && state.echoes == 1 && state.closes == 1 && state.closeRequests == 1;
+    : state.completions == 1 && state.failures == 1 && state.echoes == 1 && state.closes == 1 && state.closeRequests == (family ? 3 : 1);
+  const remaining = usize(family ? 0 : 1);
   const pass = !state.failed && state.passed && expected
-    && count(windows) == 0 && related.count() == 0 && creations.count() == 0 && documents.count() == 1;
+    && count(windows) == remaining && related.count() == 0 && creations.count() == 0 && documents.count() == remaining;
   related.closeAll();
   windows.stop();
   owner.close();

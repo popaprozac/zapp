@@ -5,6 +5,13 @@ Status: research evidence from 2026-09-12; **public contract approved on
 [implementation plan](../plans/related-windows.md) separates the approved API,
 runtime foundation, and remaining integration gates.
 
+Latest production checkpoint: checked-Z allocation/adoption and family-wide
+cancellable close preflight now pass the real WebKit matrix, with a separate
+real-task cancellation matrix. See the
+[family close checkpoint](../plans/related-windows.md#family-close-preflight-checkpoint)
+for current scope. The oracle findings below retain their original boundaries;
+they are not claims that every production lifecycle gate is complete.
+
 Runnable source: [spikes/related-windows](../../spikes/related-windows/README.md).
 Measurements: [benchmark report](../../spikes/related-windows/BENCHMARKS.md).
 

@@ -15,6 +15,9 @@ Production checked-Z allocation, one-shot completion/failure replies, and native
 creation deadlines are now wired and exercised by a private WebKit harness.
 Activated children are adopted into `app.windows` without another native
 allocation, using the ordinary window controls and Z event lifecycle.
+Family-wide close preflight now gives each affected window's synchronous Z
+listener a veto before teardown or task cancellation. Accepted closure retires
+the subtree; unrelated windows remain live.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -202,8 +205,10 @@ validation and physical window teardown remain outside this helper.
       activation acknowledgement, deadline, and partial-creation rollback.
 - [x] Adopt completed related children into the logical window manager and its
       existing controls/Z events, without allocating a second native window.
-- [ ] Carry family close preflight, real Z task cancellation, origin/capability
-      checks, renderer loss, and navigation gates through native integration.
+- [x] Carry family close preflight through the production native path and prove
+      veto-preserved work versus accepted-close cancellation of real Z tasks.
+- [ ] Complete document-bound unsolicited terminal delivery and broader
+      origin/capability, renderer-loss, owner-loss, and navigation integration.
 - [ ] Expose the public factory and add a Z Notes demonstration.
 - [ ] Re-run representative application benchmarks and other-platform probes.
 
@@ -551,7 +556,57 @@ cleanup gaps, fixed in Z commit `20bfaf18`. Z now tests both frontends at both o
 exactly-once destruction of the adapter's Z controller. This is not a claim of
 identical optional layouts, whole-app leak freedom, or first-paint performance.
 
-Public creation remains gated on family-wide cancellable close preflight,
+At that checkpoint, public creation remained gated on family-wide cancellable close preflight,
 document-bound unsolicited events/terminal delivery, and broader owner,
 navigation, and renderer retirement coverage. The private prepare entry is still
 root-owner-only. No new public API, configuration, or permission was introduced.
+
+### Family close preflight checkpoint
+
+Related adoption records the exact live parent `Window` identity, not merely its
+string ID. A stale parent or another manager's identically named window is
+rejected. Parentage is assigned only at adoption and cannot be changed later.
+
+Before an owner closes, the manager snapshots its logical subtree and publishes
+the existing synchronous Z `closeRequested` event to each affected window.
+Any veto refuses that attempt without framework teardown or task cancellation.
+Reentrant attempts to close an overlapping family are refused. If a listener
+adds/removes/replaces a family member or stops the manager, the attempt is also
+refused; a fresh request can inspect the new state. This is not a rollback of
+arbitrary listener side effects: a listener that explicitly commits native
+closure has already changed the application.
+
+After acceptance, committed retirement revokes native document routing and
+cancels descendant task controls. Logical subtree removal is idempotent, and
+closed listeners cannot resurrect stale controls. Committed DOM/native closure
+does not start a second cancellable preflight. Frontend asynchronous vetoes are
+not introduced by this work.
+
+Validation:
+
+- 28 headless window cases cover parent identity, nested families, vetoes,
+  reentrancy, changed membership, terminal lookup, and ordinary controls.
+- Eight ordinary AppKit focus/presentation cases remain green.
+- 24 production WebKit cases cover native/Stage 0 × `-O0`/`-O2` × Vite/packaged
+  × adopted/stopped-manager/family-close scenarios. A real child veto preserves
+  both windows and documents; a later accepted owner close retires both.
+- Four registry cases run real Z tasks: work already started completes after a
+  veto; accepted close cancels running descendants while unrelated work finishes.
+- The packaged Z Notes smoke, TypeScript checks, and 70 focused runtime/CLI tests
+  also pass. Native probes use strict Clang warnings, UBSan, and bounded process
+  groups; these are correctness checks, not new performance measurements.
+
+Evidence: [native WebKit family close](../../spikes/related-windows/results/2026-09-13/family-close.json)
+and [real task lifetime](../../spikes/related-windows/results/2026-09-13/family-close-tasks.json).
+The task test exposed upstream Z timer-frame early completion, match-subject
+closure preparation, borrowed class-field emission, and inline owned-result
+transfer gaps. Z commit `7b62afad` fixes them with exact destructor-count regressions on both
+frontends and optimization levels. Dedicated worker-to-main linear timer
+segments with early completion remain a diagnosed native-compiler boundary;
+ordinary main-executor tasks are covered here.
+
+Next: document-bound unsolicited terminal delivery, then broader owner,
+navigation, and renderer retirement cases before the public factory/demo.
+The private production prepare entry is still root-owner-only: headless nested
+family evidence does not claim an exposed nested creation API. Styling and
+injection proposals remain separate and unapproved.

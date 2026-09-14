@@ -4,6 +4,9 @@ import { Mutex } from "std/sync";
 import { thread } from "std/thread";
 import { delay } from "std/time";
 import console from "std/console";
+import { WindowManager, WindowOptions, WindowBackend, WindowCreateOperation,
+  WindowOperation, WindowTitleOperation, createWindowManager } from "../framework/window.zs";
+import { WindowCloseRequestedEvent } from "../framework/events.zs";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
 import { BridgeDocument } from "../framework/bridge-document.zs";
 import {
@@ -163,6 +166,73 @@ function scheduleShortWork(updates: TaskScope, probe: WorkProbe): TaskControl on
   return updates.schedule(thread.main, async move (): void => await shortWork(probe));
 }
 
+class CloseDecision on thread.main { veto: boolean; }
+
+function startHeadlessWindows(windows: WindowManager): void throws i32 on thread.main {
+  const create: WindowCreateOperation = (in id: String, in options): void => {};
+  const ignore: WindowOperation = (in id: String): void => {};
+  const title: WindowTitleOperation = (in id: String, in title: String): void => {};
+  const state: (in id: String, value: boolean) => void on thread.main = (in id: String, value: boolean): void => {};
+  match (attempt windows.start(WindowBackend({ create, show: ignore, focus: ignore, hide: ignore,
+    minimize: ignore, unminimize: ignore, setMaximized: state, setFullscreen: state, close: ignore, setTitle: title }), false)) {
+    success => {} failure(_) => throw 110;
+  }
+}
+
+async function checkFamilyPreflightCancellation(): void throws i32 on thread.main {
+  const registry = createRelatedDocuments();
+  const owner = try document(registry.registerOwner(1, selection()));
+  const child = try document(registry.beginRelated(in owner, 2)); try ready(registry, in child);
+  const nested = try document(registry.beginRelated(in child, 3)); try ready(registry, in nested);
+  const other = try document(registry.registerOwner(4, selection()));
+  const windows = createWindowManager(); try startHeadlessWindows(windows);
+  const rootWindow = match (windows.adoptNative("root", WindowOptions())) { some(value) => value; none => throw 111; };
+  const childWindow = match (windows.adoptRelatedNative(rootWindow, "child", WindowOptions())) { some(value) => value; none => throw 112; };
+  const nestedWindow = match (windows.adoptRelatedNative(childWindow, "nested", WindowOptions())) { some(value) => value; none => throw 113; };
+  const decision = new CloseDecision({ veto: true });
+  const subscription = match (attempt childWindow.events.closeRequested.subscribe(move (in event: WindowCloseRequestedEvent): void => {
+    if (decision.veto) event.cancel();
+  })) { success(value) => value; failure(_) => throw 114; };
+
+  const preserved = probe();
+  const first = new TaskScope();
+  const ownerTicket = try request(registry.beginRequest(in owner, 1));
+  const childTicket = try request(registry.beginRequest(in child, 1));
+  const nestedTicket = try request(registry.beginRequest(in nested, 1));
+  try verify(registry.attachRequest(in ownerTicket, scheduleShortWork(first, preserved)), 115);
+  try verify(registry.attachRequest(in childTicket, scheduleShortWork(first, preserved)), 116);
+  try verify(registry.attachRequest(in nestedTicket, scheduleShortWork(first, preserved)), 117);
+  await delay(5);
+  try verify(preserved.started() == 3 && preserved.completed() == 0, 118);
+  try verify(!windows.closeRequestedNative(in rootWindow.id), 119);
+  try verify(registry.isReady(in owner) && registry.isReady(in child) && registry.isReady(in nested), 120);
+  await first.close();
+  try verify(preserved.completed() == 3, 121);
+  try verify(registry.finishRequest(in ownerTicket) && registry.finishRequest(in childTicket)
+    && registry.finishRequest(in nestedTicket), 122);
+
+  const cancelled = probe(); const surviving = probe();
+  const second = new TaskScope();
+  const pendingChild = try request(registry.beginRequest(in child, 2));
+  const pendingNested = try request(registry.beginRequest(in nested, 2));
+  const pendingOther = try request(registry.beginRequest(in other, 2));
+  try verify(registry.attachRequest(in pendingChild, scheduleSlowWork(second, cancelled)), 123);
+  try verify(registry.attachRequest(in pendingNested, scheduleSlowWork(second, cancelled)), 124);
+  try verify(registry.attachRequest(in pendingOther, scheduleShortWork(second, surviving)), 125);
+  await delay(5);
+  try verify(cancelled.started() == 2 && surviving.started() == 1, 126);
+  decision.veto = false;
+  try verify(windows.closeRequestedNative(in rootWindow.id), 127);
+  try verify(retireCount(registry, in owner) == 3, 128);
+  windows.closedNative(in rootWindow.id);
+  await second.close();
+  try verify(cancelled.completed() == 0 && surviving.completed() == 1, 129);
+  try verify(!registry.finishRequest(in pendingChild) && !registry.finishRequest(in pendingNested)
+    && registry.finishRequest(in pendingOther) && registry.isReady(in other), 130);
+  retireCount(registry, in other);
+  windows.stop();
+}
+
 async function retireRunningChild(
   registry: RelatedDocuments,
   child: RelatedDocumentIdentity,
@@ -316,6 +386,7 @@ async function main(): i32 throws i32 on thread.main {
   try checkDocumentEndpoint();
   try checkRelatedEndpoint();
   try await checkCancellation();
+  try await checkFamilyPreflightCancellation();
   console.log("related document registry: identity, readiness, authority, generations, cancellation passed");
   return 0;
 }

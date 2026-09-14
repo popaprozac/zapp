@@ -24,6 +24,7 @@ export struct WindowOptions {
 struct WindowRecord {
   window: Window;
   options: WindowOptions;
+  relatedOwner: Option<Window> = Option<Window>.none;
   pendingMinimize: boolean = false;
   presentation: WindowPresentationState = WindowPresentationState();
 }
@@ -229,11 +230,20 @@ class WindowManagerState on thread.main {
   backend: WindowBackend;
   active: boolean;
   pendingFocus: String;
+  preflighting: Array<Window>;
 
-  function adoptNative(inout this, owner: Weak<WindowManager>, id: String, options: WindowOptions): Option<Window> {
+  function adoptNative(inout this, owner: Weak<WindowManager>, id: String, options: WindowOptions,
+    relatedOwner: Option<Window>): Option<Window> {
     if (!this.active || id == "" || this.windows.has(id)) return Option.none;
+    match (in relatedOwner) {
+      some(parent) => {
+        const current = this.get(in parent.id);
+        match (current) { some(value) => { if (value != parent) return Option.none; } none => return Option.none; }
+      }
+      none => {}
+    }
     const window = new Window(copy id, owner);
-    this.windows.set(move id, WindowRecord({ window, options: move options }));
+    this.windows.set(move id, WindowRecord({ window, options: move options, relatedOwner }));
     return Option.some(window);
   }
 
@@ -457,25 +467,76 @@ class WindowManagerState on thread.main {
     inout this,
     in id: String
   ): boolean {
-    const found = this.get(in id);
-    return match (found) {
-      some(window) => {
-        let events = window.events;
-        select events.publishCloseRequested(in id);
+    const family = this.closeFamily(in id);
+    if (family.length == 0) return true;
+    for (const window of family) {
+      for (const pending of this.preflighting) {
+        if (window == pending) return false;
       }
-      none => true;
-    };
+    }
+    for (const window of family) { this.preflighting.push(window); }
+    const active = this.active;
+    let allowed = true;
+    for (const window of family) {
+      if (!window.events.publishCloseRequested(in window.id)
+        || this.active != active || !this.sameCloseFamily(in id, in family)) {
+        allowed = false;
+        break;
+      }
+    }
+    let remaining = Array<Window>();
+    for (const pending of this.preflighting) {
+      let included = false;
+      for (const window of family) { if (window == pending) included = true; }
+      if (!included) remaining.push(pending);
+    }
+    this.preflighting = move remaining;
+    return allowed;
+  }
+
+  // Snapshot owned window identities before callbacks. Parentage can only be
+  // assigned at native adoption, against a still-live owner, so it is acyclic.
+  private function closeFamily(in id: String): Array<Window> {
+    let family = Array<Window>();
+    match (this.get(in id)) { some(window) => family.push(window); none => return family; }
+    let index: usize = 0;
+    while (index < family.length) {
+      const parent: Window = family[index];
+      for (const entry of this.windows) {
+        match (in entry.value.relatedOwner) {
+          some(owner) => { if (owner == parent) family.push(entry.value.window); }
+          none => {}
+        }
+      }
+      index = index + 1;
+    }
+    return family;
+  }
+
+  private function sameCloseFamily(in id: String, in expected: Array<Window>): boolean {
+    const current = this.closeFamily(in id);
+    if (current.length != expected.length) return false;
+    for (const window of expected) {
+      let found = false;
+      for (const candidate of current) { if (window == candidate) found = true; }
+      if (!found) return false;
+    }
+    return true;
   }
 
   function closedNative(inout this, in id: String): void {
-    if (this.pendingFocus == id) this.pendingFocus = "";
-    const removed = this.windows.remove(id);
-    match (removed) {
-      some(record) => {
-        let events = record.window.events;
-        events.publishClosed(in id);
-      }
-      none => {}
+    // Committed closure is not another preflight. Remove the complete logical
+    // subtree before user callbacks; native routing retirement happens first.
+    const family = this.closeFamily(in id);
+    for (const window of family) {
+      if (this.pendingFocus == window.id) this.pendingFocus = "";
+      this.windows.delete(window.id);
+    }
+    let index = family.length;
+    while (index > 0) {
+      index = index - 1;
+      const window: Window = family[index];
+      window.events.publishClosed(in window.id);
     }
   }
 
@@ -631,6 +692,7 @@ function createWindowManagerState(): WindowManagerState on thread.main {
     backend: inactiveWindowBackend(),
     active: false,
     pendingFocus: "",
+    preflighting: Array<Window>(),
   });
 }
 
@@ -657,7 +719,12 @@ export readonly class WindowManager on thread.main {
   // window. Only the platform coordinator assigns these ids; renderer input
   // must never select one. Adoption publishes no callbacks.
   internal function adoptNative(inout this, id: String, options: WindowOptions): Option<Window> on thread.main {
-    return this.state.adoptNative(weak this, move id, move options);
+    return this.state.adoptNative(weak this, move id, move options, Option<Window>.none);
+  }
+
+  internal function adoptRelatedNative(inout this, parent: Window, id: String,
+    options: WindowOptions): Option<Window> on thread.main {
+    return this.state.adoptNative(weak this, move id, move options, Option.some(parent));
   }
 
   internal function showContextMenu(

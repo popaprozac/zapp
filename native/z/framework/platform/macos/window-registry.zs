@@ -121,7 +121,8 @@ internal class MacOSWindowRegistry on thread.main {
     if (this.nextNativeWindowId == 2147483647) return Option.none;
     const nativeId = this.nextNativeWindowId;
     this.nextNativeWindowId = nativeId + 1;
-    return this.related.prepare(runtime.document, runtime.webView, in owner, nativeId, move title, width, height, reply);
+    const logicalOwner = match (this.windowManager.get(in runtime.id)) { some(value) => value; none => return Option.none; };
+    return this.related.prepare(runtime.document, runtime.webView, logicalOwner, in owner, nativeId, move title, width, height, reply);
   }
 
   function nativeWindowClosed(

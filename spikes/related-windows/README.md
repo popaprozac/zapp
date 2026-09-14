@@ -140,7 +140,7 @@ Z child allocator, supplied WebKit configuration, retained delegates, separate
 message registration, sender validation, and one-shot creation coordinator.
 Only the owner's prepare route and echo response are test instrumentation.
 
-Sixteen native/Stage 0 × `-O0`/`-O2` × Vite/packaged × successful/stopped-manager
+24 native/Stage 0 × `-O0`/`-O2` × Vite/packaged × adopted/stopped-manager/family-close
 cases pass with UBSan and strict warnings. They reject unprepared creation,
 roll back and retry a partial allocation, wait for acknowledged bridge activation
 and logical adoption, verify the empty shell and shared owner state, and deliver
@@ -148,7 +148,9 @@ a reply directly to the child. The adopted child uses ordinary logical controls:
 native hide/show/title, a vetoed framework close, then committed DOM closure.
 Routing and manager lookup are terminal before its Z closed callback, including
 reentrant native cleanup. A manager stopped during loading cannot publish the
-child. Timers, views, and the Vite server have bounded cleanup.
+child. The family-close scenario vetoes owner closure from the child, verifies
+both documents remain usable, then accepts a fresh request and retires both.
+Timers, views, and the Vite server have bounded cleanup.
 
 [Production output](results/2026-09-13/production-creations.json),
 [early-call activation output](results/2026-09-13/activation-shell.json), and
@@ -159,9 +161,10 @@ scenarios. The headless fixture covers failure ordering, expiry,
 and stale owner replies; the production fixture does not wait for its real
 ten-second deadline. This is not a first-paint or allocation benchmark.
 
-The public factory remains gated on family close preflight and complete
+The [family-close output](results/2026-09-13/family-close.json) adds the third scenario.
+The public factory remains gated on complete
 document-bound event/retirement integration. See the
-[current checkpoint](../../docs/plans/related-windows.md#logical-window-adoption-checkpoint).
+[current checkpoint](../../docs/plans/related-windows.md#family-close-preflight-checkpoint).
 For logical adoption and ordinary-window regressions, run
 `bun native/z/testing/window-focus.ts` and add `--native` for the AppKit cases.
 
@@ -195,10 +198,13 @@ attachment, and cancellation of suspended Z work. An explicit task-start check
 prevents a cancellation-before-start case from masquerading as in-flight proof.
 
 The registry now backs ordinary macOS document routing and the related-readiness
-fixture below. No public related-window factory is exposed. Production
-family close veto and complete terminal delivery are still integration gates.
+fixture below. No public related-window factory is exposed. The new family
+preflight case proves that already-started work completes after a veto, while
+accepted closure cancels running descendants but preserves unrelated work.
+Complete document-bound terminal delivery remains an integration gate.
 Results go to ignored `.artifacts/registry-results.json`; the
-[dated evidence](results/2026-09-13/registry.json) is retained separately.
+[original evidence](results/2026-09-13/registry.json) and
+[family-close task evidence](results/2026-09-13/family-close-tasks.json) are retained separately.
 
 ## Production document routing across navigation
 

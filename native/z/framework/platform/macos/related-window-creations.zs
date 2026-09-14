@@ -8,7 +8,7 @@ import { BridgeDocument, BridgeDocumentActivated } from "../../bridge-document.z
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup,
   RelatedCreationReply, RelatedCreationResult } from "../../related-window-creations.zs";
-import { WindowManager, WindowOptions } from "../../window.zs";
+import { Window, WindowManager, WindowOptions } from "../../window.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
@@ -22,6 +22,7 @@ class NativeCreation on thread.main {
   readonly reservation: RelatedWindowReservation;
   readonly owner: BridgeDocument;
   readonly ownerView: WebKit.WKWebView;
+  readonly logicalOwner: Window;
   readonly address: String;
   readonly title: String;
   readonly width: u32;
@@ -122,6 +123,7 @@ internal class MacOSRelatedWindows on thread.main {
     inout this,
     owner: BridgeDocument,
     ownerView: WebKit.WKWebView,
+    logicalOwner: Window,
     in identity: RelatedDocumentIdentity,
     nativeId: i32,
     title: String,
@@ -162,7 +164,7 @@ internal class MacOSRelatedWindows on thread.main {
     const absolute = url.absoluteString;
     if (absolute == null) { this.creations.fail(in reservation); return Option.none; }
     const address: String = absolute;
-    const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, address,
+    const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, logicalOwner, address,
       title, width, height, timer: null, runtime: Option<MacOSWindowRuntime>.none, completed: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
@@ -268,7 +270,7 @@ internal class MacOSRelatedWindows on thread.main {
         for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
         const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height,
           url: copy record.address, capabilities: move capabilities });
-        match (windows.adoptNative(copy runtime.id, move options)) {
+        match (windows.adoptRelatedNative(record.logicalOwner, copy runtime.id, move options)) {
           some(_) => { record.completed = true; return true; }
           none => return false;
         }
