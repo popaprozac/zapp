@@ -1,0 +1,322 @@
+# Uncompiled prototype; NOT ready to apply as a working feature.
+# Blocked by native subclass Z-managed fields and Z-only helper methods.
+# See docs/plans/window-titlebar.md. Fill and real gesture verification remain pending.
+
+diff --git a/bootstrap/webview.ts b/bootstrap/webview.ts
+index 16aa4670..d9ba1af0 100644
+--- a/bootstrap/webview.ts
++++ b/bootstrap/webview.ts
+@@ -5,7 +5,7 @@
+  * Built by bootstrap/codegen.ts → minified → embedded as C string in .zapp/zapp_bootstrap.zc.
+  */
+ 
+-import { resolveWindowDrag, windowDragPath } from "./window-drag";
++import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./window-drag";
+ 
+ (function () {
+   const BRIDGE_KEY = Symbol.for("zapp.bridge");
+@@ -30,6 +30,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+     : "";
+   let documentToken = "";
+   let documentActive = false;
++  const windowGesture = createWindowDragGesture();
+   let documentNeedsShell = false;
+   let documentReadyListener: (() => void) | undefined;
+   let waitingForDocument: string[] = [];
+@@ -165,6 +166,12 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+   };
+ 
+   const bridge = {
++    // Queried by the native host for its original NSEvent, never a public
++    // startDragging API. A replacement/unready realm cannot answer the query.
++    _takeWindowDrag(token: string, x: number, y: number, clicks: number): number {
++      if (disposed || !documentActive || token !== documentToken) return 0;
++      return windowGesture.take(x, y, clicks);
++    },
+     // Native evaluates this in the current document, but a late evaluation may
+     // land after navigation. The realm guard prevents binding its replacement.
+     _bindDocument(expectedRealm: string, token: string, needsShell = false): boolean {
+@@ -173,6 +180,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+         || (token.length === documentToken.length && token < documentToken))) return false;
+       if (token === documentToken && needsShell !== documentNeedsShell) return false;
+       if (documentToken && token !== documentToken) {
++        windowGesture.clear();
+         documentActive = false;
+         retireRelatedObservers("The owning document was replaced.");
+         const error = new Error("Native document session was replaced");
+@@ -542,6 +550,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+     _dispose(error: Error): void {
+       if (disposed) return;
+       disposed = error;
++      windowGesture.clear();
+       clearDocumentReadyListener();
+       documentActive = false;
+       retireRelatedObservers("The owning document was retired.");
+@@ -561,6 +570,13 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+   (globalThis as any)[BRIDGE_KEY] = bridge;
+   bridge._requestDocumentBinding();
+ 
++  if (documentBound) {
++    document.addEventListener("mousedown", (event) => windowGesture.record(event), true);
++    document.addEventListener("mouseup", () => windowGesture.release(), true);
++    window.addEventListener("blur", () => windowGesture.clear());
++    window.addEventListener("pagehide", () => windowGesture.clear());
++  }
++
+   // Cleanup workers on page unload — terminate every worker this webview owns.
+   window.addEventListener("pagehide", () => {
+     const ids = Object.keys(bridge._workers);
+@@ -580,7 +596,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
+   // symbol is guaranteed present when this IIFE runs.
+   const _cfg = (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
+   const _isIOS = _cfg?.permissions?.platform === "ios";
+-  if (!_isIOS) {
++  if (!_isIOS && !documentBound) {
+     // Two intents, tracked separately:
+     //   inDrag     — pointer is over a draggable region (move the window). Set by
+     //                app-region:drag / --zapp-drag:drag / data-zapp-drag-region,
+diff --git a/native/z/framework/bridge-document.zs b/native/z/framework/bridge-document.zs
+index d640f4ac..3a94a98e 100644
+--- a/native/z/framework/bridge-document.zs
++++ b/native/z/framework/bridge-document.zs
+@@ -191,6 +191,11 @@ internal class BridgeDocument on thread.main {
+     };
+   }
+ 
++  // Native gesture snapshots use the same readiness/generation gate as calls.
++  function readyIdentity(): Option<RelatedDocumentIdentity> {
++    return this.accept(in this.token);
++  }
++
+   function isCurrent(in identity: RelatedDocumentIdentity): boolean {
+     return !this.closed && this.documents.isReady(in identity)
+       && identity.windowId == this.windowId;
+diff --git a/native/z/framework/platform/macos/related-window-native.zs b/native/z/framework/platform/macos/related-window-native.zs
+index 98879395..55f47011 100644
+--- a/native/z/framework/platform/macos/related-window-native.zs
++++ b/native/z/framework/platform/macos/related-window-native.zs
+@@ -7,6 +7,7 @@ import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "./do
+ import { DesktopMessageHandler } from "./message-handler.zs";
+ import { macOSWindowFrame } from "./window-geometry.zs";
+ import { MacOSWindow } from "./window-resize.zs";
++import { MacOSWindowGestures } from "./window-drag.zs";
+ import { TitleBarOptions } from "../../window-titlebar.zs";
+ import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
+ import { installWebViewScripts } from "./webview-injections.zs";
+@@ -128,6 +129,8 @@ internal function createMacOSRelatedWindowRuntime(
+     | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable
+     | WebKit.NSWindowStyleMaskMiniaturizable;
+   const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in titleBar));
++  const gestures = new MacOSWindowGestures(window, view, document);
++  window.observeGestures(weak gestures);
+   window.title = move title;
+   window.contentView = view;
+   applyMacOSTitleBar(in window, in titleBar, in id);
+@@ -145,5 +148,5 @@ internal function createMacOSRelatedWindowRuntime(
+   return new MacOSWindowRuntime({ id, nativeId: document.windowId, window, webView: view,
+     contentController: controller, configuration, document, schemeHandler: Option.none,
+     navigationDelegate: navigation, uiDelegate: ui, windowDelegate: delegate,
+-    presentationObserver, registration, capabilitySelection: document.capabilities });
++    presentationObserver, gestures, registration, capabilitySelection: document.capabilities });
+ }
+diff --git a/native/z/framework/platform/macos/window-construction.zs b/native/z/framework/platform/macos/window-construction.zs
+index e58b8f46..fdec3b3f 100644
+--- a/native/z/framework/platform/macos/window-construction.zs
++++ b/native/z/framework/platform/macos/window-construction.zs
+@@ -30,6 +30,7 @@ import {
+ import { macOSWindowFrame } from "./window-geometry.zs";
+ import { MacOSWindowRuntime } from "./window-runtime.zs";
+ import { MacOSWindow } from "./window-resize.zs";
++import { MacOSWindowGestures } from "./window-drag.zs";
+ import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
+ import { observeWindowPresentation } from "./window-presentation.zs";
+ import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
+@@ -105,6 +106,8 @@ internal function createMacOSWindowRuntime(
+     style = style | WebKit.NSWindowStyleMaskResizable;
+   }
+   const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in options.titleBar));
++  const gestures = new MacOSWindowGestures(window, webView, document);
++  window.observeGestures(weak gestures);
+   const title = options.title.byteLength == 0
+     ? copy name
+     : copy options.title;
+@@ -165,6 +168,7 @@ internal function createMacOSWindowRuntime(
+     uiDelegate,
+     windowDelegate,
+     presentationObserver,
++    gestures,
+     registration,
+     document,
+     capabilitySelection,
+diff --git a/native/z/framework/platform/macos/window-resize.zs b/native/z/framework/platform/macos/window-resize.zs
+index f140fd00..37870b26 100644
+--- a/native/z/framework/platform/macos/window-resize.zs
++++ b/native/z/framework/platform/macos/window-resize.zs
+@@ -3,6 +3,7 @@ import clock from "QuartzCore/CABase.h";
+ import WebKit from "WebKit/WebKit.h";
+ import objc from "std/objc";
+ import { thread } from "std/thread";
++import { MacOSWindowGestures } from "./window-drag.zs";
+ 
+ internal const windowPresentationNotification: String = "ZappWindowPresentationChanged";
+ internal const windowFullscreenNotification: String = "ZappWindowFullscreenCompleted";
+@@ -58,6 +59,7 @@ function createDisplay(in window: MacOSWindow): QuartzCore.CADisplayLink on thre
+ 
+ // Internal AppKit geometry controller. Public Window APIs remain platform-neutral.
+ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
++  private gestures: Option<Weak<MacOSWindowGestures>>;
+   private displayLink: QuartzCore.CADisplayLink | null;
+   private startFrame: WebKit.CGRect;
+   private targetFrame: WebKit.CGRect;
+@@ -95,9 +97,36 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
+     this.shuttingDown = false;
+     this.systemResize = false;
+     this.needsDisplay = true;
++    this.gestures = Option.none;
+     this.releasedWhenClosed = false;
+   }
+ 
++  function observeGestures(inout this, observer: Weak<MacOSWindowGestures>): void as "zappObserveGestures:" {
++    this.gestures = Option.some(observer);
++  }
++
++  private function gestureObserver(): Option<MacOSWindowGestures> as "zappGestureObserver" {
++    return match (in this.gestures) {
++      some(observer) => match (attempt observer.upgrade()) {
++        success(value) => Option.some(value);
++        failure(_) => Option.none;
++      }
++      none => Option.none;
++    };
++  }
++
++  override function sendEvent(inout this, in event: WebKit.NSEvent): void as "sendEvent:" {
++    match (this.gestureObserver()) {
++      some(observer) => {
++        observer.before(event);
++        // Never stall AppKit or withhold a click while consulting the renderer.
++        super.sendEvent(event);
++        observer.after(event);
++      }
++      none => super.sendEvent(event);
++    }
++  }
++
+   override function isZoomed(): boolean as "isZoomed" {
+     if (this.animating && this.zoomTransition) return this.targetIsZoomed;
+     return super.isZoomed();
+diff --git a/native/z/framework/platform/macos/window-runtime.zs b/native/z/framework/platform/macos/window-runtime.zs
+index 11b8c92b..f13f57d6 100644
+--- a/native/z/framework/platform/macos/window-runtime.zs
++++ b/native/z/framework/platform/macos/window-runtime.zs
+@@ -4,6 +4,7 @@ import { BridgeDocument } from "../../bridge-document.zs";
+ import objc from "std/objc";
+ import { thread } from "std/thread";
+ import { WindowPresentationObserver } from "./window-presentation.zs";
++import { MacOSWindowGestures } from "./window-drag.zs";
+ 
+ internal class MacOSWindowRuntime on thread.main {
+   readonly id: String;
+@@ -19,6 +20,7 @@ internal class MacOSWindowRuntime on thread.main {
+   readonly uiDelegate: objc.Adapter<WebKit.WKUIDelegate>;
+   readonly windowDelegate: objc.Adapter<WebKit.NSWindowDelegate>;
+   readonly presentationObserver: WindowPresentationObserver;
++  readonly gestures: MacOSWindowGestures;
+   readonly registration: objc.Registration;
+   readonly document: BridgeDocument;
+   readonly capabilitySelection: CapabilitySelection;
+diff --git a/native/z/framework/platform/macos/window-drag.zs b/native/z/framework/platform/macos/window-drag.zs
+new file mode 100644
+--- /dev/null
++++ b/native/z/framework/platform/macos/window-drag.zs
+@@ -0,0 +1,90 @@
++import WebKit from "WebKit/WebKit.h";
++import { thread } from "std/thread";
++import { BridgeDocument } from "../../bridge-document.zs";
++import { RelatedDocumentIdentity } from "../../related-documents.zs";
++
++// Owned by the runtime, not by NSWindow. Window and completion callbacks keep
++// weak Z handles, so an outstanding WebKit completion cannot retain a window.
++internal class MacOSWindowGestures on thread.main {
++  readonly window: WebKit.NSWindow;
++  readonly view: WebKit.WKWebView;
++  readonly document: BridgeDocument;
++  private generation: u64;
++  private downNumber: isize;
++
++  constructor(window: WebKit.NSWindow, view: WebKit.WKWebView, document: BridgeDocument) {
++    this.window = window;
++    this.view = view;
++    this.document = document;
++    this.generation = 0;
++    this.downNumber = -1;
++  }
++
++  function before(inout this, in event: WebKit.NSEvent): void {
++    if (event.type == WebKit.NSEventTypeLeftMouseDown || event.type == WebKit.NSEventTypeRightMouseDown) {
++      this.generation = this.generation + 1;
++      this.downNumber = event.type == WebKit.NSEventTypeLeftMouseDown ? event.eventNumber : -1;
++    }
++  }
++
++  function after(inout this, event: WebKit.NSEvent): void {
++    if (event.type != WebKit.NSEventTypeLeftMouseDown || this.downNumber != event.eventNumber) return;
++    if (usize(event.modifierFlags & WebKit.NSEventModifierFlagControl) != 0) return;
++    const identity = match (this.document.readyIdentity()) { some(value) => value; none => return; };
++    if (!this.window.visible || this.view.window != this.window) return;
++    const point = this.view.convertPoint(event.locationInWindow, fromView: null);
++    const bounds = this.view.bounds;
++    if (point.x < bounds.origin.x || point.y < bounds.origin.y
++      || point.x >= bounds.origin.x + bounds.size.width || point.y >= bounds.origin.y + bounds.size.height) return;
++    const zoom = this.view.pageZoom;
++    if (zoom <= 0) return;
++    const x = (point.x - bounds.origin.x) / zoom;
++    const y = (this.view.flipped ? point.y - bounds.origin.y : bounds.origin.y + bounds.size.height - point.y) / zoom;
++    this.query(event, identity, this.generation, x, y, 0);
++  }
++
++  private function query(inout this, event: WebKit.NSEvent, identity: RelatedDocumentIdentity,
++    generation: u64, x: f64, y: f64, retry: i32): void {
++    if (!this.current(in event, in identity, generation)) return;
++    const owner = weak this;
++    const script = `(()=>{const b=globalThis[Symbol.for('zapp.bridge')];return b&&typeof b._takeWindowDrag==='function'?b._takeWindowDrag('${identity.token}',${x},${y},${event.clickCount}):0})()`;
++    this.view.evaluateJavaScript(move script, completionHandler: move (value, error): void => {
++      if (error != null || !(value instanceof WebKit.NSNumber)) return;
++      match (attempt owner.upgrade()) {
++        success(active) => active.completed(event, identity, generation, x, y, retry, value.intValue);
++        failure(_) => {}
++      }
++    });
++  }
++
++  private function current(in event: WebKit.NSEvent, in identity: RelatedDocumentIdentity, generation: u64): boolean {
++    return generation == this.generation && event.eventNumber == this.downNumber
++      && this.window.visible && this.window.keyWindow && this.view.window == this.window
++      && this.document.isCurrent(in identity)
++      && WebKit.NSProcessInfo.processInfo.systemUptime - event.timestamp < 0.5;
++  }
++
++  private function completed(inout this, event: WebKit.NSEvent, identity: RelatedDocumentIdentity,
++    generation: u64, x: f64, y: f64, retry: i32, intent: i32): void {
++    if (!this.current(in event, in identity, generation)) return;
++    if (intent == -1 && retry < 2) { this.query(event, identity, generation, x, y, retry + 1); return; }
++    this.downNumber = -1; // one-shot, including rejection
++    if (intent == 2 && event.clickCount == 2) {
++      performTitlebarDoubleClick(in this.window);
++      return;
++    }
++    if ((intent == 1 || intent == 2) && (WebKit.NSEvent.pressedMouseButtons & 1) != 0) {
++      this.window.performWindowDragWithEvent(event);
++    }
++  }
++}
++
++function performTitlebarDoubleClick(in window: WebKit.NSWindow): void on thread.main {
++  const configured = WebKit.NSUserDefaults.standardUserDefaults.stringForKey("AppleActionOnDoubleClick");
++  if (configured == null) { window.performZoom(null); return; }
++  const action: String = configured;
++  if (action == "Maximize") window.performZoom(null);
++  else if (action == "Minimize") window.performMiniaturize(null);
++  // None and unrecognized actions do not silently zoom. Fill requires a
++  // separate public-API implementation; no private AppKit selector is invoked.
++}

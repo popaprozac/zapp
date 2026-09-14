@@ -151,3 +151,35 @@ mouse-up may not be delivered, so cleanup must not depend solely on mouse-up.
 
 The next checkpoint is the bounded native gesture hookup and per-window layout
 insets, followed by the custom Notes header and user visual review.
+
+## Native gesture prototype: upstream deliberation required
+
+The one-shot DOM snapshot component and unit tests now exist in
+`bootstrap/window-drag.ts`. It requires a trusted left mouse-down, matching
+coordinates/click count, a short age limit, and an unchanged live hit path.
+Release prevents move-only dragging; a completed titlebar double-click remains
+classifiable. It is not installed in the production bridge yet.
+
+The native integration draft is saved in
+[`prototypes/native-window-drag.patch`](prototypes/native-window-drag.patch).
+Do not apply it as a working implementation: it did not pass Z checking.
+Production native source has been restored to the last working checkpoint.
+
+Confirmed blockers:
+
+- `Option<Weak<MacOSWindowGestures>>` is rejected as a native stored field
+  (Z0814: only String, scalars, plain native records and strong imported ObjC
+  references are accepted). The observer owns window/view; the window must
+  refer back weakly to avoid a retain cycle.
+- Every native-subclass method, even a private Z helper, requires a native
+  selector. Z-only helper methods need an explicit upstream design decision.
+
+The proposed upstream scope is captured in the Z repository's
+`docs/native-subclass-z-state-design.md`: managed Z state plus ordinary private
+Z helpers in native subclasses, with native `as` entries retaining their ABI
+and receiver guards. No framework-specific registry or raw pointer workaround.
+
+Once approved and implemented upstream, resume by validating native event/input
+ordering, callback expiration, document retirement, first-click behavior and
+real drags. The prototype's Fill preference branch is incomplete; do not call
+its double-click behavior finished. Geometry and the custom Notes header follow.

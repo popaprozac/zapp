@@ -1,6 +1,34 @@
 /** Internal, framework-neutral hit policy. Not a public runtime export. */
 export type WindowDragIntent = "none" | "move" | "titlebar";
 
+/** One-shot DOM half of a native mouse-down query. No hover state authorizes a
+ * drag. Keep the original composed path, then recheck it before handing off. */
+export function createWindowDragGesture(now = () => performance.now()) {
+  let down: { path: Element[]; intent: WindowDragIntent; x: number; y: number;
+    clicks: number; at: number; released: boolean } | undefined;
+  return {
+    clear() { down = undefined; },
+    record(event: MouseEvent) {
+      down = undefined;
+      if (!event.isTrusted || event.button !== 0 || event.ctrlKey) return;
+      const path = windowDragPath(event);
+      down = { path, intent: resolveWindowDrag(path), x: event.clientX, y: event.clientY,
+        clicks: event.detail, at: now(), released: false };
+    },
+    release() { if (down) down.released = true; },
+    take(x: number, y: number, clicks: number): number {
+      const snapshot = down;
+      if (!snapshot) return -1; // native may query before WebKit delivers down
+      if (now() - snapshot.at > 500) { down = undefined; return 0; }
+      if (Math.abs(snapshot.x - x) > 1 || Math.abs(snapshot.y - y) > 1 || snapshot.clicks !== clicks) return -1;
+      down = undefined;
+      if (resolveWindowDrag(snapshot.path) !== snapshot.intent) return 0;
+      if (snapshot.released && !(clicks === 2 && snapshot.intent === "titlebar")) return 0;
+      return snapshot.intent === "titlebar" ? 2 : snapshot.intent === "move" ? 1 : 0;
+    },
+  };
+}
+
 const interactiveRoles = new Set([
   "button", "checkbox", "combobox", "grid", "gridcell", "link", "listbox",
   "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio", "option",

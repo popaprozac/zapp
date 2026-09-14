@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { resolveWindowDrag, windowDragPath } from "../bootstrap/window-drag";
+import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "../bootstrap/window-drag";
 import { bundleWebviewBootstrapRaw } from "../bootstrap/codegen";
 
 function element(tag = "div", attrs: Record<string, string> = {}, css = "", editable = false): Element {
@@ -16,6 +16,48 @@ function element(tag = "div", attrs: Record<string, string> = {}, css = "", edit
 
 const titlebar = () => element("header", { "data-zapp-titlebar": "" });
 const handle = () => element("div", { "data-zapp-drag-region": "" });
+
+test("native queries consume only a fresh, matching trusted down", () => {
+  let now = 100;
+  const gesture = createWindowDragGesture(() => now);
+  const event = (path: Element[], extra: object = {}) => ({ isTrusted: true, button: 0,
+    ctrlKey: false, clientX: 20.5, clientY: 30.5, detail: 1, composedPath: () => path, ...extra }) as unknown as MouseEvent;
+  expect(gesture.take(20.5, 30.5, 1)).toBe(-1);
+  gesture.record(event([handle()], { isTrusted: false }));
+  expect(gesture.take(20.5, 30.5, 1)).toBe(-1);
+  for (const extra of [{ button: 2 }, { ctrlKey: true }]) {
+    gesture.record(event([titlebar()], extra));
+    expect(gesture.take(20.5, 30.5, 1)).toBe(-1);
+  }
+  gesture.record(event([handle()]));
+  expect(gesture.take(50, 30.5, 1)).toBe(-1);
+  expect(gesture.take(20.5, 30.5, 2)).toBe(-1);
+  expect(gesture.take(20.5, 30.5, 1)).toBe(1);
+  expect(gesture.take(20.5, 30.5, 1)).toBe(-1);
+  gesture.record(event([titlebar()]));
+  now += 501;
+  expect(gesture.take(20.5, 30.5, 1)).toBe(0);
+  gesture.record(event([titlebar()]));
+  gesture.clear();
+  expect(gesture.take(20.5, 30.5, 1)).toBe(-1);
+});
+
+test("release stops dragging but allows a completed titlebar double-click; DOM changes reject", () => {
+  const gesture = createWindowDragGesture(() => 100);
+  const record = (path: Element[], detail = 1) => gesture.record({ isTrusted: true,
+    button: 0, ctrlKey: false, clientX: 0, clientY: 0, detail, composedPath: () => path } as unknown as MouseEvent);
+  record([handle()]); gesture.release();
+  expect(gesture.take(0, 0, 1)).toBe(0);
+  record([handle()], 2); gesture.release();
+  expect(gesture.take(0, 0, 2)).toBe(0);
+  record([titlebar()], 2); gesture.release();
+  expect(gesture.take(0, 0, 2)).toBe(2);
+  const node = titlebar(); record([node]);
+  (node as any).isConnected = false;
+  expect(gesture.take(0, 0, 1)).toBe(0);
+  record([element("button"), titlebar()], 2);
+  expect(gesture.take(0, 0, 2)).toBe(0);
+});
 
 test("titlebar, move-only, inherited CSS, and unmarked content remain distinct", () => {
   expect(resolveWindowDrag([])).toBe("none");
