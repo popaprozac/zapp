@@ -12,8 +12,9 @@ import { runBoundedCommand } from "../../cli/src/bounded-process";
 if (process.platform !== "darwin") throw new Error("The related-shell probe requires macOS.");
 const root = resolve(import.meta.dir, "../..");
 const zRoot = resolve(root, "../z-lang");
-const production = process.argv.includes("--production");
-const artifacts = join(import.meta.dir, ".artifacts", production ? "production" : "shell");
+const retirement = process.argv.includes("--retirement");
+const production = process.argv.includes("--production") || retirement;
+const artifacts = join(import.meta.dir, ".artifacts", retirement ? "retirement" : production ? "production" : "shell");
 // All rewritten/generated compiler inputs stay in the ignored probe workspace.
 await rm(artifacts, { recursive: true, force: true });
 const workspace = join(artifacts, "native", "z");
@@ -75,9 +76,11 @@ try {
         "-framework", "CoreFoundation", "-framework", "QuartzCore", "-lcompression", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
       if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify({ frontend, compile }));
       for (const mode of ["vite", "packaged"]) {
-        for (const scenario of production ? ["adopted", "stopped", "family", "immediate"] : ["readiness"]) {
+        for (const scenario of retirement
+          ? ["owner-replace", "owner-terminate", "child-replace", "child-terminate", "child-navigation"]
+          : production ? ["adopted", "stopped", "family", "immediate"] : ["readiness"]) {
           const origin = mode === "vite" ? `http://127.0.0.1:${address.port}` : "zapp://app";
-          const flags = ["stopped", "family", "immediate"].includes(scenario) ? [`--${scenario}`] : [];
+          const flags = scenario !== "adopted" && scenario !== "readiness" ? [`--${scenario}`] : [];
           const outcome = await runBoundedCommand([binary, origin, bootstrap, "--shell", ...flags], { cwd: root, timeoutMs: 15_000 });
           const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === ""
             && outcome.stdout === (production

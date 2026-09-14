@@ -13,7 +13,10 @@ import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } fro
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationReply, RelatedCreationResult } from "../framework/related-window-creations.zs";
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "../framework/platform/macos/related-window-creations.zs";
 import { DesktopMessageHandler } from "../framework/platform/macos/message-handler.zs";
-import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
+import { createDesktopNavigationDelegate } from "../framework/platform/macos/navigation.zs";
+import { createContextMenuSessions } from "../framework/context-menu.zs";
+import { createApplicationMenu } from "../framework/application-menu.zs";
+import { DesktopRouteMessageOperation } from "../framework/platform/macos/document-transport.zs";
 import { installWebViewScripts } from "../framework/platform/macos/webview-injections.zs";
 import { createDesktopAssetSchemeHandler } from "../framework/platform/macos/scheme-handler.zs";
 import { WindowManager, WindowOptions, WindowBackend, WindowCreateOperation, WindowOperation, WindowTitleOperation, createWindowManager } from "../framework/window.zs";
@@ -60,6 +63,15 @@ function reply(view: WebKit.WKWebView, in identity: RelatedDocumentIdentity, id:
     completionHandler: move (value, error): void => {});
 }
 
+// Fault injection through the real installed protocol adapter. No renderer is
+// killed, private WebKit API used, or unrelated application process touched.
+function injectTermination(in delegateView: WebKit.WKWebView, in sender: WebKit.WKWebView): void = raw objc {
+  [delegateView.navigationDelegate webViewWebContentProcessDidTerminate:sender];
+}
+function injectCommit(in delegateView: WebKit.WKWebView, in sender: WebKit.WKWebView): void = raw objc {
+  [delegateView.navigationDelegate webView:sender didCommitNavigation:nil];
+}
+
 class State on thread.main {
   readonly owner: BridgeDocument;
   readonly view: WebKit.WKWebView;
@@ -79,6 +91,9 @@ class State on thread.main {
   allowClose: boolean;
   immediate: boolean;
   held: boolean;
+  heldQueryId: u64;
+  replacements: i32;
+  retirementStarted: boolean;
 
   function current(): Option<MacOSRelatedWindows> {
     return match (in this.coordinator) {
@@ -173,7 +188,65 @@ class State on thread.main {
         return;
       }
       if (request.m == "completion") { this.completionId = request.id; return; }
-      if (request.m == "held") { reply(this.view, in identity, request.id, this.held ? "true" : "false"); return; }
+      if (request.m == "retirementStarted") {
+        if (this.retirementStarted) { this.failed = true; return; }
+        this.retirementStarted = true;
+        reply(this.view, in identity, request.id, "true");
+        return;
+      }
+      if (request.m == "held") {
+        // Different WebViews need not deliver their messages in JS call order.
+        // Acknowledge only after the held child request really arrives.
+        if (this.held) reply(this.view, in identity, request.id, "true");
+        else this.heldQueryId = request.id;
+        return;
+      }
+      if (request.m == "replaceOwner" || request.m == "terminateOwner" || request.m == "terminateChild") {
+        const reservation = match (copy this.reservation) { some(value) => value; none => { this.failed = true; return; } };
+        const runtime = match (coordinator.runtime(in reservation.child)) { some(value) => value; none => { this.failed = true; return; } };
+        if (!this.held || this.closes != 0) { this.failed = true; return; }
+        // A callback delivered with the wrong WebView must not revoke either
+        // document. Exercise both adapters before the actual retirement.
+        injectTermination(in this.view, in runtime.webView);
+        injectCommit(in this.view, in runtime.webView);
+        injectTermination(in runtime.webView, in this.view);
+        injectCommit(in runtime.webView, in this.view);
+        if (!this.owner.isCurrent(in identity) || !runtime.document.isActivated(in reservation.child)
+          || this.closes != 0) { this.failed = true; return; }
+        if (request.m == "terminateChild") {
+          injectTermination(in runtime.webView, in runtime.webView);
+          injectTermination(in runtime.webView, in runtime.webView);
+          if (this.closes != 1 || !this.owner.isCurrent(in identity)) this.failed = true;
+          return;
+        }
+        if (request.m == "terminateOwner") {
+          injectTermination(in this.view, in this.view);
+          injectTermination(in this.view, in this.view);
+          if (this.owner.isCurrent(in identity) || this.closes != 1 || coordinator.count() != 0) {
+            this.failed = true; return;
+          }
+        }
+        const args = process.args();
+        const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html?replacement=1`);
+        if (url == null) { this.failed = true; return; }
+        this.view.loadRequest(WebKit.NSURLRequest.requestWithURL(url));
+        return;
+      }
+      if (request.m == "replacement") {
+        const old = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
+        const reservation = match (copy this.reservation) { some(value) => value; none => { this.failed = true; return; } };
+        if (old.token == identity.token || this.owner.isCurrent(in old)
+          || !this.owner.isCurrent(in identity) || coordinator.documents.isLive(in reservation.child)
+          || this.closes != 1 || coordinator.count() != 0 || count(this.windows) != 1) {
+          this.failed = true; return;
+        }
+        this.replacements = this.replacements + 1;
+        // These evaluations really land in the replacement JS realm, whose
+        // request IDs start over. Only the new document's reply may settle it.
+        reply(this.view, in old, request.id, "999");
+        reply(this.view, in identity, request.id, "42");
+        return;
+      }
       if (request.m == "alive") {
         if (this.closes != 1 || count(this.windows) != 1 || coordinator.count() != 0) this.failed = true;
         reply(this.view, in identity, request.id, "43"); return;
@@ -204,6 +277,11 @@ class State on thread.main {
     if (request.m == "hold" && identity.windowId == 2 && this.completions == 1) {
       if (this.held || !coordinator.documents.isReady(in identity)) { this.failed = true; return; }
       this.held = true;
+      if (this.heldQueryId != 0) {
+        const owner = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
+        reply(this.view, in owner, this.heldQueryId, "true");
+        this.heldQueryId = 0;
+      }
       return;
     }
     if (request.m == "echo" && identity.windowId == 2 && this.completions == 1) {
@@ -228,22 +306,15 @@ class State on thread.main {
   }
 }
 
-class RootNavigation on thread.main implements WebKit.WKNavigationDelegate {
-  readonly document: BridgeDocument;
-  readonly related: MacOSRelatedWindows;
-  function commit(inout this, in view: WebKit.WKWebView, in navigation: WebKit.WKNavigation | null): void as "webView:didCommitNavigation:" {
-    this.document.didCommit();
-    this.related.pruneInvalidated();
-    requestBridgeDocumentBinding(in view);
-  }
-}
-
 function main(): i32 on thread.main {
   const args = process.args();
   if (args.length < 2 || args.length > 4) return 2;
   const stopped = args.length == 4 && args[3] == "--stopped";
   const family = args.length == 4 && args[3] == "--family";
   const immediate = args.length == 4 && args[3] == "--immediate";
+  const ownerReplacement = args.length == 4 && (args[3] == "--owner-replace" || args[3] == "--owner-terminate");
+  const retirement = ownerReplacement || (args.length == 4 && (args[3] == "--child-replace"
+    || args[3] == "--child-terminate" || args[3] == "--child-navigation"));
   const app = WebKit.NSApplication.sharedApplication;
   app.setActivationPolicy(WebKit.NSApplicationActivationPolicyRegular);
   app.finishLaunching();
@@ -276,7 +347,7 @@ function main(): i32 on thread.main {
   const state = new State({ owner, view, windows, subscriptions: Array<WindowEventSubscription>(), coordinator: Option<MacOSRelatedWindows>.none,
     reservation: Option<RelatedWindowReservation>.none, identity: Option<RelatedDocumentIdentity>.none,
     completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0,
-    allowClose: false, immediate, held: false });
+    allowClose: false, immediate, held: false, heldQueryId: 0, replacements: 0, retirementStarted: false });
   const weakState = weak state;
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => {
     match (attempt weakState.upgrade()) { success(state) => state.route(move message, identity); failure(_) => {} }
@@ -299,8 +370,10 @@ function main(): i32 on thread.main {
   state.coordinator = Option.some(related);
   const handler = new DesktopMessageHandler({ document: owner, expectedView: view, expectedController: controller, routeMessage: route });
   const registration = objc.register({ add: controller.addScriptMessageHandler(handler, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
-  const navigationController = new RootNavigation({ document: owner, related });
-  const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);
+  const contextMenus = createContextMenuSessions();
+  const menu = createApplicationMenu();
+  const navigation = createDesktopNavigationDelegate("owner", "default", in window, in view,
+    weak windows, contextMenus, menu, owner, related);
   const ui = createRelatedWindowUIDelegate(related);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;
@@ -310,7 +383,8 @@ function main(): i32 on thread.main {
   const delegate = createDesktopWindowDelegate("owner", 1, window, view, weak windows, closed);
   window.delegate = delegate;
   window.makeKeyAndOrderFront(null);
-  const suffix = stopped ? "?stopped=1" : (family ? "?family=1" : (immediate ? "?immediate=1" : ""));
+  const scenario = args.length == 4 ? args[3].copyBytes(2, args[3].byteLength) : "adopted";
+  const suffix = `?${scenario}=1`;
   const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html${suffix}`);
   if (url == null) return 4;
   view.loadRequest(WebKit.NSURLRequest.requestWithURL(url));
@@ -325,6 +399,8 @@ function main(): i32 on thread.main {
       && state.closes == 1 && state.closeRequests == (immediate ? 0 : (family ? 3 : 1));
   const remaining = usize(family ? 0 : 1);
   const pass = !state.failed && state.passed && expected
+    && state.retirementStarted == retirement
+    && state.replacements == (ownerReplacement ? 1 : 0)
     && count(windows) == remaining && related.count() == 0 && creations.count() == 0 && documents.count() == remaining;
   related.closeAll();
   windows.stop();

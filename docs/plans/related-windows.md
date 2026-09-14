@@ -20,6 +20,9 @@ listener a veto before teardown or task cancellation. Accepted closure retires
 the subtree; unrelated windows remain live.
 Committed child retirement now sends a document-bound terminal notice to its
 surviving owner, rejecting retained child requests through the existing bridge.
+The real owner navigation delegate also passes replacement and injected
+renderer-termination coverage; related reload/navigation and termination
+retire the original child rather than retargeting its lifetime.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -211,8 +214,12 @@ validation and physical window teardown remain outside this helper.
       veto-preserved work versus accepted-close cancellation of real Z tasks.
 - [x] Deliver unsolicited child terminal notices to the exact surviving owner
       document, including closure before the creation continuation resumes.
-- [ ] Complete broader origin/capability, renderer-loss, owner-loss, and
-      navigation integration, including families losing their observer realm.
+- [x] Exercise the production owner/child navigation delegates across owner
+      replacement, child reload/refused navigation, and injected renderer-loss
+      callbacks, including a family losing its original observer realm.
+- [ ] Finish the creation-authority audit (including subframes and nested
+      owners) before public factory integration; actual renderer-crash/recovery
+      stress and broader platform coverage remain separate hardening work.
 - [ ] Expose the public factory and add a Z Notes demonstration.
 - [ ] Re-run representative application benchmarks and other-platform probes.
 
@@ -226,6 +233,7 @@ bun run spikes/related-windows/document-routing.ts
 bun run spikes/related-windows/document-routing.ts --related
 bun run spikes/related-windows/shell.ts
 bun run spikes/related-windows/shell.ts --production
+bun run spikes/related-windows/shell.ts --retirement
 bun run spikes/related-windows/registry.ts --creations
 bun native/z/testing/window-focus.ts
 bun native/z/testing/window-focus.ts --native
@@ -661,3 +669,45 @@ in `5fa6338d` without rewriting the bootstrap or suppressing compiler warnings.
 The native compiler was rebuilt to a byte-identical fixed point before the
 final 32-case matrix. The 82 focused runtime/CLI tests and TypeScript/type tests
 also pass; all native cases use bounded processes and UBSan, not ASan.
+
+### Navigation and renderer-retirement checkpoint
+
+The production probe now installs `createDesktopNavigationDelegate` for the
+owner instead of duplicating its commit handling in a fixture delegate. Related
+children already use their production navigation/UI delegates. This checkpoint
+needed no new production API or language workaround: it exercises the callbacks
+and identity machinery already shipped.
+
+| Case | What is exercised |
+| --- | --- |
+| Owner replacement | Real same-origin navigation retires the old subtree; the new page receives a new identity and ignores an old-token reply using its reused request ID |
+| Owner termination | Inject the documented termination callback twice through the real adapter, then navigate to a new owner page; native retirement is terminal before recovery |
+| Child replacement | Real reload of the identical shell URL still retires the original document rather than silently replacing its handle |
+| Child termination | Inject the real installed adapter's termination callback twice; the surviving owner rejects retained child work and continues its own requests |
+| Refused child navigation | An attempted cross-origin navigation is cancelled by the existing narrow child policy and retires the child; it does not load the external page |
+
+The injected cases first send callbacks with the wrong WebView and assert that
+both live documents remain unchanged. They do not kill a WebKit process, use a
+private WebKit API, or test actual crash scheduling/shared-process fate. That
+distinction matters: native teardown can be guaranteed without promising JS
+cleanup in a destroyed observer realm. The owner-replacement case deliberately
+has the *new* page verify success instead of waiting for old-page callbacks.
+
+Every retirement case requires native acknowledgement that its intended branch
+started. The held-request handshake also waits for actual child-message receipt;
+it no longer assumes messages from different WebViews arrive in JS call order.
+Retained request rejection here is instrumented bridge work, while the separate
+headless registry matrix verifies cancellation of already-running Z tasks and
+completion of unrelated work.
+
+All 40 native/Stage 0 × `-O0`/`-O2` × Vite/packaged cases pass with strict warnings,
+UBSan, empty stderr, and no timeouts. The
+[dated retirement evidence](../../spikes/related-windows/results/2026-09-13/retirement.json)
+is separate from the earlier close matrix. The
+[32-case creation/close regression](../../spikes/related-windows/results/2026-09-13/retirement-regression.json)
+also passes with the production owner delegate, alongside four real-task
+registry cases, 46 focused runtime tests, and both TypeScript checks.
+Public factory integration still
+needs its final creation-authority audit, particularly actual subframe attempts
+and the current root-only prepare path. Styling/injection remain unapproved and
+unchanged; actual renderer-crash stress is not represented by this callback test.

@@ -10,6 +10,13 @@ function require(value: unknown, message: string): asserts value {
 }
 
 async function run() {
+  if (location.search.includes("replacement=1")) {
+    // The old realm cannot perform cleanup. The replacement proves the native
+    // subtree is retired and ignores a stale reply using its reused request ID.
+    require(await bridge.invoke("replacement", {}, { timeout: 0 }) === 42, "stale reply reached replacement");
+    bridge.post(JSON.stringify({ t: 3, m: "pass" }));
+    return;
+  }
   require(window.open(RELATED_DOCUMENT_SHELL_PATH) === null, "unprepared popup");
   const failed = await bridge.invoke("prepareFailure", {}, { timeout: 0 });
   require(window.open(failed.address), "missing partial allocation");
@@ -57,7 +64,21 @@ async function run() {
     const held = childBridge.invoke("hold", {}, { timeout: 0 }).catch((error: unknown) => error);
     // The owner round trip proves native received the child's held request.
     require(await bridge.invoke("held", {}, { timeout: 0 }) === true, "held request not registered");
-    child.close();
+    const scenario = new URLSearchParams(location.search).keys().next().value;
+    if (["owner-replace", "owner-terminate", "child-replace", "child-terminate", "child-navigation"].includes(scenario ?? "")) {
+      require(await bridge.invoke("retirementStarted", {}, { timeout: 0 }) === true, "retirement branch did not start");
+    }
+    if (location.search.includes("owner-replace=1") || location.search.includes("owner-terminate=1")) {
+      bridge.post(JSON.stringify({ t: 3, m: location.search.includes("owner-terminate=1") ? "terminateOwner" : "replaceOwner" }));
+      return; // The new owner document, not this doomed realm, verifies success.
+    }
+    if (location.search.includes("child-terminate=1")) {
+      bridge.post(JSON.stringify({ t: 3, m: "terminateChild" }));
+    } else if (location.search.includes("child-replace=1")) {
+      child.location.reload();
+    } else if (location.search.includes("child-navigation=1")) {
+      child.location.href = "https://outside.invalid/not-a-related-document";
+    } else child.close();
     await invalidated;
     const failure = await held;
     require(failure.code === "RELATED_WINDOW_INVALIDATED" && failure.windowId === identity.windowId,

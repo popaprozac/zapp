@@ -11,6 +11,11 @@ real-task cancellation matrix. See the
 [family close checkpoint](../plans/related-windows.md#family-close-preflight-checkpoint)
 for current scope, followed by the
 [document-bound terminal delivery checkpoint](../plans/related-windows.md#document-bound-terminal-delivery-checkpoint).
+The latest [navigation and renderer-retirement checkpoint](../plans/related-windows.md#navigation-and-renderer-retirement-checkpoint)
+adds real owner replacement and child reload/refused navigation, plus termination
+callback injection through the installed production delegates. It does not
+simulate an actual renderer crash. Creation-authority and nested-owner gates
+still precede the public factory.
 The oracle findings below retain their original boundaries;
 they are not claims that every production lifecycle gate is complete.
 

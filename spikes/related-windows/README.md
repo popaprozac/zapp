@@ -43,6 +43,7 @@ bun run test:document-routing
 bun run test:related-readiness
 bun run test:shell
 bun run test:production
+bun run test:retirement
 bun run benchmark
 ```
 
@@ -134,6 +135,9 @@ integration. See the [remaining gates](../../docs/plans/related-windows.md#vite-
 
 ## Production child allocation and activation
 
+The owner now uses the production navigation delegate in both the existing
+creation/close matrix and the separate retirement matrix below.
+
 Run `bun run test:production` (or, from the repository root,
 `bun run spikes/related-windows/shell.ts --production`). This uses the production
 Z child allocator, supplied WebKit configuration, retained delegates, separate
@@ -170,11 +174,49 @@ ten-second deadline. This is not a first-paint or allocation benchmark.
 
 The [family-close output](results/2026-09-13/family-close.json) adds the third scenario.
 The [terminal-delivery output](results/2026-09-13/terminal-delivery.json) adds the
-real lifetime binding and immediate-close scenario. The public factory remains
-gated on broader owner/navigation/renderer retirement integration. See the
-[current checkpoint](../../docs/plans/related-windows.md#document-bound-terminal-delivery-checkpoint).
+real lifetime binding and immediate-close scenario. The
+[latest regression output](results/2026-09-13/retirement-regression.json) reruns
+all 32 cases with the production owner navigation delegate. See the
+[current checkpoint](../../docs/plans/related-windows.md#navigation-and-renderer-retirement-checkpoint)
+and its remaining creation-authority gates before public factory integration.
 For logical adoption and ordinary-window regressions, run
 `bun native/z/testing/window-focus.ts` and add `--native` for the AppKit cases.
+
+## Production document retirement
+
+Run `bun run test:retirement` (or `bun run spikes/related-windows/shell.ts --retirement`
+from the repository root). All 40 native/Stage 0 × `-O0`/`-O2` × Vite/packaged
+cases pass with strict warnings, UBSan, empty stderr, and no timeouts.
+
+| Scenario | Check |
+| --- | --- |
+| Owner replacement | Real navigation retires descendants; a new owner document ignores an old-token reply for a reused request ID |
+| Owner termination | Inject termination through the installed production adapter twice, then recover into a new owner document |
+| Child reload | Reloading the same shell URL retires the original child identity |
+| Child termination | Inject termination twice; the surviving owner rejects retained child work and continues its own calls |
+| Refused child navigation | The existing policy rejects a cross-origin destination before loading it and retires the child |
+
+The fault-injection paths first send commit/termination callbacks with the wrong
+WebView and verify neither live document is revoked. These are fixture-only
+native helpers calling public delegate methods, not actual renderer crashes,
+private APIs, process kills, or proof of independent renderer processes. Real
+owner replacement is verified from the new page; the old realm is not required
+to execute cleanup after replacement.
+
+The private held-request handshake waits for actual receipt across WebViews,
+and every scenario acknowledges entry into its intended retirement branch.
+Pending bridge work here is instrumentation. The separately rerun four-case
+registry matrix below verifies cancellation of already-running Z tasks.
+
+[Dated retirement output](results/2026-09-13/retirement.json) is independent of
+the 32-case creation/close regression output. Reruns write only ignored
+`.artifacts/retirement/` files. Emission, Clang compilation, and each execution
+have 120-, 30-, and 15-second process-group deadlines respectively; the Vite
+server stops in `finally`.
+
+The public factory still needs creation-authority checks for actual subframes
+and nested owners. Styling and injection proposals remain unapproved. Actual
+renderer-crash/recovery stress and Windows/Linux coverage are separate work.
 
 ## Headless native document registry
 
@@ -209,7 +251,8 @@ The registry now backs ordinary macOS document routing and the related-readiness
 fixture below. No public related-window factory is exposed. The new family
 preflight case proves that already-started work completes after a veto, while
 accepted closure cancels running descendants but preserves unrelated work.
-Complete document-bound terminal delivery remains an integration gate.
+Document-bound terminal delivery is covered by the WebKit matrices above;
+these registry tests do not execute JavaScript cleanup.
 Results go to ignored `.artifacts/registry-results.json`; the
 [original evidence](results/2026-09-13/registry.json) and
 [family-close task evidence](results/2026-09-13/family-close-tasks.json) are retained separately.
