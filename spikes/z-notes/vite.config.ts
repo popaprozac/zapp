@@ -1,11 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { zapp } from "../../vite/src/index.ts";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 // The in-repository application uses Vite pinned at the workspace root.
 // An ordinary generated application declares Vite in its own package.json.
 export default {
   root: "frontend",
-  plugins: [zapp()],
+  // Ordinary Svelte CSS extraction for the owner. The inspector's stylesheet
+  // is explicitly owned by its related document (see related-inspectors.ts).
+  plugins: [svelte(), zapp()],
   resolve: {
     alias: {
       "@zappdev/runtime/application": fileURLToPath(

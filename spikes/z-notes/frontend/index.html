@@ -90,19 +90,12 @@
     <main>
       <h1>Z Notes</h1>
       <p>Notes are owned by a Z service and persisted in SQLite.</p>
+      <div id="notes-workspace"></div>
+      <h2>Framework diagnostics</h2>
       <div class="controls">
-        <input id="note-title" aria-label="Note title" value="WebView note">
-        <button id="ping" type="button">Create a note in Z</button>
         <button id="cancel" type="button">Cancel a suspended request</button>
         <button id="index-notes" type="button">Index notes in a Zapp worker</button>
       </div>
-      <ul id="notes" aria-live="polite"></ul>
-      <h2>Related inspectors</h2>
-      <div class="controls">
-        <button id="related-inspector" type="button">Open related inspector</button>
-        <button id="close-inspectors" type="button">Close inspectors</button>
-      </div>
-      <pre id="related-status">Open two inspectors, then edit the note title in any window.</pre>
       <h2>Portable note files</h2>
       <div class="controls">
         <button id="import-notes" type="button">Import JSON…</button>

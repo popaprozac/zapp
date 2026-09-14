@@ -4,7 +4,8 @@
   "workspaces": [
     "cli",
     "runtime",
-    "vite"
+    "vite",
+    "spikes/z-notes"
   ],
   "scripts": {
     "test": "bun test ./cli/src/*.test.ts ./runtime/*.test.ts",

@@ -1,0 +1,37 @@
+/* Demo-owned child stylesheet. Keep selectors scoped to the inspector;
+   this is not an application-style or theme inheritance mechanism. */
+[data-note-inspector] {
+  --inspector-style-ready: yes;
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 24px;
+  color-scheme: light dark;
+  color: light-dark(#20242b, #ecedf0);
+  background: light-dark(#f6f8fc, #202329);
+  font: 15px/1.5 system-ui, sans-serif;
+}
+[data-note-inspector] h1 { margin: 0; font-size: 24px; }
+[data-note-inspector] .eyebrow { margin: 0; font-size: 12px; opacity: .6; }
+[data-note-inspector] .hint { opacity: .7; }
+[data-note-inspector] dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+[data-note-inspector] dt { opacity: .65; }
+[data-note-inspector] dd { margin: 0; overflow-wrap: anywhere; }
+[data-note-inspector] label { display: block; margin: 20px 0 6px; }
+[data-note-inspector] input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #80808070;
+  border-radius: 8px;
+}
+[data-note-inspector] button { padding: 8px 12px; margin-top: 12px; font: inherit; cursor: pointer; }
+[data-note-inspector] footer { margin-top: 20px; border-top: 1px solid #80808040; }
+[data-note-inspector] [role="alert"] { color: light-dark(#ad2222, #ffaaaa); }
+@media (max-width: 360px) {
+  [data-note-inspector] { padding: 16px; }
+  [data-note-inspector] dl { grid-template-columns: 1fr; gap: 2px; }
+  [data-note-inspector] dd { margin-bottom: 8px; }
+}

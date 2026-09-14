@@ -1036,3 +1036,24 @@ As part of that frontend integration, resolve the current Vite native-config
 loader forward-compatibility warnings around extensionless imports and module
 format. Do not suppress the warnings or change the repository-wide module
 format without checking the companion packages.
+
+### Svelte proof checkpoint — 2026-09-14
+
+The notes/editor and related metadata inspector draft now passes eight model
+tests, Svelte/type checks, and real packaged/dev WebKit probes for shared input,
+native service saves, component styles, and subscription teardown. The
+[integration record](../../spikes/z-notes/SVELTE.md) includes reproducible commands.
+The experiment found that Svelte's development injected-CSS registry retains
+child style elements after component unmount. The agreed solution for this slice
+is normal owner CSS extraction plus an explicitly owned inspector stylesheet,
+removed during invalidation/rollback. General, framework-neutral stylesheet
+sharing is the agreed future workstream; its API/defaults still need deliberation.
+No public adapter, automatic stylesheet inheritance, or third-party patch was
+introduced.
+
+The final explicit-style rerun passes in both packaged and Vite WebKit modes:
+one child-owned stylesheet, removal on close, unaffected sibling styles, and a
+fresh stylesheet on reopening. The 33 existing related-window/Vite regressions
+also pass. This removes the identified Svelte development style-registry path
+without a third-party patch; whole-document collection, general CSS sharing and
+paint/font readiness remain separately scoped validation.

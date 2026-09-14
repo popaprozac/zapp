@@ -14,17 +14,29 @@ import { ShellError } from "@zappdev/runtime/shell";
 import {
   health,
   NoteCreationError,
-  NoteMutationError,
   NoteTransferError,
   NoteDescription,
   notes,
 } from "zapp:services";
 import { noteIndexer } from "zapp:workers";
-import { installRelatedWindowDemo } from "./related-window-demo.js";
+import { mount, unmount, tick } from "svelte";
+import NotesWorkspace from "./NotesWorkspace.svelte";
+import { createNotesModel } from "./notes-model";
+import { createInspectorManager } from "./related-inspectors";
 
-installRelatedWindowDemo();
-
-const button = document.querySelector("#ping");
+const notesModel = createNotesModel(notes, new URLSearchParams(location.search).get("note"));
+const inspectors = createInspectorManager(notesModel);
+const component = mount(NotesWorkspace, {
+  target: document.querySelector("#notes-workspace"),
+  props: { model: notesModel, inspectors, createNote: createNoteFromInput, showActions: showNoteActions },
+});
+window.addEventListener("pagehide", () => {
+  inspectors.dispose();
+  void unmount(component);
+}, { once: true });
+// Component HMR updates mounted roots; edits to this imperative host reload the
+// owner, whose native family teardown closes its related documents.
+import.meta.hot?.dispose(() => { inspectors.dispose(); void unmount(component); });
 const cancelButton = document.querySelector("#cancel");
 const indexButton = document.querySelector("#index-notes");
 const importNotesButton = document.querySelector("#import-notes");
@@ -43,8 +55,6 @@ const navigationNativeButton = document.querySelector("#navigation-native");
 const bridgeSubframeButton = document.querySelector("#bridge-subframe");
 const openExternalButton = document.querySelector("#open-external");
 const revealResourcesButton = document.querySelector("#reveal-resources");
-const noteTitle = document.querySelector("#note-title");
-const noteList = document.querySelector("#notes");
 const status = document.querySelector("#status");
 const windowEvents = document.querySelector("#window-events");
 const workerIndex = document.querySelector("#worker-index");
@@ -82,7 +92,7 @@ function describeClipboardError(error) {
 
 copyTitleButton.addEventListener("click", async () => {
   try {
-    await application.clipboard.writeText(noteTitle.value);
+    await application.clipboard.writeText(notesModel.getDraftTitle());
     clipboardStatus.textContent = "Copied the current note title.";
   } catch (error) {
     clipboardStatus.textContent = describeClipboardError(error);
@@ -151,7 +161,7 @@ notificationShowButton.addEventListener("click", async () => {
     }
     const identifier = await application.notifications.show({
       title: "Z Notes",
-      body: noteTitle.value.trim() || "Your note is ready.",
+      body: notesModel.getDraftTitle().trim() || "Your note is ready.",
     });
     notificationResult.textContent = `Delivered notification\n${identifier}`;
   } catch (error) {
@@ -159,114 +169,29 @@ notificationShowButton.addEventListener("click", async () => {
   }
 });
 
-function renderNotes(items) {
-  const selected = new URLSearchParams(window.location.search).get("note");
-  noteList.replaceChildren(...items.map((note) => {
-    const item = document.createElement("li");
-    if (selected !== null && String(note.id) === selected) {
-      item.dataset.selectedNote = selected;
-      item.setAttribute("aria-current", "true");
-      item.style.outline = "2px solid Highlight";
-    }
-    const title = document.createElement("strong");
-    const details = document.createElement("small");
-    title.textContent = note.title;
-    details.textContent = [
-      `#${note.id}`,
-      note.state,
-      note.subtitle,
-    ].filter(Boolean).join(" · ");
-    const titleInput = document.createElement("input");
-    const actions = document.createElement("div");
-    const save = document.createElement("button");
-    const archive = document.createElement("button");
-    const remove = document.createElement("button");
-    titleInput.value = note.title;
-    titleInput.setAttribute("aria-label", `Title for note ${note.id}`);
-    actions.className = "note-actions";
-    save.type = "button";
-    save.textContent = "Save";
-    archive.type = "button";
-    archive.textContent = note.state === "archived" ? "Archived" : "Archive";
-    archive.disabled = note.state === "archived";
-    remove.type = "button";
-    remove.textContent = "Delete";
-
-    const mutate = async (operation) => {
-      actions.querySelectorAll("button").forEach((button) => {
-        button.disabled = true;
-      });
-      try {
-        await operation();
-        await refreshNotes();
-      } catch (error) {
-        status.textContent = error instanceof NoteMutationError
-          ? `Could not change note ${error.details?.id}\n${error.details?.message}`
-          : `Could not change note\n${String(error)}`;
-        actions.querySelectorAll("button").forEach((button) => {
-          button.disabled = false;
-        });
-      }
-    };
-
-    save.addEventListener("click", () => mutate(() => notes.edit({
-      id: note.id,
-      title: titleInput.value.trim(),
-      subtitle: note.subtitle,
-    })));
-    archive.addEventListener("click", () => mutate(() => notes.archive({
-      id: note.id,
-    })));
-    remove.addEventListener("click", () => mutate(() => notes.delete({
-      id: note.id,
-    })));
-
-    const more = document.createElement("button");
-    more.type = "button";
-    more.textContent = "Actions…";
-    more.setAttribute("aria-haspopup", "menu");
-    more.setAttribute("aria-label", `Actions for note ${note.id}`);
-    const showActions = async (x, y) => {
-      try {
-        await currentWindow().showContextMenu([
-          { label: "Edit title", action: () => { titleInput.focus(); titleInput.select(); } },
-          { label: "Save title", action: () => mutate(() => notes.edit({
-            id: note.id, title: titleInput.value.trim(), subtitle: note.subtitle,
-          })) },
-          { type: "separator" },
-          { label: "Archive", enabled: note.state !== "archived",
-            action: () => mutate(() => notes.archive({ id: note.id })) },
-          { label: "Delete", action: () => mutate(() => notes.delete({ id: note.id })) },
-        ], { x, y });
-      } catch (error) {
-        status.textContent = `Could not show note actions\n${String(error)}`;
-      }
-    };
-    more.addEventListener("click", () => {
-      const anchor = more.getBoundingClientRect();
-      void showActions(anchor.left, Math.min(anchor.bottom, window.innerHeight - 1));
-    });
-    item.addEventListener("contextmenu", (event) => {
-      // Keep WebKit's editing menu in text fields.
-      if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable]")) return;
-      event.preventDefault();
-      void showActions(event.clientX, event.clientY);
-    });
-
-    actions.append(save, archive, remove, more);
-    item.append(title, details, titleInput, actions);
-    return item;
-  }));
-  document.body.dataset.notesLoaded = "ok";
-  const selectedNote = noteList.querySelector("[data-selected-note]");
-  if (selectedNote) {
-    selectedNote.scrollIntoView({ block: "center" });
-    document.body.dataset.deepLinkNote = selected;
-  }
+async function showNoteActions(note, input, x, y) {
+  notesModel.select(note.id);
+  try {
+    await currentWindow().showContextMenu([
+      { label: "Edit title", action: () => { input.focus(); input.select(); } },
+      { label: "Save title", action: () => notesModel.save(note.id) },
+      { type: "separator" },
+      { label: "Archive", enabled: note.state !== "archived", action: () => notesModel.archive(note.id) },
+      { label: "Delete", action: () => notesModel.remove(note.id) },
+    ], { x, y });
+  } catch (error) { status.textContent = `Could not show note actions\n${String(error)}`; }
 }
 
 async function refreshNotes() {
-  renderNotes(await notes.list());
+  await notesModel.refresh();
+  await tick();
+  document.body.dataset.notesLoaded = "ok";
+  const requested = new URLSearchParams(location.search).get("note");
+  const selected = document.querySelector("[data-selected-note]");
+  if (requested !== null && selected?.dataset.selectedNote === requested) {
+    selected.scrollIntoView({ block: "center" });
+    document.body.dataset.deepLinkNote = requested;
+  }
 }
 
 function describeTransferError(action, error) {
@@ -343,8 +268,8 @@ if (currentWindowId === "win-1") {
     action: async () => {
       if (
         autoNameEmptyNotes.state === CommandState.On
-        && noteTitle.value.trim().length === 0
-      ) noteTitle.value = "Untitled";
+        && notesModel.getDraftTitle().trim().length === 0
+      ) notesModel.setDraftTitle("Untitled");
       await createNoteFromInput();
     },
   });
@@ -728,7 +653,7 @@ async function createNoteFromInput() {
   status.textContent = "Routing…";
   try {
     await verifyTypedServiceError();
-    const title = noteTitle.value.trim();
+    const title = notesModel.getDraftTitle().trim();
     const note = await notes.create({ title, state: "active" });
     if (note.subtitle !== null) {
       throw new Error(`Expected an omitted subtitle, received ${note.subtitle}`);
@@ -756,12 +681,6 @@ async function createNoteFromInput() {
     document.body.dataset.roundTrip = "error";
   }
 }
-
-button.addEventListener("click", createNoteFromInput);
-
-noteTitle.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") button.click();
-});
 
 cancelButton.addEventListener("click", async () => {
   status.textContent = "Starting cancellable work…";
@@ -817,7 +736,20 @@ cancelButton.addEventListener("click", async () => {
   }
 });
 
-refreshNotes().catch((error) => {
+refreshNotes().then(async () => {
+  if (import.meta.env.VITE_ZAPP_SVELTE_SMOKE === "1") {
+    if (currentWindowId === "win-1") {
+      try {
+        const { verifySvelteInspectors } = await import("./svelte-smoke");
+        await verifySvelteInspectors(notesModel);
+      } catch (error) {
+        document.body.dataset.svelteInspector = "error";
+        status.textContent = String(error);
+      }
+    } else document.body.dataset.svelteInspector = "ok";
+    await health.status(); // Trigger the native DOM checkpoint after the probe.
+  }
+}).catch((error) => {
   status.textContent = `Could not load notes\n${String(error)}`;
   document.body.dataset.notesLoaded = "error";
 });

@@ -8,6 +8,11 @@
 // Test-only route probe; production builds do not link this harness.
 static __weak WKWebView *zapp_lifecycle_webview = nil;
 
+static bool zapp_svelte_smoke_enabled(void) {
+  const char *value = getenv("VITE_ZAPP_SVELTE_SMOKE");
+  return value != NULL && strcmp(value, "1") == 0;
+}
+
 static NSMutableSet<NSNumber *> *zapp_desktop_smoke_responses(void) {
   static NSMutableSet<NSNumber *> *responses = nil;
   static dispatch_once_t once;
@@ -64,7 +69,7 @@ void zapp_desktop_smoke_start_window(
   __weak WKWebView *weak_web_view = web_view;
   NSString *retained_window_id = [window_id copy];
   dispatch_after(
-    dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+    dispatch_time(DISPATCH_TIME_NOW, (zapp_svelte_smoke_enabled() ? 20 : 5) * NSEC_PER_SEC),
     dispatch_get_main_queue(),
     ^{
       WKWebView *current = weak_web_view;
@@ -137,6 +142,7 @@ void zapp_desktop_smoke_observe_response(
           @"shellOpen:document.body?.dataset?.shellOpen??null,"
           @"shellReveal:document.body?.dataset?.shellReveal??null,"
           @"deepLinkNote:document.body?.dataset?.deepLinkNote??null,"
+          @"svelteInspector:document.body?.dataset?.svelteInspector??null,"
           @"requestedNote:new URLSearchParams(location.search).get('note'),"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
@@ -157,6 +163,9 @@ void zapp_desktop_smoke_observe_response(
             && [(NSString *)state containsString:@"\"shellOpen\":\"ok\""]
             && [(NSString *)state containsString:@"\"shellReveal\":\"ok\""]
             && [(NSString *)state containsString:expected_hmr];
+          if (zapp_svelte_smoke_enabled()) {
+            updated = updated && [(NSString *)state containsString:@"\"svelteInspector\":\"ok\""];
+          }
           BOOL terminal_failure = [state isKindOfClass:[NSString class]]
             && (
               [(NSString *)state containsString:@"\"roundTrip\":\"error\""]
@@ -167,6 +176,7 @@ void zapp_desktop_smoke_observe_response(
               || [(NSString *)state containsString:@"\"notificationStatus\":\"error\""]
               || [(NSString *)state containsString:@"\"navigationPolicy\":\"error\""]
               || [(NSString *)state containsString:@"\"shellOpen\":\"error\""]
+              || [(NSString *)state containsString:@"\"svelteInspector\":\"error\""]
             );
           if ([state isKindOfClass:[NSString class]]
               && [(NSString *)state containsString:@"\"requestedNote\":\"1\""]
@@ -196,6 +206,9 @@ void zapp_desktop_smoke_observe_response(
             return;
           }
           [zapp_desktop_smoke_responses() addObject:@(native_id)];
+          if (zapp_svelte_smoke_enabled()) {
+            printf("Svelte inspector WebKit checks passed window=%d\n", native_id);
+          }
           if ([(NSString *)state containsString:@"\"deepLinkNote\":\"1\""]) {
             printf("activation WebView selected note 1\n");
           }

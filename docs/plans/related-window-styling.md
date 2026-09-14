@@ -1,8 +1,21 @@
 # Related-window injection and styling
 
-Status: **proposals for deliberation; no public API or styling default approved**,
-2026-09-13. Captured from the side-chat handoff. This work does not replace the
+Status: **future direction agreed; public API and styling defaults still require
+deliberation**, updated 2026-09-14. Captured from the side-chat handoff. This work does not replace the
 shipped [factory and close/lifetime contract](related-windows.md).
+
+## Agreed sequence
+
+The Svelte Notes slice uses an explicitly owned child stylesheet and ordinary
+Svelte CSS extraction for the owner. This narrowly avoids the development
+injected-CSS registry retention found in the integration proof; it is application
+code, not the future framework styling model.
+
+General, framework-neutral related-window stylesheet sharing is the agreed
+future workstream (option 3 from that discussion). Resume the experiment sequence
+below when this slice is complete. Agree on the public defaults, independent
+styling, ordering, readiness, theme and HMR behavior before shipping them.
+This does not approve automatic JavaScript injection or a new `inject` option.
 
 ## Current behavior
 

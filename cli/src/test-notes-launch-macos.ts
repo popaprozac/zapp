@@ -33,6 +33,7 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     ZAPP_Z_NOTES_IDENTIFIER: identifier,
     ZAPP_NATIVE_LANG: "z",
     ZAPP_APPLICATION_WORKER_SMOKE: "1",
+    VITE_ZAPP_SVELTE_SMOKE: process.env.VITE_ZAPP_SVELTE_SMOKE ?? "0",
   };
   const primary = Bun.spawn([process.execPath, path.join(notes, mode === "dev" ? "dev.ts" : "run.ts"), "--smoke"], {
     cwd: repo, env, detached: true, stdout: "pipe", stderr: "pipe",
@@ -95,6 +96,10 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     assert.equal(output.split("Z Notes handled a secondary launch (4 arguments)\n").length - 1, 1, output);
     assert.ok(output.includes("visible WebView round trip"), "The primary must complete its WebView smoke");
     assert.ok(output.includes("sent async-service"), "The primary must complete a suspended worker service call");
+    if (env.VITE_ZAPP_SVELTE_SMOKE === "1") {
+      assert.ok(output.includes("Svelte inspector WebKit checks passed window=1"),
+        "The primary must complete the cross-document Svelte probe");
+    }
     assert.ok(!output.includes("deep link opened note"), "URL-looking arguments must not become implicit URL events");
     if (mode === "dev") assert.ok(output.includes("Z Notes dev smoke released Vite port 5173"), output);
     await assert.rejects(lstat(socket), { code: "ENOENT" });

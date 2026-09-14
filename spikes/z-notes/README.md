@@ -27,6 +27,11 @@ zapp/
 frontend/
 ├── index.html        # Vite frontend entry
 ├── app.js            # application ES module and generated-service consumer
+├── NotesWorkspace.svelte # notes list and editor
+├── NoteInspector.svelte # related-document metadata/editor component
+├── note-inspector.css # explicitly owned child stylesheet
+├── notes-model.ts     # shared selection and unsaved presentation state
+├── related-inspectors.ts # mount/unmount ownership, using public window APIs
 └── injected/         # build-checked per-window injection profile evidence
 vite.config.ts        # frontend/ -> dist/ production build
 zapp.config.ts        # Zapp metadata and packaged dist/ asset root
@@ -233,14 +238,21 @@ bun cli/src/test-notes-launch-macos.ts dev
 
 ### Menus and windows
 
-**Open related inspector** creates a minimal second native document without
-loading another frontend entrypoint. Open two inspectors and edit the title in
-either one or in Z Notes: the UI shares the same owner state and ordinary
-callbacks. The child button's generated service call remains owner code; each
-child also receives its own native bridge, used directly by its handle controls.
-Closing an inspector disposes its subscription/UI references without closing its
-siblings. The demo styles its child explicitly; automatic CSS/theme/HMR sharing
-is separate future work. See the [related-window guide](../../docs/related-windows.md).
+**Open note inspector** mounts a Svelte metadata/editor component into a minimal
+second native document without loading another frontend entrypoint. Select a
+note, open two inspectors, and edit its title in any of the three windows. The
+same owner-held store carries selection and unsaved text. Save persists through
+the existing generated Z service call; each child has its own native bridge for
+its handle controls. Closing an inspector releases its component subscription
+without closing siblings.
+
+The inspector's stylesheet is explicitly owned and removed with its document;
+the main window uses ordinary Svelte CSS extraction. This avoids the development
+CSS-registry retention found during the initial experiment. The [Svelte checkpoint](SVELTE.md)
+explains the implementation and tests. General related-window CSS sharing is the
+agreed future direction; automatic application CSS/theme/HMR sharing is not
+implemented by this demo. No new Zapp API was added.
+See the [related-window guide](../../docs/related-windows.md) for the public contract.
 
 Z Notes installs an application menu from both sides of Zapp's command model.
 Before `run()`, native Z supplies the initial standard roles plus a
