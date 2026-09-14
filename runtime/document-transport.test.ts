@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { createContext, runInContext } from "node:vm";
 import { bundleWebviewBootstrapRaw } from "../bootstrap/codegen";
+import { bindRelatedDocumentLifetime } from "./related-window-lifetime";
+import { RelatedWindowInvalidatedError } from "./window-errors";
 
 const source = await bundleWebviewBootstrapRaw();
 function realm() {
@@ -149,4 +151,99 @@ test("a restored realm cannot accept older token bindings or replies", async () 
   expect(page.bridge._bindDocument(page.nonce, "9")).toBe(false);
   expect(page.bridge._onDocumentInvokeResult("9", 1, true, "99")).toBe(false);
   page.bridge._dispose(new Error("done"));
+});
+
+test("document-bound retirement rejects child work before queued and late owner listeners", async () => {
+  const owner = realm(), child = realm();
+  owner.bridge._bindDocument(owner.nonce, "21");
+  child.bridge._bindDocument(child.nonce, "22");
+  const identity = { windowId: "related-2", documentToken: "22" };
+  const life = bindRelatedDocumentLifetime(identity, child.bridge);
+  let notices = 0;
+  const stop = owner.bridge._observeRelatedDocument(identity.windowId, identity.documentToken, (reason: string) => {
+    notices++;
+    life.invalidate(identity, reason);
+  });
+  const held = child.bridge.invoke("notes.watch", {}, { timeout: 1000 }).catch((error: Error) => error);
+  const ownWork = owner.bridge.invoke("notes.list", {}, { timeout: 0 });
+  let early = 0, late = 0, suppressed = 0;
+  life.subscribe(() => { early++; expect(() => life.assertActive()).toThrow(RelatedWindowInvalidatedError); });
+  const cancelled = life.subscribe(() => { suppressed++; });
+  expect(owner.bridge._onRelatedDocumentInvalidated("old-owner", identity.windowId, "22", "wrong owner")).toBe(false);
+  expect(owner.bridge._onRelatedDocumentInvalidated("21", identity.windowId, "20", "old child")).toBe(false);
+  expect(owner.bridge._onRelatedDocumentInvalidated("21", identity.windowId, "22", "closed")).toBe(true);
+  expect(early).toBe(0);
+  cancelled.unsubscribe();
+  life.subscribe(() => { late++; }); // Terminal before the consumer continuation attaches.
+  expect(late).toBe(0);
+  expect(owner.bridge._onRelatedDocumentInvalidated("21", identity.windowId, "22", "duplicate")).toBe(false);
+  const error = await held;
+  expect(error).toBeInstanceOf(RelatedWindowInvalidatedError);
+  expect(error).toMatchObject({ windowId: "related-2", reason: "closed" });
+  expect([notices, early, late, suppressed]).toEqual([1, 1, 1, 0]);
+  expect(child.timers.size).toBe(0);
+  owner.bridge._onDocumentInvokeResult("21", 1, true, "42");
+  expect(await ownWork).toBe(42);
+  stop(); stop();
+});
+
+test("replacement tokens and realms isolate unsolicited related retirement", () => {
+  const old = realm(), fresh = realm();
+  old.bridge._bindDocument(old.nonce, "30");
+  fresh.bridge._bindDocument(fresh.nonce, "40");
+  let previous = 0, current = 0;
+  old.bridge._observeRelatedDocument("related-2", "31", () => { previous++; });
+  fresh.bridge._observeRelatedDocument("related-2", "41", () => { current++; });
+  expect(fresh.bridge._onRelatedDocumentInvalidated("30", "related-2", "31", "queued old event")).toBe(false);
+  expect(fresh.bridge._onRelatedDocumentInvalidated("40", "related-2", "31", "reused id")).toBe(false);
+  expect(old.bridge._onRelatedDocumentInvalidated("30", "related-2", "31", "closed")).toBe(true);
+  expect([previous, current]).toEqual([1, 0]);
+  expect(fresh.bridge._onRelatedDocumentInvalidated("40", "related-2", "41", "closed")).toBe(true);
+  expect(current).toBe(1);
+});
+
+test("owner rebind and disposal retire observers without allowing reentrant enrollment", () => {
+  for (const rebind of [false, true]) {
+    const page = realm();
+    page.bridge._bindDocument(page.nonce, "50");
+    const reasons: string[] = [];
+    page.bridge._observeRelatedDocument("related-2", "51", (reason: string) => {
+      reasons.push(reason);
+      expect(() => page.bridge._observeRelatedDocument("other", "52", () => {})).toThrow();
+    });
+    if (rebind) page.bridge._bindDocument(page.nonce, "60");
+    else page.bridge._dispose(new Error("gone"));
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(rebind ? "replaced" : "retired");
+    expect(page.bridge._onRelatedDocumentInvalidated("50", "related-2", "51", "late")).toBe(false);
+  }
+});
+
+test("abandoned creation observation is removable without posting native messages", () => {
+  const page = realm();
+  expect(() => page.bridge._observeRelatedDocument("related-2", "1", () => {})).toThrow();
+  page.bridge._bindDocument(page.nonce, "70");
+  const posted = page.posts.length;
+  for (const token of ["", "0", "NaN", 71]) {
+    expect(() => page.bridge._observeRelatedDocument("related-2", token, () => {})).toThrow();
+  }
+  const notify = () => { throw new Error("detached observer ran"); };
+  const stop = page.bridge._observeRelatedDocument("related-2", "71", notify);
+  expect(() => page.bridge._observeRelatedDocument("related-2", "71", notify)).toThrow();
+  stop(); stop();
+  expect(page.bridge._onRelatedDocumentInvalidated("70", "related-2", "71", "closed")).toBe(false);
+  expect(page.posts.length).toBe(posted);
+});
+
+test("observer and reporter failures cannot strand sibling retirement", () => {
+  const page = realm();
+  // Do not mutate the host console shared by the ordinary VM test setup.
+  runInContext("console = { error() { throw new Error('reporter failed'); } }", page.context);
+  page.bridge._bindDocument(page.nonce, "80");
+  let retired = 0;
+  page.bridge._observeRelatedDocument("first", "81", () => { throw new Error("observer failed"); });
+  page.bridge._observeRelatedDocument("second", "82", () => { retired++; });
+  expect(() => page.bridge._dispose(new Error("owner closed"))).not.toThrow();
+  expect(retired).toBe(1);
+  expect(page.bridge._onRelatedDocumentInvalidated("80", "second", "82", "late")).toBe(false);
 });

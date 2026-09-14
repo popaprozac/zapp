@@ -47,7 +47,7 @@ readonly struct WebViewWindowNavigationPayload {
   cancelled: boolean;
 }
 
-function javascriptJSON(in source: String): String {
+internal function javascriptJSON(in source: String): String {
   let output = TextBuffer();
   let segmentStart: usize = 0;
   let offset: usize = 0;

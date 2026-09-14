@@ -52,6 +52,7 @@ function count(windows: WindowManager): usize on thread.main {
 }
 
 readonly struct Request { t: i32 = 0; id: u64 = 0; m: String = ""; }
+readonly struct PreparedChild { address: String; windowId: String; documentToken: String; ownerToken: String; }
 function reply(view: WebKit.WKWebView, in identity: RelatedDocumentIdentity, id: u64, payload: String): void on thread.main {
   const value = json.JsonValue.string(move payload);
   const encoded = json.stringify(in value);
@@ -76,6 +77,8 @@ class State on thread.main {
   closes: i32;
   closeRequests: i32;
   allowClose: boolean;
+  immediate: boolean;
+  held: boolean;
 
   function current(): Option<MacOSRelatedWindows> {
     return match (in this.coordinator) {
@@ -117,6 +120,11 @@ class State on thread.main {
         this.subscriptions.push(closed);
         const identity = match (copy this.identity) { some(value) => value; none => { this.failed = true; return; } };
         if (this.completionId == 0 || !this.owner.isCurrent(in identity)) { this.failed = true; return; }
+        if (this.immediate) {
+          const coordinator = match (this.current()) { some(value) => value; none => { this.failed = true; return; } };
+          const runtime = match (coordinator.runtime(in child)) { some(value) => value; none => { this.failed = true; return; } };
+          runtime.window.close();
+        }
         reply(this.view, in identity, this.completionId, "true");
       }
       failed(_) => {
@@ -152,8 +160,9 @@ class State on thread.main {
         };
         this.reservation = Option.some(copy reservation);
         const address = match (coordinator.address(in reservation)) { some(value) => value; none => { this.failed = true; return; } };
-        const value = json.JsonValue.string(move address);
-        const encoded = json.stringify(in value);
+        const value = PreparedChild({ address, windowId: `related-${reservation.child.windowId}`,
+          documentToken: `${reservation.child.token}`, ownerToken: `${identity.token}` });
+        const encoded = json.encode(in value);
         reply(this.view, in identity, request.id, move encoded);
         return;
       }
@@ -164,6 +173,11 @@ class State on thread.main {
         return;
       }
       if (request.m == "completion") { this.completionId = request.id; return; }
+      if (request.m == "held") { reply(this.view, in identity, request.id, this.held ? "true" : "false"); return; }
+      if (request.m == "alive") {
+        if (this.closes != 1 || count(this.windows) != 1 || coordinator.count() != 0) this.failed = true;
+        reply(this.view, in identity, request.id, "43"); return;
+      }
       if (request.m == "stopManager") { this.windows.stop(); reply(this.view, in identity, request.id, "true"); return; }
       if (request.m == "familyVeto") {
         const id = "owner";
@@ -186,6 +200,11 @@ class State on thread.main {
         return;
       }
       if (request.m == "pass") { this.passed = true; return; }
+    }
+    if (request.m == "hold" && identity.windowId == 2 && this.completions == 1) {
+      if (this.held || !coordinator.documents.isReady(in identity)) { this.failed = true; return; }
+      this.held = true;
+      return;
     }
     if (request.m == "echo" && identity.windowId == 2 && this.completions == 1) {
       const runtime = match (coordinator.runtime(in identity)) { some(value) => value; none => { this.failed = true; return; } };
@@ -224,6 +243,7 @@ function main(): i32 on thread.main {
   if (args.length < 2 || args.length > 4) return 2;
   const stopped = args.length == 4 && args[3] == "--stopped";
   const family = args.length == 4 && args[3] == "--family";
+  const immediate = args.length == 4 && args[3] == "--immediate";
   const app = WebKit.NSApplication.sharedApplication;
   app.setActivationPolicy(WebKit.NSApplicationActivationPolicyRegular);
   app.finishLaunching();
@@ -255,7 +275,8 @@ function main(): i32 on thread.main {
   const windows = createWindowManager();
   const state = new State({ owner, view, windows, subscriptions: Array<WindowEventSubscription>(), coordinator: Option<MacOSRelatedWindows>.none,
     reservation: Option<RelatedWindowReservation>.none, identity: Option<RelatedDocumentIdentity>.none,
-    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0, allowClose: false });
+    completionId: 0, completions: 0, failures: 0, echoes: 0, passed: false, failed: false, closes: 0, closeRequests: 0,
+    allowClose: false, immediate, held: false });
   const weakState = weak state;
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => {
     match (attempt weakState.upgrade()) { success(state) => state.route(move message, identity); failure(_) => {} }
@@ -289,7 +310,7 @@ function main(): i32 on thread.main {
   const delegate = createDesktopWindowDelegate("owner", 1, window, view, weak windows, closed);
   window.delegate = delegate;
   window.makeKeyAndOrderFront(null);
-  const suffix = stopped ? "?stopped=1" : (family ? "?family=1" : "");
+  const suffix = stopped ? "?stopped=1" : (family ? "?family=1" : (immediate ? "?immediate=1" : ""));
   const url = WebKit.NSURL.URLWithString(`${args[0]}/owner.html${suffix}`);
   if (url == null) return 4;
   view.loadRequest(WebKit.NSURLRequest.requestWithURL(url));
@@ -300,7 +321,8 @@ function main(): i32 on thread.main {
   }
   const expected = stopped
     ? state.completions == 0 && state.failures == 2 && state.echoes == 0 && state.closes == 0 && state.closeRequests == 0
-    : state.completions == 1 && state.failures == 1 && state.echoes == 1 && state.closes == 1 && state.closeRequests == (family ? 3 : 1);
+    : state.completions == 1 && state.failures == 1 && state.echoes == (immediate ? 0 : 1)
+      && state.closes == 1 && state.closeRequests == (immediate ? 0 : (family ? 3 : 1));
   const remaining = usize(family ? 0 : 1);
   const pass = !state.failed && state.passed && expected
     && count(windows) == remaining && related.count() == 0 && creations.count() == 0 && documents.count() == remaining;

@@ -18,6 +18,8 @@ allocation, using the ordinary window controls and Z event lifecycle.
 Family-wide close preflight now gives each affected window's synchronous Z
 listener a veto before teardown or task cancellation. Accepted closure retires
 the subtree; unrelated windows remain live.
+Committed child retirement now sends a document-bound terminal notice to its
+surviving owner, rejecting retained child requests through the existing bridge.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -207,8 +209,10 @@ validation and physical window teardown remain outside this helper.
       existing controls/Z events, without allocating a second native window.
 - [x] Carry family close preflight through the production native path and prove
       veto-preserved work versus accepted-close cancellation of real Z tasks.
-- [ ] Complete document-bound unsolicited terminal delivery and broader
-      origin/capability, renderer-loss, owner-loss, and navigation integration.
+- [x] Deliver unsolicited child terminal notices to the exact surviving owner
+      document, including closure before the creation continuation resumes.
+- [ ] Complete broader origin/capability, renderer-loss, owner-loss, and
+      navigation integration, including families losing their observer realm.
 - [ ] Expose the public factory and add a Z Notes demonstration.
 - [ ] Re-run representative application benchmarks and other-platform probes.
 
@@ -605,8 +609,55 @@ frontends and optimization levels. Dedicated worker-to-main linear timer
 segments with early completion remain a diagnosed native-compiler boundary;
 ordinary main-executor tasks are covered here.
 
-Next: document-bound unsolicited terminal delivery, then broader owner,
+At that checkpoint, next was document-bound unsolicited terminal delivery, then broader owner,
 navigation, and renderer retirement cases before the public factory/demo.
 The private production prepare entry is still root-owner-only: headless nested
 family evidence does not claim an exposed nested creation API. Styling and
 injection proposals remain separate and unapproved.
+
+### Document-bound terminal delivery checkpoint
+
+The production coordinator now sends terminal notices after committed native
+routing/window retirement. Delivery checks the original owner's native document
+identity before submitting JavaScript, then checks its token again inside the
+actual receiving realm. A queued notice cannot invalidate a replacement page's
+handle or a child with the same window ID and a different document token.
+Duplicate/unknown notices are ignored. Native close does not await evaluation,
+listener execution, Promise settlement, or a JavaScript acknowledgement; a dead
+or blocked observer realm still cannot be promised JavaScript cleanup.
+
+The internal bootstrap hook connects the already-tested
+`RelatedDocumentLifetime` to native delivery. The private creator registers it
+after authenticated preparation but **before `window.open`**, not after awaiting
+creation. Thus the lifetime object can remember a close that precedes the
+consumer's continuation, without retaining an unbounded inbox of unknown
+terminal messages. Failed creation detaches the observer; delivered invalidation
+removes it before cleanup; owner rebind/disposal drains remaining observers.
+The map is allocated only when related documents are observed and is not on the
+ordinary service-request path.
+
+The public factory remains unexported. Its future integration must preserve this
+prepare → observe → open ordering, detach on every failed creation, and check the
+lifetime before exposing a handle. The immediate-close fixture deliberately
+delivers a private success reply after native closure to test this race; it does
+not redefine public creation as successful for an already-retired document.
+
+The private owner probe now bundles the real lifetime helper, rather than an
+instrumentation-only invalidation callback. It verifies pending child-Promise
+rejection, unchanged owner requests, queued and late one-shot subscriptions,
+duplicate suppression, and closure immediately after adoption. Its held request
+is instrumentation; real native-task cancellation remains the separate registry
+matrix from the preceding checkpoint.
+
+See [terminal-delivery evidence](../../spikes/related-windows/results/2026-09-13/terminal-delivery.json)
+for native/Stage 0 × `-O0`/`-O2` × Vite/packaged × adopted/stopped/family/immediate
+cases. Broader owner/navigation/renderer-loss integration and the public
+factory/demo remain next. This introduces no public API, permission, injection,
+or styling change.
+
+The packaged Z Notes regression also passes. Its embedded bootstrap exposed a
+C11 trigraph-escaping bug in Z (`??=` inside JavaScript source), fixed upstream
+in `5fa6338d` without rewriting the bootstrap or suppressing compiler warnings.
+The native compiler was rebuilt to a byte-identical fixed point before the
+final 32-case matrix. The 82 focused runtime/CLI tests and TypeScript/type tests
+also pass; all native cases use bounded processes and UBSan, not ASan.

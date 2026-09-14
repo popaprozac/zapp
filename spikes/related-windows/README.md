@@ -140,7 +140,7 @@ Z child allocator, supplied WebKit configuration, retained delegates, separate
 message registration, sender validation, and one-shot creation coordinator.
 Only the owner's prepare route and echo response are test instrumentation.
 
-24 native/Stage 0 × `-O0`/`-O2` × Vite/packaged × adopted/stopped-manager/family-close
+32 native/Stage 0 × `-O0`/`-O2` × Vite/packaged × adopted/stopped-manager/family-close/immediate-close
 cases pass with UBSan and strict warnings. They reject unprepared creation,
 roll back and retry a partial allocation, wait for acknowledged bridge activation
 and logical adoption, verify the empty shell and shared owner state, and deliver
@@ -152,6 +152,13 @@ child. The family-close scenario vetoes owner closure from the child, verifies
 both documents remain usable, then accepts a fresh request and retires both.
 Timers, views, and the Vite server have bounded cleanup.
 
+The private `production-owner.ts` uses the real lifetime helper, registered before
+opening the child. Native terminal delivery rejects a held child Promise without
+retiring owner calls; late subscribers receive the remembered event. The fourth
+scenario closes the child immediately after adoption, before the private creation
+reply reaches the owner's continuation. This is race coverage, not a public
+factory implementation or a claim that failed creation returns a usable handle.
+
 [Production output](results/2026-09-13/production-creations.json),
 [early-call activation output](results/2026-09-13/activation-shell.json), and
 [headless completion output](results/2026-09-13/creation-completion.json) preserve
@@ -162,9 +169,10 @@ and stale owner replies; the production fixture does not wait for its real
 ten-second deadline. This is not a first-paint or allocation benchmark.
 
 The [family-close output](results/2026-09-13/family-close.json) adds the third scenario.
-The public factory remains gated on complete
-document-bound event/retirement integration. See the
-[current checkpoint](../../docs/plans/related-windows.md#family-close-preflight-checkpoint).
+The [terminal-delivery output](results/2026-09-13/terminal-delivery.json) adds the
+real lifetime binding and immediate-close scenario. The public factory remains
+gated on broader owner/navigation/renderer retirement integration. See the
+[current checkpoint](../../docs/plans/related-windows.md#document-bound-terminal-delivery-checkpoint).
 For logical adoption and ordinary-window regressions, run
 `bun native/z/testing/window-focus.ts` and add `--native` for the AppKit cases.
 

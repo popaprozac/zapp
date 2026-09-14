@@ -12,6 +12,7 @@ import { Window, WindowManager, WindowOptions } from "../../window.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
+import { deliverRelatedDocumentInvalidated } from "./related-window-delivery.zs";
 import { hasConfiguredFrontendOrigin, resolveLogicalURL } from "./navigation-policy.zs";
 import { RelatedNativeFailure,
   createMacOSRelatedWindowRuntime } from "./related-window-native.zs";
@@ -56,7 +57,7 @@ class NativeCreation on thread.main {
 
 // Internal production coordinator. Only a native, document-authenticated
 // prepare call can open the one-shot WebKit creation gate. The public factory
-// stays unexported until family-close preflight and terminal delivery land.
+// stays unexported until terminal delivery and retirement gates are complete.
 internal class MacOSRelatedWindows on thread.main {
   readonly documents: RelatedDocuments;
   readonly creations: RelatedWindowCreations;
@@ -313,6 +314,7 @@ internal class MacOSRelatedWindows on thread.main {
     if (record.completed) {
       const id = `related-${reservation.child.windowId}`;
       match (attempt this.windows.upgrade()) { success(windows) => windows.closedNative(in id); failure(_) => {} }
+      deliverRelatedDocumentInvalidated(record.ownerView, record.owner, in reservation.owner, in reservation.child);
     }
   }
 

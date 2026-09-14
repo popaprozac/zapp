@@ -9,7 +9,9 @@ Latest production checkpoint: checked-Z allocation/adoption and family-wide
 cancellable close preflight now pass the real WebKit matrix, with a separate
 real-task cancellation matrix. See the
 [family close checkpoint](../plans/related-windows.md#family-close-preflight-checkpoint)
-for current scope. The oracle findings below retain their original boundaries;
+for current scope, followed by the
+[document-bound terminal delivery checkpoint](../plans/related-windows.md#document-bound-terminal-delivery-checkpoint).
+The oracle findings below retain their original boundaries;
 they are not claims that every production lifecycle gate is complete.
 
 Runnable source: [spikes/related-windows](../../spikes/related-windows/README.md).

@@ -31,6 +31,23 @@
   let documentNeedsShell = false;
   let documentReadyListener: (() => void) | undefined;
   let waitingForDocument: string[] = [];
+  // Installed by the owning factory after native preparation and BEFORE
+  // window.open. The lifetime object remembers terminal state even if the
+  // user's continuation has not subscribed yet. No per-request registry.
+  let relatedObservers: Map<string, (reason: string) => void> | undefined;
+
+  function reportRelatedObserverError(error: unknown): void {
+    try { console.error("[zapp] related-window retirement failed", error); } catch {}
+  }
+
+  function retireRelatedObservers(reason: string): void {
+    const observers = relatedObservers;
+    relatedObservers = undefined;
+    for (const notify of observers?.values() ?? []) {
+      try { notify(reason); }
+      catch (error) { reportRelatedObserverError(error); }
+    }
+  }
 
   function postNative(msg: string): void {
     if (disposed) return;
@@ -153,6 +170,8 @@
         || (token.length === documentToken.length && token < documentToken))) return false;
       if (token === documentToken && needsShell !== documentNeedsShell) return false;
       if (documentToken && token !== documentToken) {
+        documentActive = false;
+        retireRelatedObservers("The owning document was replaced.");
         const error = new Error("Native document session was replaced");
         for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
       }
@@ -198,6 +217,39 @@
     _onDocumentInvokeResult(token: string, id: number, ok: boolean, payload: string): boolean {
       if (disposed || !documentBound || !documentActive || token !== documentToken) return false;
       bridge._onInvokeResult(id, ok, payload);
+      return true;
+    },
+
+    // Internal factory hook. Identity comes from the authenticated native
+    // preparation reply, not arbitrary child content. One observer owns the
+    // related lifetime; its public subscribe() supports independent listeners.
+    _observeRelatedDocument(windowId: string, token: string, notify: (reason: string) => void): () => void {
+      if (disposed || !documentBound || !documentActive) throw new Error("The owning document is not active");
+      if (typeof windowId !== "string" || !windowId || typeof token !== "string"
+        || !/^[1-9][0-9]{0,19}$/.test(token) || typeof notify !== "function") {
+        throw new TypeError("Invalid related document observer");
+      }
+      const key = JSON.stringify([windowId, token]);
+      relatedObservers ??= new Map();
+      if (relatedObservers.has(key)) throw new Error("Related document is already observed");
+      relatedObservers.set(key, notify);
+      const observers = relatedObservers;
+      return () => {
+        if (relatedObservers === observers && observers.get(key) === notify) observers.delete(key);
+        if (relatedObservers?.size === 0) relatedObservers = undefined;
+      };
+    },
+
+    _onRelatedDocumentInvalidated(ownerToken: string, windowId: string, token: string, reason: string): boolean {
+      if (disposed || !documentBound || !documentActive || ownerToken !== documentToken
+        || typeof windowId !== "string" || typeof token !== "string" || typeof reason !== "string") return false;
+      const key = JSON.stringify([windowId, token]);
+      const notify = relatedObservers?.get(key);
+      if (!notify) return false;
+      relatedObservers!.delete(key); // Latch/remove before reentrant cleanup.
+      if (relatedObservers!.size === 0) relatedObservers = undefined;
+      try { notify(reason); }
+      catch (error) { reportRelatedObserverError(error); }
       return true;
     },
 
@@ -476,6 +528,7 @@
       disposed = error;
       clearDocumentReadyListener();
       documentActive = false;
+      retireRelatedObservers("The owning document was retired.");
       waitingForDocument = [];
       for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
       for (const id of Object.keys(bridge._syncPending)) {
