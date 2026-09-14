@@ -146,11 +146,31 @@ void zapp_desktop_smoke_observe_response(
           @"styleExperiment:document.body?.dataset?.styleExperiment??null,"
           @"styleHmrPhase:document.body?.dataset?.styleHmrPhase??null,"
           @"styleMetrics:document.body?.dataset?.styleMetrics??null,"
+          @"publicStyles:document.body?.dataset?.publicStyles??null,"
+          @"publicStylePhase:document.body?.dataset?.publicStylePhase??null,"
+          @"publicStyleMetrics:document.body?.dataset?.publicStyleMetrics??null,"
           @"requestedNote:new URLSearchParams(location.search).get('note'),"
           @"status:document.querySelector('#status')?.textContent??null,"
           @"bridge:typeof globalThis[Symbol.for('zapp.bridge')]"
           @"})"
         completionHandler:^(id state, NSError *state_error) {
+          if (native_id == 1 && zapp_svelte_smoke_enabled() && [state isKindOfClass:[NSString class]]) {
+            for (NSString *phase in @[@"hidden", @"shown"]) {
+              NSString *marker = [NSString stringWithFormat:@"\"publicStylePhase\":\"%@\"", phase];
+              if (![(NSString *)state containsString:marker]) continue;
+              NSUInteger matched = 0;
+              BOOL expected = YES;
+              for (NSWindow *window in NSApp.windows) {
+                if (![window.title hasPrefix:@"Public style "]) continue;
+                matched++;
+                BOOL visible = [phase isEqualToString:@"shown"] && [window.title isEqualToString:@"Public style small"];
+                expected = expected && window.visible == visible;
+              }
+              if (matched == 3 && expected) {
+                [web_view evaluateJavaScript:[NSString stringWithFormat:@"document.body.dataset.publicStyleNative='%@'", phase] completionHandler:nil];
+              }
+            }
+          }
           // Private fixture handshake only: the host edits disposable files.
           // Keep factory/readiness and all production bridge APIs unchanged.
           if (native_id == 1 && zapp_svelte_smoke_enabled()

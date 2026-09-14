@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createRelatedWindow, RelatedWindowEvent, RelatedWindowInvalidatedError, WindowEvent } from "./window-api";
 import { createRelatedWindowBinding } from "./related-window";
+import { styleDOM } from "./related-window-dom.test";
 
 const keys = [Symbol.for("zapp.bridge"), Symbol.for("zapp.windowId"), Symbol.for("zapp.bootstrapConfig"), "window"];
 const original = keys.map(key => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -10,6 +11,7 @@ afterEach(() => keys.forEach((key, i) => {
 }));
 
 function fixture() {
+  const dom = styleDOM();
   const calls: string[] = [], childPosts: any[] = [], disposed: Error[] = [];
   const listeners = new Map<string, (value: any) => void>();
   let created = () => {}, invalidated = (_reason: string) => {};
@@ -21,7 +23,7 @@ function fixture() {
     on(name: string, listener: (value: any) => void) { listeners.set(name, listener); return () => listeners.delete(name); },
     _dispose(error: Error) { disposed.push(error); listeners.clear(); },
   };
-  const child: any = { closed: false, document: { head: {}, body: {} },
+  const child: any = { closed: false, document: dom.document("zapp://app/.zapp/related.html"),
     [Symbol.for("zapp.bridge")]: childBridge, [Symbol.for("zapp.windowId")]: prepared.windowId };
   const owner: any = {
     invoke: async (method: string) => { calls.push(method); return method === "__window:prepare-related" ? prepared : null; },
@@ -32,7 +34,7 @@ function fixture() {
     },
     post() { throw new Error("related controls used owner bridge"); },
   };
-  const browser: any = { location: { href: "zapp://app/index.html" }, open(address: string) {
+  const browser: any = { document: dom.document("zapp://app/index.html"), location: { href: "zapp://app/index.html" }, open(address: string) {
     expect(observing).toBe(true); expect(address).toBe(prepared.address);
     calls.push("open"); queueMicrotask(() => created()); return child;
   } };
@@ -40,7 +42,7 @@ function fixture() {
   (globalThis as any)[keys[0]!] = owner;
   (globalThis as any)[keys[1]!] = "owner";
   (globalThis as any)[keys[2]!] = { permissions: { platform: "macos", active: false, allow: [] } };
-  return { owner, browser, child, childBridge, calls, childPosts, listeners, disposed, prepared,
+  return { owner, browser, child, childBridge, calls, childPosts, listeners, disposed, prepared, dom,
     ready: () => created(), invalidate: (reason = "Closed") => invalidated(reason), isObserving: () => observing };
 }
 
@@ -69,6 +71,7 @@ test("public factory observes before open, publishes after activation, and uses 
   child.subscribe(RelatedWindowEvent.INVALIDATED, () => retired++);
   await Promise.resolve(); expect(retired).toBe(2);
   expect(f.disposed).toHaveLength(1);
+  expect(f.dom.observers()).toBe(0);
 });
 
 test("blocked opening awaits rollback and detaches its observer before rejection", async () => {
@@ -113,10 +116,78 @@ test("malformed shell/bridge fails closed and rolls back", async () => {
 });
 
 test("unapproved options and invalid dimensions do not allocate native resources", async () => {
-  for (const options of [{ url: "/other" }, { inject: ["base"] }, { width: 0 }, { width: 1.5 }, { height: Infinity }, { title: 2 }]) {
+  for (const options of [{ url: "/other" }, { inject: ["base"] }, { width: 0 }, { width: 1.5 }, { height: Infinity }, { title: 2 },
+    { styles: "inherit" }, { visible: 0 }, { theme: null }, { theme: { attributes: ["onclick"] } },
+    { theme: { attributes: ["id"] } }, { theme: { classes: ["two tokens"] } }, { theme: { variables: ["color"] } }]) {
     const f = fixture(); await expect(createRelatedWindow(options as any)).rejects.toBeInstanceOf(TypeError);
     expect(f.calls).toHaveLength(0);
   }
+});
+
+test("styles and snapshotted theme precede publication; only native options cross the bridge", async () => {
+  const f = fixture();
+  const style = f.browser.document.createElement("style"); style.textContent = "main{color:red}";
+  f.browser.document.head.append(style);
+  f.browser.document.documentElement.setAttribute("data-theme", "dark");
+  const theme = { attributes: ["data-theme"] };
+  const invoke = f.owner.invoke;
+  f.owner.invoke = async (method: string, options: any) => {
+    if (method === "__window:prepare-related") {
+      expect(options.visible).toBe(false); expect(options.styles).toBeUndefined(); expect(options.theme).toBeUndefined();
+      theme.attributes[0] = "data-other";
+    }
+    if (method === "__window:publish-related") {
+      expect(f.child.document.head.querySelectorAll("style")).toHaveLength(1);
+      expect(f.child.document.documentElement.getAttribute("data-theme")).toBe("dark");
+    }
+    return invoke(method);
+  };
+  const child = await createRelatedWindow({ visible: false, theme });
+  child.show(); expect(f.childPosts.at(-1).m).toBe("show");
+  f.invalidate(); expect(f.dom.observers()).toBe(0);
+  expect(f.child.document.head.children).toHaveLength(0);
+});
+
+test("independent styles do not attach an observer or require supported owner CSS", async () => {
+  const f = fixture();
+  const style = f.browser.document.createElement("style"); style.textContent = 'main{background:image("unsupported")}';
+  f.browser.document.head.append(style);
+  await createRelatedWindow({ styles: "independent" });
+  expect(f.dom.observers()).toBe(0); f.invalidate();
+});
+
+test("independent styles can still select a live theme without copying sheets", async () => {
+  const f = fixture();
+  const style = f.browser.document.createElement("style"); style.textContent = 'main{background:image("unsupported")}';
+  f.browser.document.head.append(style);
+  f.browser.document.documentElement.setAttribute("data-theme", "dark");
+  await createRelatedWindow({ styles: "independent", theme: { attributes: ["data-theme"] } });
+  expect(f.child.document.head.querySelectorAll("style")).toHaveLength(0);
+  expect(f.child.document.documentElement.getAttribute("data-theme")).toBe("dark");
+  expect(f.dom.observers()).toBe(1);
+  f.browser.document.documentElement.setAttribute("data-theme", "light"); f.dom.flush();
+  expect(f.child.document.documentElement.getAttribute("data-theme")).toBe("light");
+  f.invalidate(); expect(f.dom.observers()).toBe(0);
+});
+
+test("theme setup failure also releases already-attached shared styles", async () => {
+  const f = fixture();
+  const style = f.browser.document.createElement("style"); style.textContent = "main{color:red}";
+  f.browser.document.head.append(style);
+  f.browser.document.documentElement.style.setProperty("--art", 'image("unsupported")');
+  await expect(createRelatedWindow({ theme: { variables: ["--art"] } })).rejects.toMatchObject({ code: "WINDOW_ERROR" });
+  expect(f.calls).not.toContain("__window:publish-related");
+  expect(f.calls.at(-1)).toBe("__window:abort-related");
+  expect(f.child.document.head.children).toHaveLength(0); expect(f.dom.observers()).toBe(0);
+});
+
+test("styling setup failure rolls back without publication or observer retention", async () => {
+  const f = fixture();
+  const style = f.browser.document.createElement("style"); style.textContent = 'main{background:image("unsupported")}';
+  f.browser.document.head.append(style);
+  await expect(createRelatedWindow()).rejects.toMatchObject({ code: "WINDOW_ERROR" });
+  expect(f.calls).not.toContain("__window:publish-related");
+  expect(f.calls.at(-1)).toBe("__window:abort-related"); expect(f.dom.observers()).toBe(0);
 });
 
 test("missing activation is bounded and awaits native rollback", async () => {

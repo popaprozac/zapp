@@ -126,6 +126,7 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     }
     if (env.VITE_ZAPP_STYLE_SMOKE === "1") {
       assert.ok(output.includes('"styleExperiment":"ok"'), "The private stylesheet experiment must pass");
+      assert.ok(output.includes('"publicStyles":"ok"'), "The public styling/visibility integration must pass");
     }
     if (styleHmr) {
       assert.equal(hmrStage, 2, "Both real file edits must run");

@@ -12,6 +12,7 @@ readonly struct RelatedOptions {
   title: String = "";
   width: u32 = 900;
   height: u32 = 640;
+  visible: boolean = true;
 }
 readonly struct RelatedPrepared {
   address: String;
@@ -32,7 +33,7 @@ function validOptions(in source: String): boolean {
   return match (in value) {
     object(fields) => {
       for (const field of fields) {
-        if (field.key != "title" && field.key != "width" && field.key != "height") return false;
+        if (field.key != "title" && field.key != "width" && field.key != "height" && field.key != "visible") return false;
       }
       select true;
     }
@@ -68,7 +69,7 @@ internal function routeRelatedWindowBridgeMessage(
     none => return WindowBridgeRoute.response(creationFailure(message.id, "The owning document is no longer active."));
   };
   if (!capabilities.allowsPermission("window:create")) return WindowBridgeRoute.response(bridgeCapabilityFailure(message.id, "window:create"));
-  if (!validOptions(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Related windows accept only title, width, and height."));
+  if (!validOptions(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Native related window options accept only title, width, height, and visible."));
   const options = match (attempt json.decode<RelatedOptions>(in message.arguments)) {
     success(value) => value;
     failure(_) => return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window dimensions or title."));
@@ -90,7 +91,7 @@ internal function routeRelatedWindowBridgeMessage(
     some(value) => value;
     none => return WindowBridgeRoute.response(creationFailure(message.id, "Related window creation could not be prepared."));
   };
-  windows.related.deferPublication(in reservation);
+  windows.related.deferPublication(in reservation, options.visible);
   const address = match (windows.related.address(in reservation)) {
     some(value) => value;
     none => { windows.related.fail(in reservation); return WindowBridgeRoute.response(creationFailure(message.id, "Related window shell is unavailable.")); }

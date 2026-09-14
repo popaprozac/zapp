@@ -13,11 +13,27 @@ export interface RelatedWindowInvalidatedEvent {
   readonly reason: string;
 }
 
+/** Selected inline/root theme state. The owner is authoritative while attached. */
+export interface RelatedWindowThemeOptions {
+  /** Selected data-* attributes on document.documentElement. No event handlers or IDs. */
+  attributes?: readonly string[];
+  /** Individual root class tokens, not the entire class attribute. */
+  classes?: readonly string[];
+  /** Selected inline CSS custom-property declarations, not computed styles. */
+  variables?: readonly string[];
+}
+
 /** A minimal same-origin document owned by the calling document. */
 export interface RelatedWindowCreateOptions {
   title?: string;
   width?: number;
   height?: number;
+  /** Default true. False keeps the published native window hidden until show(). */
+  visible?: boolean;
+  /** Default shared: live head-owned DOM styles, before child-local sheets. */
+  styles?: "shared" | "independent";
+  /** Omitted by default; no arbitrary root state is copied. */
+  theme?: RelatedWindowThemeOptions;
 }
 
 /** One original document and its native controls; never retargeted. */

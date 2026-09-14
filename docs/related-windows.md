@@ -11,6 +11,7 @@ const inspector = await createRelatedWindow({
   title: "Inspector",
   width: 440,
   height: 300,
+  visible: false,
 });
 
 const root = inspector.document.createElement("main");
@@ -28,7 +29,7 @@ inspector.subscribe(RelatedWindowEvent.INVALIDATED, () => {
   root.remove(); // Unmount framework UI and release references here.
 });
 
-inspector.focus();
+inspector.show(); // Present after mounting; focus() also requests activation.
 // inspector.close() requests ordinary native closure, including Z close vetoes.
 ```
 
@@ -38,16 +39,23 @@ The calling document is the owner. Both the application's permission ceiling
 and that document's capability profile must permit `window:create`. The child
 inherits the family's authority; it cannot select a stronger profile.
 
-The supported options are `title`, `width`, and `height`. Dimensions are positive
-integer logical units, defaulting to 900 × 640. The child is a minimal same-origin
-shell: there is no `url`, second frontend entrypoint, or injection-profile option.
+The supported options are `title`, `width`, `height`, `visible`, `styles`, and
+`theme`. Dimensions are positive integer logical units, defaulting to 900 × 640.
+The child is a minimal same-origin shell: there is no `url`, second frontend
+entrypoint, or injection-profile option. Unknown options fail before allocation.
 
 The Promise resolves after the native window exists, the original document has
 `head` and `body`, its direct bridge has been activated, and native publication
-has succeeded. This does **not** promise stylesheet/font readiness or first paint.
+has succeeded. Initial style/theme synchronization is installed before publication.
+This does **not** promise completed stylesheet loads, font readiness, or first paint.
 Failed unpublished creations roll back natively; creation is bounded rather than
 waiting indefinitely. Native errors use `WindowError`, while denied authority
 uses `PermissionDeniedError` from `@zappdev/runtime`.
+
+`visible` defaults to `true`. With `visible: false`, the native window stays hidden
+through publication; mount your UI and call `show()` when you choose. Visibility
+does not delay bridge activation or change the document's lifetime. `show()` does
+not request keyboard focus or application activation; use `focus()` for that.
 
 ## One document for the handle's lifetime
 
@@ -92,19 +100,94 @@ or a replacement for workers. Use a worker for independent background work, and
 native services for backend-owned state and OS resources. Independent frontends
 remain useful when windows should initialize and manage their own UI state.
 
-## Styling and demo
+## Shared or independent styles
 
-Documents have separate stylesheets. Automatic CSS synchronization, theme
-propagation, CSS HMR, and explicit child `inject` selection are not implemented
-by this tier. Style the child explicitly for now. The next styling experiment
-will be deliberated separately; no JavaScript or application CSS profile is
-silently replayed into children.
+`styles: "shared"` is the default. Ordinary head-owned `<style>` elements and
+stylesheet `<link>` elements synchronize from the owner, including additions,
+removals, source order, text edits, and Vite CSS HMR. Keep using normal component
+CSS imports and CSS Modules; no injection profile is required. Shared content is
+not a shared DOM node: every document owns its sheets and evaluates media queries
+against its own viewport. No owner JavaScript is copied or replayed.
+
+```ts
+// Ordinary application CSS applies; local CSS can add inspector-specific rules.
+const inspector = await createRelatedWindow({ title: "Inspector" });
+
+// A blank styling context for a deliberately separate design.
+const palette = await createRelatedWindow({
+  title: "Palette",
+  styles: "independent",
+});
+```
+
+Shared sheets precede child-local sheets. Standard specificity, cascade layers,
+and `!important` still apply: later order does not guarantee every override wins.
+Global owner `body`/`main` rules also apply; use scoped component rules or explicit
+child layout overrides where the document structure differs. This is stylesheet
+synchronization, not computed-style or ancestor-tree copying.
+
+Relative inline CSS URLs are rebased to their source location; linked sheets keep
+absolute URLs and normal browser loading. The first tier handles `url()`, string
+`@import`, and image-set candidates. Alternate-sheet selection and URL-producing
+`image()`/`src()` functions in inline styles fail explicitly at creation with
+`WindowError`. An unsupported later edit reports an error in the owner console,
+keeps the last good snapshot, and recovers after a supported edit. Use independent
+styling for unsupported source forms. Browser CSP remains in force; nonce and
+link integrity/cross-origin/referrer-policy metadata are preserved, not bypassed.
+
+CSSOM-only edits (`insertRule`, programmatic sheet toggles), constructed sheets,
+`adoptedStyleSheets`, shadow-root/body styles, replacement of the head, and
+CSS-in-JS framework registries are not observed by this tier. These need separate
+integration rather than a claim that copying style elements covers every library.
+
+## Explicit theme synchronization
+
+CSS rules travel with shared sheets. Root attributes, classes, and inline custom
+properties do not travel unless selected:
+
+```ts
+const inspector = await createRelatedWindow({
+  title: "Inspector",
+  theme: {
+    attributes: ["data-theme"],
+    classes: ["dark"],
+    variables: ["--accent"],
+  },
+});
+```
+
+Selections refer to each document's `<html>` element. Attribute names are limited
+to `data-*`; event handlers, IDs, and arbitrary attributes cannot be copied.
+Classes are individual tokens. Variables are selected **inline declarations**,
+including their priority—not a dump of computed styles. Stylesheet-defined theme
+variables already travel with their sheets. URLs in selected inline variables use
+the owner's base URL, under the same rebasing limits as inline sheets. Selection lists are copied at
+creation; mutating the options object later does not reconfigure the window.
+
+Selected names remain owner-authoritative: updates/removals propagate and a
+conflicting child edit is corrected. Unselected child state remains local.
+Omitting `theme` installs no theme observer. `styles: "independent"` and `theme`
+are orthogonal: an independently styled child can explicitly share selected
+theme state. Neither feature selects or grants a capability profile.
+
+Styles and theme bindings are released on rollback or terminal invalidation,
+before application invalidation callbacks. Child-local style nodes are not
+removed by framework cleanup. No frontend cleanup is awaited by native close.
+
+Child `inject` profile selection remains a separate future extension. It would
+complement shared CSS for child-specific setup, not replace ordinary CSS imports.
+
+## Notes demo
 
 From the repository root, run `bun run spike:z-notes:dev` (or
 `bun run spike:z-notes`). Choose **Open related inspector** twice. Editing the
 title in either inspector or Z Notes updates the shared frontend state; creating
 a note uses the owner's generated service call. Closing one inspector leaves the
 other and the main window usable.
+
+The inspector uses an ordinary CSS import, creates a hidden related window,
+mounts Svelte, then shows it. The translucent-looking surfaces are CSS within an
+opaque document, not native macOS vibrancy or window transparency.
 
 See the [implementation evidence and remaining gates](plans/related-windows.md)
 and [styling proposals](plans/related-window-styling.md).

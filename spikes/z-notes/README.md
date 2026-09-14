@@ -29,7 +29,7 @@ frontend/
 ├── app.js            # application ES module and generated-service consumer
 ├── NotesWorkspace.svelte # notes list and editor
 ├── NoteInspector.svelte # related-document metadata/editor component
-├── note-inspector.css # explicitly owned child stylesheet
+├── note-inspector.css # ordinary imported CSS shared with related inspectors
 ├── notes-model.ts     # shared selection and unsaved presentation state
 ├── related-inspectors.ts # mount/unmount ownership, using public window APIs
 └── injected/         # build-checked per-window injection profile evidence
@@ -246,15 +246,16 @@ the existing generated Z service call; each child has its own native bridge for
 its handle controls. Closing an inspector releases its component subscription
 without closing siblings.
 
-The inspector's stylesheet is explicitly owned and removed with its document;
-the main window uses ordinary Svelte CSS extraction. This avoids the development
-CSS-registry retention found during the initial experiment. The [Svelte checkpoint](SVELTE.md)
-explains the implementation and tests. General related-window CSS sharing is the
-agreed future direction; automatic application CSS/theme/HMR sharing is not
-implemented by this demo. No new Zapp API was added.
-The [private stylesheet proof](../../docs/plans/related-window-styling.md#private-hmr-theme-and-readiness-checkpoint--2026-09-14)
-also checks real Vite CSS HMR/pruning, selected theme state, and bounded external
-stylesheet readiness; it remains behind an explicit test flag, not a demo default.
+The inspector uses an ordinary CSS import. Related windows share the owner's
+head-owned DOM styles by default, including CSS HMR; the factory owns their
+cleanup. This avoids relying on Svelte's development injected-CSS registry.
+The inspector creates a hidden window, mounts its component, then calls `show()`.
+The [Svelte guide](SVELTE.md) explains the integration and tests. Use
+`styles: "independent"` for separate styling, and explicit `theme` selections for
+root theme state. No arbitrary attributes or JavaScript are copied.
+The [styling evidence](../../docs/plans/related-window-styling.md) includes opt-in
+real WebKit/HMR, selected theme, and bounded external-link readiness probes.
+Readiness remains experimental; it is not a factory load/font/paint guarantee.
 The normal inspector uses a softer, translucent-looking panel treatment in CSS,
 not native vibrancy or window transparency.
 See the [related-window guide](../../docs/related-windows.md) for the public contract.

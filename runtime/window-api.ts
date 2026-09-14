@@ -25,7 +25,7 @@ export type {
   RelatedWindowInvalidatedErrorPayload,
 } from "./window-errors";
 export { RelatedWindowEvent } from "./related-window-contract";
-export type { RelatedWindowHandle, RelatedWindowInvalidatedEvent, RelatedWindowCreateOptions } from "./related-window-contract";
+export type { RelatedWindowHandle, RelatedWindowInvalidatedEvent, RelatedWindowCreateOptions, RelatedWindowThemeOptions } from "./related-window-contract";
 
 /** Frontend-safe options accepted by the Z-owned window factory. */
 export interface WindowCreateOptions {

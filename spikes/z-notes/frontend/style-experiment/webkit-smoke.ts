@@ -30,7 +30,7 @@ export async function verifyStyleSharing(pulse: () => Promise<unknown>) {
     }
   }
   async function open(width: number) {
-    const handle = await createRelatedWindow({ title: "Private stylesheet probe", width, height: 300 });
+    const handle = await createRelatedWindow({ title: "Private stylesheet probe", width, height: 300, styles: "independent" });
     handles.push(handle);
     const doc = handle.document;
     const probe = doc.createElement("div"); probe.dataset.styleProbe = "";
@@ -105,11 +105,6 @@ export async function verifyStyleSharing(pulse: () => Promise<unknown>) {
 
     const lazy = await import('./lazy'); assert(lazy.loaded, 'real lazy module import');
     await until(() => small.value('--style-lazy') === 'yes' && wide.value('--style-lazy') === 'yes', 'lazy CSS insertion');
-    let hmr: { updateMs: number; pruneMs: number } | undefined;
-    if (import.meta.env.DEV) {
-      const { verifyFileHmr } = await import('./hmr-smoke');
-      hmr = await verifyFileHmr([small, wide], pulse, until);
-    }
     const beforeBurst = mirror.stats(); const updateStart = performance.now();
     for (let i = 0; i < 50; i++) secondStyle.textContent = `[data-style-probe]{--style-order:update-${i}}`;
     await flush(); const updateMs = performance.now() - updateStart;
@@ -148,7 +143,7 @@ export async function verifyStyleSharing(pulse: () => Promise<unknown>) {
     assert(final.passes === beforeDispose.passes, 'disconnect drops queued observer work');
     assert(!final.error, String(final.error));
     document.body.dataset.styleExperiment = 'ok';
-    document.body.dataset.styleMetrics = JSON.stringify({ attachMs, updateMs, hmr, ...final });
+    document.body.dataset.styleMetrics = JSON.stringify({ attachMs, updateMs, ...final });
   } finally {
     mirror.dispose(); for (const sub of subscriptions) sub.unsubscribe();
     for (const node of owned) node.remove();

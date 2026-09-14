@@ -13,6 +13,14 @@ test("related handle preserves existing controls and typed subscription overload
   const compile = (related: RelatedWindowHandle, ordinary: WindowHandle) => {
     const created: Promise<RelatedWindowHandle> = createRelatedWindow({ title: "Inspector", width: 400, height: 300 });
     void created;
+    void createRelatedWindow({ visible: false, styles: "shared", theme: {
+      attributes: ["data-theme"], classes: ["dark"], variables: ["--accent"],
+    } });
+    void createRelatedWindow({ styles: "independent" });
+    // @ts-expect-error Only the two agreed stylesheet modes are accepted.
+    void createRelatedWindow({ styles: "inherit" });
+    // @ts-expect-error Visibility is not a readiness promise or string.
+    void createRelatedWindow({ visible: "ready" });
     // @ts-expect-error A related shell is not an independent frontend entrypoint.
     void createRelatedWindow({ url: "/other.html" });
     // @ts-expect-error Injection policy is not a first-tier option.

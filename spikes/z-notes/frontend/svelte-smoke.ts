@@ -36,12 +36,13 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     assert(first && second, get(manager.state).error || "two windows must open");
     await until(() => subscribers === 2, "two component roots");
     const firstDocument = first.document, secondDocument = second.document;
-    const styleSelector = "style[data-note-inspector-style]";
+    const styleSelector = "[data-zapp-shared-style]";
     const firstStyle = firstDocument.querySelector(styleSelector);
     const secondStyle = secondDocument.querySelector(styleSelector);
-    assert(firstStyle && secondStyle && firstStyle !== secondStyle, "independently owned child styles");
-    assert(firstDocument.querySelectorAll(styleSelector).length === 1, "one stylesheet per inspector");
-    assert(!document.querySelector(styleSelector), "child stylesheet is not injected into owner");
+    assert(firstStyle && secondStyle && firstStyle !== secondStyle, "shared styles have distinct child DOM ownership");
+    const styleCount = firstDocument.querySelectorAll(styleSelector).length;
+    assert(styleCount > 0, "factory installed shared sheets");
+    assert(!document.querySelector(styleSelector), "no mirrored child node is kept in owner");
     assert(!firstDocument.querySelector('style[id^="svelte-"]'), "no Svelte injected-CSS registry path in child");
     const input = firstDocument.querySelector<HTMLInputElement>("#inspector-title");
     assert(input, "first inspector input");
@@ -56,7 +57,7 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     await tick();
     assert(input.value === "Owner edit", "owner → child reactivity");
     const panel = firstDocument.querySelector<HTMLElement>("[data-note-inspector]");
-    assert(panel && firstDocument.defaultView!.getComputedStyle(panel).getPropertyValue("--inspector-style-ready").trim() === "yes", "owned CSS in child document");
+    await until(() => !!panel && firstDocument.defaultView!.getComputedStyle(panel).getPropertyValue("--inspector-style-ready").trim() === "yes", "ordinary imported CSS in child document");
     assert(!firstDocument.querySelector("[data-svelte-notes]"), "child must not bootstrap the owner workspace");
     assert(!firstDocument.querySelector('script[src*="app.js"]'), "child must not load an application entrypoint");
     const save = [...firstDocument.querySelectorAll("button")].find(button => button.textContent?.includes("Save through"));
@@ -80,7 +81,7 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     const reopenedDocument = reopened.document;
     const reopenedStyle = reopenedDocument.querySelector(styleSelector);
     assert(reopenedStyle && reopenedStyle !== firstStyle && reopenedStyle !== secondStyle, "reopened child owns a fresh stylesheet");
-    assert(reopenedDocument.querySelectorAll(styleSelector).length === 1, "no duplicate styles on reopen");
+    assert(reopenedDocument.querySelectorAll(styleSelector).length === styleCount, "no duplicate styles on reopen");
     reopened.close();
     await until(() => subscribers === 0 && get(manager.state).count === 0, "reopened inspector cleaned up");
     assert(!reopenedStyle.isConnected, "reopened stylesheet removed");
@@ -90,6 +91,8 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     if (import.meta.env.VITE_ZAPP_STYLE_SMOKE === "1") {
       const { verifyStyleSharing } = await import("./style-experiment/webkit-smoke");
       await verifyStyleSharing(pulse);
+      const { verifyPublicStyling } = await import("./style-experiment/public-smoke");
+      await verifyPublicStyling(pulse);
     }
     document.body.dataset.svelteInspector = "ok";
   } finally { manager.dispose(); }

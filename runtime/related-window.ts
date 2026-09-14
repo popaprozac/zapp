@@ -3,6 +3,8 @@ import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
 import { bindRelatedDocumentLifetime, type RelatedDocumentLifetime } from "./related-window-lifetime";
 import type { RelatedWindowCreateOptions } from "./related-window-contract";
+import { shareRelatedWindowStyles } from "./related-window-styles";
+import { normalizeRelatedWindowTheme, shareRelatedWindowTheme } from "./related-window-theme";
 
 interface DocumentBridge extends ZappBridge {
   _dispose(error: Error): void;
@@ -11,10 +13,10 @@ interface DocumentBridge extends ZappBridge {
 interface Prepared { windowId: string; documentToken: string; nativeId: number; address: string; }
 
 /** @internal No frontend owner, profile, URL, or navigation override crosses here. */
-function optionsForNative(options: RelatedWindowCreateOptions): Record<string, unknown> {
+function checkedOptions(options: RelatedWindowCreateOptions) {
   if (!options || typeof options !== "object" || Array.isArray(options)
-    || Object.keys(options).some(key => !["title", "width", "height"].includes(key))) {
-    throw new TypeError("Related windows accept only title, width, and height.");
+    || Object.keys(options).some(key => !["title", "width", "height", "visible", "styles", "theme"].includes(key))) {
+    throw new TypeError("Related windows accept only title, width, height, visible, styles, and theme.");
   }
   if (options.title !== undefined && typeof options.title !== "string") throw new TypeError("Related window title must be a string.");
   for (const key of ["width", "height"] as const) {
@@ -23,7 +25,10 @@ function optionsForNative(options: RelatedWindowCreateOptions): Record<string, u
       throw new TypeError(`Related window ${key} must be a positive u32 integer.`);
     }
   }
-  return { ...options };
+  if (options.visible !== undefined && typeof options.visible !== "boolean") throw new TypeError("Related window visible must be a boolean.");
+  if (options.styles !== undefined && options.styles !== "shared" && options.styles !== "independent") throw new TypeError('Related window styles must be "shared" or "independent".');
+  return { native: { title: options.title, width: options.width, height: options.height, visible: options.visible },
+    styles: options.styles ?? "shared", theme: normalizeRelatedWindowTheme(options.theme) };
 }
 
 function creationError(message: string): WindowError { return new WindowError({ operation: "create", message }); }
@@ -52,19 +57,25 @@ export interface RelatedWindowBinding {
  * registry on ordinary service calls. Shell readiness is not first paint.
  */
 export async function createRelatedWindowBinding(options: RelatedWindowCreateOptions, activationTimeoutMs = 15_000): Promise<RelatedWindowBinding> {
-  const wireOptions = optionsForNative(options);
+  const checked = checkedOptions(options);
   ensurePermission("window:create");
   const owner = getBridge() as DocumentBridge;
   if (typeof owner._observeRelatedDocument !== "function") throw creationError("Related windows are unavailable in this host.");
-  const prepared = preparedIdentity(await owner.invoke("__window:prepare-related", wireOptions));
+  const prepared = preparedIdentity(await owner.invoke("__window:prepare-related", checked.native));
   const correlation = { nativeId: prepared.nativeId, documentToken: prepared.documentToken };
   let childBridge: DocumentBridge | undefined;
   let stopObserving: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rejectReady: (error: unknown) => void = () => {};
+  let disposeStyles: (() => void) | undefined, disposeTheme: (() => void) | undefined;
+  const disposePresentation = () => {
+    const styles = disposeStyles, theme = disposeTheme;
+    disposeStyles = undefined; disposeTheme = undefined;
+    try { styles?.(); } finally { theme?.(); }
+  };
   const lifetime = bindRelatedDocumentLifetime(prepared, { _dispose(error) {
-    childBridge?._dispose(error);
-    rejectReady(error);
+    try { disposePresentation(); }
+    finally { try { childBridge?._dispose(error); } finally { rejectReady(error); } }
   } });
   try {
     // Custom schemes have opaque URL.origin ("null"); compare the full tuple.
@@ -98,6 +109,14 @@ export async function createRelatedWindowBinding(options: RelatedWindowCreateOpt
       || typeof candidate._dispose !== "function") throw creationError("The related document did not receive its native bridge.");
     childBridge = candidate;
     const document = child.document;
+    const active = () => { try { lifetime.assertActive(); return true; } catch { return false; } };
+    try {
+      if (checked.styles === "shared") disposeStyles = shareRelatedWindowStyles(window.document, document, active);
+      if (checked.theme) disposeTheme = shareRelatedWindowTheme(window.document.documentElement, document.documentElement, checked.theme, active);
+    } catch (error) {
+      throw creationError(`Related window styling could not be installed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    lifetime.assertActive();
     await owner.invoke("__window:publish-related", correlation);
     lifetime.assertActive();
     if (child.closed || child.document !== document) throw creationError("The related document changed during publication.");

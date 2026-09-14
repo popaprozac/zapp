@@ -1,23 +1,26 @@
 # Related-window injection and styling
 
-Status: **private DOM stylesheet, real Vite HMR, scoped theme, and link-readiness proofs passed; public API and styling defaults still require
-deliberation**, updated 2026-09-14. Captured from the side-chat handoff. This work does not replace the
+Status: **public styling/visibility integration implemented and validated on macOS**,
+updated 2026-09-14. The experiments and earlier proposals below remain historical
+evidence. The current contract is in the [public guide](../related-windows.md).
+This work does not replace the
 shipped [factory and close/lifetime contract](related-windows.md).
 
-## Agreed sequence
+## Original experiment sequence (completed)
 
-The Svelte Notes slice uses an explicitly owned child stylesheet and ordinary
-Svelte CSS extraction for the owner. This narrowly avoids the development
+The initial Svelte Notes slice used an explicitly owned child stylesheet and ordinary
+Svelte CSS extraction for the owner. This narrowly avoided the development
 injected-CSS registry retention found in the integration proof; it is application
-code, not the future framework styling model.
+code, not the framework styling model now integrated below.
 
 General, framework-neutral related-window stylesheet sharing is the agreed
 workstream (option 3 from that discussion). The first private proof below is now
-complete, with the follow-up HMR/theme/readiness evidence below. Agree on the public defaults, independent
-styling, ordering, readiness, theme and HMR behavior before shipping them.
+complete, with the follow-up HMR/theme/readiness evidence below. Public defaults,
+independent styling, ordering, readiness, theme and HMR behavior were subsequently
+deliberated; the approved integration is recorded at the end of this document.
 This does not approve automatic JavaScript injection or a new `inject` option.
 
-## Current behavior
+## Behavior before public styling integration
 
 The related-window factory provides a minimal same-origin document,
 its own native bridge, and a document handle for ordinary DOM rendering or a
@@ -28,9 +31,10 @@ exported from `@zappdev/runtime/window` on macOS.
 `createMacOSRelatedWindowRuntime` currently passes an empty profile selection to
 `installWebViewScripts`. The framework bridge and document/window identity
 scripts still run. Application CSS/JS injection profiles are not automatically
-inherited, and production application stylesheet synchronization is not built.
+inherited. At that checkpoint, production application stylesheet synchronization
+had not yet been built.
 
-## Two distinct proposed features
+## Initial proposals (subsequently deliberated below)
 
 ### Explicit child-local injection
 
@@ -253,7 +257,70 @@ first paint are finished. It does not delay `createRelatedWindow` or native clos
 Visual cold/warm loading, fonts, and unstyled flashes still need a separate gate
 and user feedback before choosing a presentation policy.
 
-Next: use this evidence to deliberate shared/independent styling defaults,
+The next step at that checkpoint was to deliberate shared/independent styling defaults,
 cascade order, selected theme ownership, and whether presentation waits for
-anything. Keep CSS-in-JS/constructed-sheet adapters separate. Do not infer an
-`inject` option or production styling promise from the private experiment.
+anything. Those decisions are recorded below. CSS-in-JS/constructed-sheet adapters
+remain separate, and the private experiment does not imply an `inject` option.
+
+## Approved public integration — 2026-09-14
+
+The user approved shared styles by default, `styles: "independent"`, explicit
+root `theme` selections, and `visible: false` followed by existing `show()`.
+Shared sheets precede child-local sheets under the ordinary CSS cascade. Theme
+selection is independent of stylesheet mode and remains owner-authoritative.
+Initial bindings are installed before publication, without waiting for fonts,
+network assets, or first paint. Child `inject` is still a separate native-policy
+extension—not implicitly implemented by sharing application CSS.
+
+Runtime implementation uses one stylesheet observer per source document while
+children are attached, cached URL-rebased text, and per-child DOM ownership.
+The last detach disconnects it. Theme bindings observe only selected names and
+are disposed with the same document lifetime. Native publication records
+visibility, allowing a fully activated child to remain hidden until `show()`.
+
+The production URL helper also covers image-set string candidates without
+rewriting MIME-type descriptors. URL-producing `image()`/`src()` and alternate
+sheet selection remain explicit unsupported forms. Later unsupported edits
+report an error while retaining the last good snapshot and allowing recovery.
+These are documented first-tier boundaries, not full CSS parsing.
+
+A real WebKit probe caught a nonce bug that the first deterministic fixture
+missed: the nonce property can retain a value while `hasAttribute("nonce")` is
+false. Runtime copying now reads the property independently of attribute
+presence; the fixture reproduces this case. See the browser's
+[nonce property contract](https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/nonce).
+
+Notes now imports inspector CSS normally and renders into hidden related windows
+before showing them. The public-factory smoke verifies hidden/shown state against
+AppKit, shared CSS Modules, image-set URLs, nonce values, selected theme changes,
+independent styling, local ordering, external sheets, invalidation cleanup, and
+real Vite HMR/pruning. The earlier private readiness prototype remains separate;
+no public readiness method or font/paint guarantee has been introduced.
+
+### Validation checkpoint
+
+Both bounded Notes launch paths passed with `VITE_ZAPP_STYLE_SMOKE=1`: packaged
+custom-protocol assets and Vite development mode. The latter performed real
+disposable-file CSS edits and import pruning against public factory children.
+AppKit verified three hidden published windows and then only the explicitly
+shown child. Each run completed worker/service teardown; the dev run released
+port 5173, and no test app/dev-server processes remained afterward.
+
+The runtime suite passed 295 tests, the Notes model/private-prototype suite 20,
+and focused Vite resolution/document-shell checks seven (322 total, excluding
+duplicate focused runs). TypeScript public type checks and Svelte checks passed
+with zero diagnostics. Added regressions cover independent styles with an
+explicit live theme and theme-setup rollback after styles have attached.
+
+The normal 152-module frontend build emits 97.30 kB JavaScript (32.70 kB gzip)
+and 5.51 kB CSS (1.63 kB gzip). The previous checkpoint's JavaScript was 93.50 kB
+(31.19 kB gzip); moving inspector CSS out of an inline string also shifts bytes
+between JS and CSS, so the JS delta alone is not the total feature cost. No new
+runtime dependency was added. Public/private smoke chunks and CSS test fixtures
+are absent from the normal build. This is a bundle checkpoint, not a native
+memory or rendering benchmark.
+
+Next: user visual feedback for ordinary inspector creation/resizing and CSS
+edits, then deliberate child-local injection policy separately. Cold fonts and
+unstyled flashes, constructed sheets/CSSOM, and CSS-in-JS adapters remain explicit
+future work rather than hidden guarantees of shared styling.

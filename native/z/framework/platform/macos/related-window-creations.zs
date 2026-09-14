@@ -29,6 +29,7 @@ class NativeCreation on thread.main {
   readonly width: u32;
   readonly height: u32;
   readonly deadline: u64;
+  visible: boolean;
   timer: WebKit.NSTimer | null;
   runtime: Option<MacOSWindowRuntime>;
   completed: boolean;
@@ -170,7 +171,7 @@ internal class MacOSRelatedWindows on thread.main {
     const address: String = absolute;
     const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, logicalOwner, address,
       title, width, height, deadline, timer: null, runtime: Option<MacOSWindowRuntime>.none,
-      completed: false, deferPublication: false, published: false, retiring: false });
+      visible: true, completed: false, deferPublication: false, published: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
       timer.invalidate();
@@ -200,9 +201,9 @@ internal class MacOSRelatedWindows on thread.main {
     return match (this.lookup(in reservation)) { some(record) => Option.some(copy record.address); none => Option.none; };
   }
 
-  function deferPublication(inout this, in reservation: RelatedWindowReservation): void {
+  function deferPublication(inout this, in reservation: RelatedWindowReservation, visible: boolean): void {
     match (this.lookup(in reservation)) {
-      some(record) => { if (!record.completed) record.deferPublication = true; }
+      some(record) => { if (!record.completed) { record.deferPublication = true; record.visible = visible; } }
       none => {}
     }
   }
@@ -234,7 +235,7 @@ internal class MacOSRelatedWindows on thread.main {
     if (now() >= record.deadline) { this.fail(in reservation); return false; }
     record.published = true;
     record.stopTimer();
-    match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => return false; }
+    match (in record.runtime) { some(runtime) => { if (record.visible) runtime.window.makeKeyAndOrderFront(null); } none => return false; }
     return true;
   }
 
@@ -324,7 +325,7 @@ internal class MacOSRelatedWindows on thread.main {
         const windows = match (attempt this.windows.upgrade()) { success(value) => value; failure(_) => return false; };
         let capabilities = Array<String>();
         for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
-        const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height,
+        const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height, visible: record.visible,
           url: copy record.address, capabilities: move capabilities });
         match (windows.adoptRelatedNative(record.logicalOwner, copy runtime.id, move options)) {
           some(_) => {

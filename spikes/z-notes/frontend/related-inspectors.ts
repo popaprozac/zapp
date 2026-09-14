@@ -3,7 +3,7 @@ import { writable } from "svelte/store";
 import { createRelatedWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
 import type { RelatedWindowHandle, WindowEventSubscription } from "@zappdev/runtime/window";
 import NoteInspector from "./NoteInspector.svelte";
-import inspectorCss from "./note-inspector.css?inline";
+import "./note-inspector.css";
 import type { NotesModel } from "./notes-model";
 
 // Application code, not a framework adapter: one owner mounts components into
@@ -18,21 +18,17 @@ export function createInspectorManager(model: NotesModel) {
     opening = true;
     state.update(value => ({ ...value, opening: true, error: "" }));
     let handle: RelatedWindowHandle | undefined;
-    let style: HTMLStyleElement | undefined;
     let target: HTMLDivElement | undefined;
     let rollback: (() => void) | undefined;
     try {
-      handle = await createRelatedWindow({ title: "Note inspector", width: 440, height: 600 });
+      handle = await createRelatedWindow({ title: "Note inspector", width: 440, height: 600, visible: false });
       if (disposed) { handle.close(); return; }
       const windowHandle = handle;
       target = handle.document.createElement("div");
-      style = handle.document.createElement("style");
-      style.dataset.noteInspectorStyle = "";
-      style.textContent = inspectorCss;
-      // ?inline returns CSS text without Vite/Svelte registering a child DOM
-      // node. This closure owns the one style element until invalidation.
-      handle.document.head.append(style);
+      // Ordinary CSS imports are shared by the factory. Local document layout
+      // remains ours: the owner's centered page layout is not an inspector.
       handle.document.body.style.margin = "0";
+      handle.document.body.style.display = "block";
       handle.document.body.append(target);
       // Callbacks retain the OWNER's execution/bridge provenance. Passing a DOM
       // target does not rebind global window/document or native service calls.
@@ -44,7 +40,6 @@ export function createInspectorManager(model: NotesModel) {
         stopped = true;
         subscription?.unsubscribe();
         live.delete(windowHandle);
-        style?.remove();
         void unmount(component)
           .catch(error => console.error("Inspector cleanup failed", error))
           .finally(() => target?.remove());
@@ -54,10 +49,10 @@ export function createInspectorManager(model: NotesModel) {
       subscription = handle.subscribe(RelatedWindowEvent.INVALIDATED, cleanup);
       live.set(handle, cleanup);
       state.update(value => ({ ...value, count: live.size }));
+      handle.show();
       return handle;
     } catch (error) {
       rollback?.();
-      style?.remove();
       target?.remove();
       try { handle?.close(); } catch { /* Already invalidated. */ }
       state.update(value => ({ ...value, error: error instanceof Error ? error.message : String(error) }));

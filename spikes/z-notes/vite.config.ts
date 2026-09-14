@@ -6,8 +6,8 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // An ordinary generated application declares Vite in its own package.json.
 export default {
   root: "frontend",
-  // Ordinary Svelte CSS extraction for the owner. The inspector's stylesheet
-  // is explicitly owned by its related document (see related-inspectors.ts).
+  // Ordinary CSS extraction/imports. Related windows share those DOM sheets;
+  // no Svelte-private cross-document style registry is used.
   plugins: [svelte(), zapp()],
   resolve: {
     alias: {
