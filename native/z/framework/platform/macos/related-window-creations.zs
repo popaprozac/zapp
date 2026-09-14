@@ -14,7 +14,7 @@ import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import { deliverRelatedDocumentInvalidated } from "./related-window-delivery.zs";
 import { hasConfiguredFrontendOrigin, resolveLogicalURL } from "./navigation-policy.zs";
-import { RelatedNativeFailure,
+import { RelatedNativeFailure, RelatedNativeAllowsCreation, RelatedNativeCreateChild,
   createMacOSRelatedWindowRuntime } from "./related-window-native.zs";
 
 function now(): u64 { return u64(math.trunc(clock.CACurrentMediaTime() * 1000)); }
@@ -56,8 +56,8 @@ class NativeCreation on thread.main {
 }
 
 // Internal production coordinator. Only a native, document-authenticated
-// prepare call can open the one-shot WebKit creation gate. The public factory
-// stays unexported until terminal delivery and retirement gates are complete.
+// prepare call can open the one-shot WebKit creation gate. Public factory
+// integration is separate from these tested native lifecycle/authority gates.
 internal class MacOSRelatedWindows on thread.main {
   readonly documents: RelatedDocuments;
   readonly creations: RelatedWindowCreations;
@@ -234,9 +234,19 @@ internal class MacOSRelatedWindows on thread.main {
       match (attempt weakOwner.upgrade()) { success(owner) => owner.complete(in reservation); failure(_) => {} }
     };
     document.whenActivated(activated);
+    const allowsCreation: RelatedNativeAllowsCreation = move (in view, in action): boolean => {
+      return match (attempt weakOwner.upgrade()) {
+        success(owner) => owner.allows(in view, in action); failure(_) => false;
+      };
+    };
+    const createChild: RelatedNativeCreateChild = move (in view, configuration, in action): WebKit.WKWebView | null => {
+      return match (attempt weakOwner.upgrade()) {
+        success(owner) => owner.create(in view, configuration, in action); failure(_) => null;
+      };
+    };
     const runtime = match (attempt createMacOSRelatedWindowRuntime(configuration, document,
       `related-${reservation.child.windowId}`, copy record.address, copy record.title,
-      record.width, record.height, this.route, failed, closed, this.windows)) {
+      record.width, record.height, this.route, failed, closed, allowsCreation, createChild, this.windows)) {
       success(value) => value;
       failure(_) => { this.fail(in reservation); return null; }
     };

@@ -13,6 +13,7 @@
     "test:shell": "bun run shell.ts",
     "test:production": "bun run shell.ts --production",
     "test:retirement": "bun run shell.ts --retirement",
+    "test:authority": "bun run shell.ts --authority",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

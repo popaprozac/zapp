@@ -14,8 +14,11 @@ for current scope, followed by the
 The latest [navigation and renderer-retirement checkpoint](../plans/related-windows.md#navigation-and-renderer-retirement-checkpoint)
 adds real owner replacement and child reload/refused navigation, plus termination
 callback injection through the installed production delegates. It does not
-simulate an actual renderer crash. Creation-authority and nested-owner gates
-still precede the public factory.
+simulate an actual renderer crash. The subsequent
+[creation-authority checkpoint](../plans/related-windows.md#creation-authority-and-nested-owner-checkpoint)
+passes 32 real-WebKit cases for actual subframes, missing permissions, nested
+owners, grandchild vetoes, and branch/full-family teardown. The public factory
+and Z Notes integration remain next; styling/injection proposals are unchanged.
 The oracle findings below retain their original boundaries;
 they are not claims that every production lifecycle gate is complete.
 
@@ -230,9 +233,9 @@ unproven.
 - [x] Agree that framework close requests are cancellable, while intrinsic DOM
       close is already committed and must still run terminal cleanup.
 - [x] Approve the public invalidation error/cleanup contract and test its runtime
-      helper separately; the native integration remains outstanding.
-- [ ] Expand oracle tests for renderer failure, long-hidden owner, failed/external
-      navigation, capability mismatch, and cleanup/leaks before integration.
+      helper separately, then bind it to production native retirement notices.
+- [ ] Stress actual renderer crashes/recovery and long-hidden owners beyond the
+      covered delegate, navigation-policy, permission, and ownership checks.
 - [x] Reproduce the essential creation boundary in checked Z: nullable
       `WKUIDelegate` return, WebKit-supplied configuration, child-owned handler,
       direct native reply, and terminal DOM-close callback.
@@ -240,10 +243,12 @@ unproven.
       `docs/ownership-pressure.md` (unknown Array method, readonly intermediate
       assignment path), with Z commit `e8ebfc94`. Stage 0's nested adapter
       declaration-order gap is also fixed.
-- [ ] Port the broader document-token, retained-Promise, and cancellation-preflight
+- [x] Port the broader document-token, retained-Promise, and cancellation-preflight
       behavior to checked Z; do not grow the oracle into production native code.
-- [ ] Integrate only after those gates with the existing window manager and
+- [x] Integrate the native boundaries with the existing window manager and
       close/cancellation/permission mechanisms, including dev and bundled content.
+- [x] Verify actual subframes and nested owners through the production registry.
+- [ ] Expose the approved public factory and demonstrate it in Z Notes.
 - [ ] Measure a representative multi-window app with cold/warm startup, process-
       family memory, heavy owner workloads, and actual presentation evidence.
 - [ ] Explore other frontend frameworks and other OS backends independently.

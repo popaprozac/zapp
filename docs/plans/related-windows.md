@@ -1,6 +1,6 @@
 # Related windows
 
-Status: **approved contract, implementation in progress**, 2026-09-13.
+Status: **approved contract, implementation in progress**, 2026-09-14.
 
 The runtime now provides the event/error/type declarations, a tested internal
 document-lifetime helper, and terminal disposal of the production WebView bridge.
@@ -23,6 +23,9 @@ surviving owner, rejecting retained child requests through the existing bridge.
 The real owner navigation delegate also passes replacement and injected
 renderer-termination coverage; related reload/navigation and termination
 retire the original child rather than retargeting its lifetime.
+The creation-authority gate now also covers actual subframes and nested related
+owners through the production registry/delegates, with inherited permissions,
+grandchild close vetoes, branch retirement, and full-family teardown verified.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -217,7 +220,7 @@ validation and physical window teardown remain outside this helper.
 - [x] Exercise the production owner/child navigation delegates across owner
       replacement, child reload/refused navigation, and injected renderer-loss
       callbacks, including a family losing its original observer realm.
-- [ ] Finish the creation-authority audit (including subframes and nested
+- [x] Finish the scoped creation-authority audit (including subframes and nested
       owners) before public factory integration; actual renderer-crash/recovery
       stress and broader platform coverage remain separate hardening work.
 - [ ] Expose the public factory and add a Z Notes demonstration.
@@ -233,6 +236,7 @@ bun run spikes/related-windows/document-routing.ts
 bun run spikes/related-windows/document-routing.ts --related
 bun run spikes/related-windows/shell.ts
 bun run spikes/related-windows/shell.ts --production
+bun run spikes/related-windows/shell.ts --authority
 bun run spikes/related-windows/shell.ts --retirement
 bun run spikes/related-windows/registry.ts --creations
 bun native/z/testing/window-focus.ts
@@ -523,8 +527,9 @@ not carry handwritten native replacements for those valid Z shapes.
 At that checkpoint, the public `createRelatedWindow` factory remained unexported.
 The next gates were logical adoption, family-wide cancellable close preflight,
 document-bound unsolicited events, and broader renderer/owner retirement cases.
-Nested related-owner creation is also not exposed by the registry's root-only
-prepare entry. No new public API, permission, or configuration was added here.
+Nested related-owner creation was also not exposed by the registry's then
+root-only prepare entry. No new public API, permission, or configuration was
+added at that checkpoint.
 
 ### Logical window adoption checkpoint
 
@@ -708,6 +713,64 @@ is separate from the earlier close matrix. The
 also passes with the production owner delegate, alongside four real-task
 registry cases, 46 focused runtime tests, and both TypeScript checks.
 Public factory integration still
-needs its final creation-authority audit, particularly actual subframe attempts
-and the current root-only prepare path. Styling/injection remain unapproved and
+needed its final creation-authority audit at this checkpoint, particularly actual
+subframe attempts and the root-only prepare path; the following checkpoint closes
+those scoped gates. Styling/injection remain unapproved and
 unchanged; actual renderer-crash stress is not represented by this callback test.
+
+### Creation authority and nested-owner checkpoint
+
+The production registry now resolves either a root window or a current related
+document for preparation. A related child's own navigation/UI delegates forward
+creation through the same coordinator as a root window. The coordinator still
+checks the actual source WebView, main-frame provenance, configured source and
+destination origins, current document token, one-shot reservation, and deadline;
+WebKit's supplied configuration is preserved. Refusing a popup is not treated as
+navigation or retirement of the live owner document.
+
+The private authority fixture uses the complete `MacOSWindowRegistry`, logical
+window manager, application host, and production delegates. Only its test message
+routes/configuration overlay differ from application routing; it does not add a
+public factory or renderer-selected permissions.
+
+| Scenario | Native and JavaScript assertions |
+| --- | --- |
+| Actual subframe | A same-origin iframe cannot use its own endpoint with a known owner token or consume the owner's prepared URL; the legitimate owner can still use the reservation |
+| Missing permission | Without `window:create`, preparation and an unprepared popup are refused |
+| Nested branch close | Child and grandchild have direct bridges and unchanged family authority; wrong-owner/replayed/unprepared attempts fail; a grandchild veto preserves all documents; accepted branch close retires only that branch |
+| Full-family close | The same grandchild veto preserves the family, then accepted owner close retires all three descendants without waiting for callbacks in destroyed realms |
+
+All 32 native/Stage 0 × `-O0`/`-O2` × Vite/packaged cases pass with strict warnings,
+UBSan, and no timeouts. The subframe cases require exactly the expected native
+rejection diagnostic; every other case requires empty stderr. See the
+[dated authority output](../../spikes/related-windows/results/2026-09-14/authority.json).
+
+The existing [32-case creation/close matrix](../../spikes/related-windows/results/2026-09-14/authority-creation-regression.json)
+and [40-case retirement matrix](../../spikes/related-windows/results/2026-09-14/authority-retirement-regression.json)
+also pass after the change: 104 real-WebKit executions in total. Separate
+four-case [real-task registry](../../spikes/related-windows/results/2026-09-14/authority-registry.json)
+and [reservation/rollback](../../spikes/related-windows/results/2026-09-14/authority-reservations.json)
+matrices pass, alongside 51 focused runtime/CLI tests and both TypeScript checks.
+The upstream compiler checkpoint passes 75 targeted tests and reaches a
+byte-identical fixed point (11,951,385 generated C bytes).
+
+This exposed three upstream Z issues rather than requiring framework workarounds:
+contextual Objective-C callable types imported under different module names,
+borrowed closure parameters shadowing an outer parameter, and fresh `Weak<T>`
+argument transfer/retained cleanup. The latter corrupted weak-control storage at
+shutdown. Both compilers now pass deterministic headless ownership/allocation
+tests, and the fixed-point native compiler was rebuilt before the final matrix.
+The fixes are Z commits `6f1473b9`, `4611fbaf`, and `ec4dc0a4`.
+
+The Vite probe server now lives in a supervised child process. Startup, compiler,
+Clang, and native-run deadlines remain bounded; `finally` saves partial results
+and stops the server, with forced termination if normal Vite shutdown stalls.
+No ASan startup probe is used.
+
+These checks do not make a same-origin family a security sandbox: owner code can
+intentionally give another frame its own functions or bridge. They verify the
+provenance of each frame's own native endpoint and creation attempt. Actual
+renderer-crash/recovery stress and Windows/Linux coverage remain separate work.
+Next is the approved public factory and Z Notes demonstration, preserving
+prepare → observe → open ordering and failure cleanup. No child CSS/injection
+defaults or additional public options were introduced.

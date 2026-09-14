@@ -175,10 +175,10 @@ ten-second deadline. This is not a first-paint or allocation benchmark.
 The [family-close output](results/2026-09-13/family-close.json) adds the third scenario.
 The [terminal-delivery output](results/2026-09-13/terminal-delivery.json) adds the
 real lifetime binding and immediate-close scenario. The
-[latest regression output](results/2026-09-13/retirement-regression.json) reruns
+[retirement-checkpoint regression output](results/2026-09-13/retirement-regression.json) reruns
 all 32 cases with the production owner navigation delegate. See the
-[current checkpoint](../../docs/plans/related-windows.md#navigation-and-renderer-retirement-checkpoint)
-and its remaining creation-authority gates before public factory integration.
+[current checkpoint](../../docs/plans/related-windows.md#creation-authority-and-nested-owner-checkpoint)
+for the completed scoped creation-authority gates and remaining public integration.
 For logical adoption and ordinary-window regressions, run
 `bun native/z/testing/window-focus.ts` and add `--native` for the AppKit cases.
 
@@ -214,9 +214,47 @@ the 32-case creation/close regression output. Reruns write only ignored
 have 120-, 30-, and 15-second process-group deadlines respectively; the Vite
 server stops in `finally`.
 
-The public factory still needs creation-authority checks for actual subframes
-and nested owners. Styling and injection proposals remain unapproved. Actual
-renderer-crash/recovery stress and Windows/Linux coverage are separate work.
+The following checkpoint closes the scoped creation-authority checks for actual
+subframes and nested owners. Styling and injection proposals remain unapproved.
+Actual renderer-crash/recovery stress and Windows/Linux coverage are separate work.
+
+## Production creation authority and nested owners
+
+Run `bun run test:authority` here, or
+`bun run spikes/related-windows/shell.ts --authority` from the repository root.
+The fixture uses the full production window registry and delegates, with private
+test routes rather than an exported factory. All 32 native/Stage 0 × `-O0`/`-O2`
+× Vite/packaged cases pass with UBSan, strict warnings, and no timeouts.
+
+- Actual same-origin subframes cannot spoof the owner's native endpoint or
+  consume its prepared creation URL. The legitimate reservation remains usable.
+- A profile without `window:create` cannot prepare a related child.
+- Related children can prepare grandchildren through their own direct bridges.
+  Replayed, unprepared, and wrong-owner attempts fail without retiring live owners.
+- A grandchild's Z close listener can veto family closure. Accepted branch closure
+  leaves the root/sibling alive; accepted root closure retires the entire family.
+- Native permission assertions verify each generation inherits `notes.list` and
+  does not gain `notes.delete` or unrelated worker authority.
+
+[Dated authority output](results/2026-09-14/authority.json) records every case.
+Only subframe cases emit the expected rejection diagnostic; all other stderr is
+empty. Reruns write ignored `.artifacts/authority/` files. Vite is a supervised
+child process with a bounded startup and shutdown, including on test failure.
+The [32-case creation regression](results/2026-09-14/authority-creation-regression.json)
+and [40-case retirement regression](results/2026-09-14/authority-retirement-regression.json)
+also pass, plus four [real-task registry](results/2026-09-14/authority-registry.json)
+and four [reservation/rollback](results/2026-09-14/authority-reservations.json) cases.
+
+The fixture intentionally passes fresh `weak registry` values to owned helpers.
+It exposed upstream weak-handle double-release/cleanup bugs, now covered by
+headless allocation-ledger tests before the full WebKit rerun. No ownership
+workaround or sanitizer suppression is needed. The rebuilt native compiler and
+Stage 0 both pass. See the [implementation checkpoint](../../docs/plans/related-windows.md#creation-authority-and-nested-owner-checkpoint)
+for exact boundaries and compiler revisions.
+
+Same-origin family members still share trust: this is not an isolation claim
+against owner code deliberately sharing its own functions/bridge. The public
+factory and Z Notes demo are next; no styling or injection defaults were added.
 
 ## Headless native document registry
 

@@ -117,7 +117,11 @@ internal class MacOSWindowRegistry on thread.main {
     title: String, width: u32, height: u32, reply: RelatedCreationReply
   ): Option<RelatedWindowReservation> {
     const found = this.nativeWindows.get(owner.windowId);
-    const runtime: MacOSWindowRuntime = match (in found) { some(value) => value; none => return Option.none; };
+    const runtime: MacOSWindowRuntime = match (in found) {
+      some(value) => value;
+      none => match (this.related.runtime(in owner)) { some(value) => value; none => return Option.none; }
+    };
+    if (!runtime.document.isCurrent(in owner)) return Option.none;
     if (this.nextNativeWindowId == 2147483647) return Option.none;
     const nativeId = this.nextNativeWindowId;
     this.nextNativeWindowId = nativeId + 1;

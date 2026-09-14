@@ -14,12 +14,16 @@ import { createDesktopWindowDelegate, NativeWindowClosedOperation } from "./wind
 import { observeWindowPresentation } from "./window-presentation.zs";
 
 internal type RelatedNativeFailure = () => void on thread.main;
+internal type RelatedNativeAllowsCreation = (in view: WebKit.WKWebView, in action: WebKit.WKNavigationAction) => boolean on thread.main;
+internal type RelatedNativeCreateChild = (in view: WebKit.WKWebView, configuration: WebKit.WKWebViewConfiguration,
+  in action: WebKit.WKNavigationAction) => WebKit.WKWebView | null on thread.main;
 
 class RelatedNavigation on thread.main implements WebKit.WKNavigationDelegate {
   readonly view: WebKit.WKWebView;
   readonly address: String;
   readonly document: BridgeDocument;
   readonly failed: RelatedNativeFailure;
+  readonly allowsCreation: RelatedNativeAllowsCreation;
 
   function policy(
     in view: WebKit.WKWebView,
@@ -27,9 +31,16 @@ class RelatedNavigation on thread.main implements WebKit.WKNavigationDelegate {
     in decide: (policy: WebKit.WKNavigationActionPolicy) => void
   ): void as "webView:decidePolicyForNavigationAction:decisionHandler:" {
     const target = action.targetFrame;
+    if (target == null) {
+      // Popup refusal is not navigation/replacement of this document. A nested
+      // child still needs the same authenticated one-shot gate as a root child.
+      const allowed = view == this.view && this.allowsCreation(in view, in action);
+      decide(allowed ? WebKit.WKNavigationActionPolicyAllow : WebKit.WKNavigationActionPolicyCancel);
+      return;
+    }
     const url = action.request.URL;
     let allowed = false;
-    if (view == this.view && target != null && target.mainFrame && url != null) {
+    if (view == this.view && target.mainFrame && url != null) {
       const absolute = url.absoluteString;
       if (absolute != null) {
         const address: String = absolute;
@@ -67,6 +78,13 @@ class RelatedNavigation on thread.main implements WebKit.WKNavigationDelegate {
 class RelatedUI on thread.main implements WebKit.WKUIDelegate {
   readonly view: WebKit.WKWebView;
   readonly window: MacOSWindow;
+  readonly createChild: RelatedNativeCreateChild;
+  function create(in view: WebKit.WKWebView, in configuration: WebKit.WKWebViewConfiguration,
+    in action: WebKit.WKNavigationAction, in features: WebKit.WKWindowFeatures
+  ): WebKit.WKWebView | null as "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:" {
+    if (view != this.view) return null;
+    return this.createChild(in view, configuration, in action);
+  }
   function closed(inout this, in view: WebKit.WKWebView): void as "webViewDidClose:" {
     // DOM close is already committed, not a second cancellable close request.
     if (view == this.view) this.window.close();
@@ -87,6 +105,8 @@ internal function createMacOSRelatedWindowRuntime(
   route: DesktopRouteMessageOperation,
   failed: RelatedNativeFailure,
   closed: NativeWindowClosedOperation,
+  allowsCreation: RelatedNativeAllowsCreation,
+  createChild: RelatedNativeCreateChild,
   windows: Weak<WindowManager>
 ): MacOSWindowRuntime throws String on thread.main {
   const controller = WebKit.WKUserContentController.alloc().init();
@@ -106,8 +126,8 @@ internal function createMacOSRelatedWindowRuntime(
     | WebKit.NSWindowStyleMaskMiniaturizable);
   window.title = move title;
   window.contentView = view;
-  const navigationController = new RelatedNavigation({ view, address, document, failed });
-  const uiController = new RelatedUI({ view, window });
+  const navigationController = new RelatedNavigation({ view, address, document, failed, allowsCreation });
+  const uiController = new RelatedUI({ view, window, createChild });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);
   const ui = objc.adapt<WebKit.WKUIDelegate>(uiController);
   const delegate = createDesktopWindowDelegate(copy id, document.windowId, window, view, windows, closed);
