@@ -583,6 +583,11 @@ ContextMenu.show(items, { x: 100, y: 200 });
 
 ## Custom titlebar with draggable region
 
+> Historical backend example. See [Window titlebars](window-titlebar.md) for
+> current status. The approved policy now makes interactive/no-drag exclusions
+> unconditional; the old force-drag override described below is superseded.
+> The old CSS metric implementation below is not the current backend's contract.
+
 Mark any element with `data-zapp-drag-region` and the system treats it
 as a draggable region — click-and-hold moves the window. Interactive
 elements *inside* the region (buttons, inputs, links, selects,

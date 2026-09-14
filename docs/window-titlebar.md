@@ -62,9 +62,36 @@ fully frameless mode, application toolbars, or control-removal options are
 implied. The inset preset uses an internal empty native toolbar for AppKit layout;
 it is not a user-configurable application toolbar API.
 
-Full-size content can extend under native controls and title text. Custom drag
-regions and measured per-window CSS layout insets are the next implementation
-slice. Until then, keep important content clear of that area; do not treat a
+Full-size content can extend under native controls and title text. The shared
+DOM resolver now follows the approved drag-region rules below; connecting it to
+native gestures and publishing per-window CSS insets remain the next slice.
+Until then, keep important content clear of that area; do not treat a
 fixed padding value as a cross-platform geometry guarantee. Ordinary native
 chrome remains the default. Windows/Linux appearance mappings are not yet
 implemented in this path.
+
+## Custom header interaction contract
+
+The following markup is the approved contract, not yet a complete native drag
+feature in the current macOS backend:
+
+```html
+<header data-zapp-titlebar>
+  <span>Z Notes</span>
+  <input placeholder="Search notes">
+  <button>New note</button>
+</header>
+```
+
+- `data-zapp-titlebar` selects dragging and native titlebar double-click behavior.
+- `data-zapp-drag-region` or `--zapp-drag: drag` selects move-only behavior.
+- Interactive controls and `--zapp-drag: no-drag` always exclude dragging, even
+  when nested inside a marked region. No force-draggable buttons are supported.
+- A custom clickable widget without native/ARIA interactive semantics should use
+  `--zapp-drag: no-drag`. This also applies to a closed-shadow widget's host,
+  whose internals are not exposed in the document's event path.
+
+Exclusion applies to the subtree: nesting another drag marker inside a no-drag
+region does not opt it back in. For nested positive HTML markers, the closest
+one chooses the intent. CSS custom properties inherit; inherited `drag` does not
+turn a titlebar into a move-only region or bypass a control's exclusion.

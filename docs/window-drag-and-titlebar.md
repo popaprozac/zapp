@@ -1,5 +1,11 @@
 # Window drag regions & custom title bars
 
+> Historical backend reference. For the current API, implemented status and
+> approved exclusion rules, see [Window titlebars](window-titlebar.md).
+> The platform mappings and CSS metrics below are not implemented parity in the
+> current backend. In particular, the new resolver does not permit force-dragging
+> interactive controls, and native double-click handling must respect OS settings.
+
 zapp lets web content define which parts of the window drag it, and mark the
 window's title bar — with **platform-agnostic markup**. You write the same HTML
 on macOS and Windows; the framework bridges each marker to the right native

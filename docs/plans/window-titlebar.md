@@ -3,7 +3,8 @@
 Status: appearance implementation, 2026-09-14. Typed titlebar creation options
 are implemented in the Z and focused TypeScript APIs and both native creation
 paths. See the [developer guide](../window-titlebar.md). Drag interactions and
-measured CSS geometry remain subsequent slices.
+measured CSS geometry remain subsequent slices. The exclusion-first DOM policy
+below is approved and implemented in the shared bootstrap resolver.
 
 ## Agreed configuration and independence
 
@@ -50,8 +51,8 @@ without validation:
   desired inset therefore needs an actual native layout proof, not that guard.
 - `bootstrap/webview.ts` implements CSS `--zapp-drag: drag/no-drag`, a
   `data-zapp-drag-region` alias, and distinct `data-zapp-titlebar` behavior.
-  The computed CSS value is checked before interactive descendants, allowing
-  inherited `drag` to bypass intended automatic button exclusions.
+  The old computed-CSS-first resolver allowed inherited `drag` to bypass
+  automatic button exclusions. The shared resolver now closes that gap.
 - The old native titlebar double-click path always zooms. The new path should
   honor platform preferences rather than hardcode that choice.
 - Existing chrome CSS variables are valuable, but their values must come from
@@ -72,9 +73,12 @@ These frameworks do not all give `hidden` identical control-visibility semantics
 1. **Implemented:** checked, typed titlebar creation options in the Z and focused TypeScript
    APIs, including the related-window path. Native appearance is applied before
    showing a window, without dynamic setters or arbitrary button offsets.
-2. Implement the distinct move-only and titlebar-region intents. Retain CSS
-   drag/no-drag authoring, with explicit exclusion/interactive-element tests.
-   Settle any changed precedence or public marker vocabulary before shipping it.
+2. **Policy implemented; native hookup pending:** distinct move-only and
+   titlebar-region intents, using existing markers and CSS drag/no-drag.
+   Interactive controls and any no-drag ancestor always win. An explicit
+   positive marker cannot turn a button or an excluded subtree into a drag
+   handle. The closest positive HTML marker selects titlebar versus move;
+   inherited CSS drag does not downgrade a titlebar to move-only.
 3. Publish per-window native chrome measurements for frontend layout, including
    related documents. Shared application CSS must not copy owner window geometry
    into a differently sized/styled child.
@@ -115,5 +119,35 @@ separate workstreams and do not block this framework feature.
   imported spellings, and missing inferred boolean evidence for native enum
   comparisons. No new syntax or production Objective-C shim was needed.
 
-The next checkpoint is drag-region semantics and measured frontend layout
+## Drag-policy checkpoint
+
+`bootstrap/window-drag.ts` owns hit classification; it inspects the full composed
+event path, including SVG, body/root markers, and open shadow hosts. Interactive
+semantics include native controls, links, editable areas, focusable custom
+controls and interactive ARIA roles. Closed shadow internals are not visible to
+the outer document: an opaque interactive widget must mark its host no-drag.
+
+Verification: 305 runtime tests pass, including the exclusion matrix, detached
+documents, and bundled bootstrap reset behavior. TypeScript and Svelte checks
+are clean. The packaged and dev `VITE_ZAPP_STYLE_SMOKE=1` launch gates pass real
+WebKit checks in the owner and three related documents: inherited CSS, SVG
+button content, editing, open shadow roots, style changes and reparenting.
+Dev HMR update/prune and Vite port release also pass. These classify DOM hits;
+they do not claim a native mouse gesture or custom header is implemented yet.
+
+Legacy hover routing refreshes on mouse-down and clears on mouseleave, blur and
+pagehide. This is not sufficient to authorize the new native drag path: tie that
+path to an original native mouse-down, document generation and bounded gesture
+lifetime. Do not block/pump the main run loop awaiting JavaScript, and do not
+silently consume an interactive click based on a stale hover flag.
+
+Native double-click support must account for macOS `Fill` as well as
+Zoom/Minimize/None. Chromium currently calls private `_zoomFill:` for Fill; that
+is research evidence, not permission to add a private AppKit dependency.
+[Chromium implementation](https://chromium.googlesource.com/chromium/src/+/master/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm).
+AppKit's public [performWindowDragWithEvent:](https://developer.apple.com/documentation/appkit/nswindow/performdrag(with:)?language=objc)
+accepts the original examined mouse-down and returns immediately; the eventual
+mouse-up may not be delivered, so cleanup must not depend solely on mouse-up.
+
+The next checkpoint is the bounded native gesture hookup and per-window layout
 insets, followed by the custom Notes header and user visual review.

@@ -5,6 +5,8 @@
  * Built by bootstrap/codegen.ts → minified → embedded as C string in .zapp/zapp_bootstrap.zc.
  */
 
+import { resolveWindowDrag, windowDragPath } from "./window-drag";
+
 (function () {
   const BRIDGE_KEY = Symbol.for("zapp.bridge");
 
@@ -568,23 +570,9 @@
     bridge._workers = {};
   });
 
-  // Drag region tracking. Walk up the DOM from the hovered element; the
-  // first decisive rule wins. Order:
-  //
-  //   1. `--zapp-drag: no-drag` or `--zapp-drag: drag` — explicit override,
-  //      wins over everything (lets users force an unusual choice).
-  //   2. Native interactive tags (button, input, a, select, textarea) or
-  //      `role=button` / `contenteditable` — auto-treated as no-drag so
-  //      clicks / focus actually reach the control instead of being
-  //      swallowed by `performWindowDragWithEvent:`. This matches Electron's
-  //      `-webkit-app-region` convention.
-  //   3. `data-zapp-drag-region` attribute — explicit drag handle.
-  //
-  // Without (2), putting a button inside `data-zapp-drag-region` absorbs
-  // the click. Authors shouldn't have to paint `--zapp-drag: no-drag` on
-  // every toolbar button; the sensible default is "interactive elements
-  // win." Users who actually want a draggable button can still do so with
-  // `style="--zapp-drag: drag"` on the element.
+  // Exclusions always win, including inherited drag on an interactive control.
+  // Resolve the full composed event path so nested icons, body-level regions,
+  // open shadow roots, and related-document realms follow the same policy.
   // iOS windows aren't user-draggable (no performWindowDragWithEvent), so
   // drag-region tracking is dead weight there. Skip it on iOS. Platform comes
   // from the bootstrap-config carrier the native webview injects — it is
@@ -602,49 +590,23 @@
     //                is NOT a title bar, so it never dblclick-maximizes.
     let inDrag = false;
     let inTitlebar = false;
-    document.addEventListener("mousemove", (e: MouseEvent) => {
-      let el: HTMLElement | null = e.target as HTMLElement;
-      let isDrag = false;
-      let isTitlebar = false;
-      while (el && el !== document.body && el !== (document as any)) {
-        const style = window.getComputedStyle(el);
-        const val = style.getPropertyValue("--zapp-drag").trim();
-        if (val === "no-drag") {
-          break;
-        }
-        if (val === "drag") {
-          isDrag = true;
-          break;
-        }
-        const tag = el.tagName;
-        if (
-          tag === "BUTTON" ||
-          tag === "INPUT" ||
-          tag === "SELECT" ||
-          tag === "TEXTAREA" ||
-          (tag === "A" && el.hasAttribute("href")) ||
-          el.getAttribute("role") === "button" ||
-          el.isContentEditable
-        ) {
-          break;
-        }
-        if (el.hasAttribute && el.hasAttribute("data-zapp-titlebar")) {
-          isDrag = true;
-          isTitlebar = true;
-          break;
-        }
-        if (el.hasAttribute && el.hasAttribute("data-zapp-drag-region")) {
-          isDrag = true;
-          break;
-        }
-        el = el.parentElement;
-      }
+    const updateDrag = (intent: "none" | "move" | "titlebar") => {
+      const isDrag = intent !== "none";
+      const isTitlebar = intent === "titlebar";
       if (isDrag !== inDrag || isTitlebar !== inTitlebar) {
         inDrag = isDrag;
         inTitlebar = isTitlebar;
         post(JSON.stringify({ t: 4, m: "setDragRegion", a: { drag: inDrag, titlebar: inTitlebar } }));
       }
-    });
+    };
+    const resolveDrag = (event: Event) => updateDrag(resolveWindowDrag(windowDragPath(event)));
+    document.addEventListener("mousemove", resolveDrag);
+    // Re-evaluate even when the pointer has not moved after a DOM/style change.
+    document.addEventListener("mousedown", resolveDrag, true);
+    const clearDrag = () => updateDrag("none");
+    document.addEventListener("mouseleave", clearDrag);
+    window.addEventListener("blur", clearDrag);
+    window.addEventListener("pagehide", clearDrag);
 
     // Windows chrome model (WebView2). Detected by the chrome.webview transport
     // (the bootstrapConfig has no permissions.platform on Windows — Apple-only),
