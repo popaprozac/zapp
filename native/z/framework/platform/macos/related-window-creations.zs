@@ -1,0 +1,277 @@
+import WebKit from "WebKit/WebKit.h";
+import clock from "QuartzCore/CABase.h";
+import math from "std/math";
+import objc from "std/objc";
+import { Map } from "std/collections";
+import { thread } from "std/thread";
+import { BridgeDocument, BridgeDocumentActivated } from "../../bridge-document.zs";
+import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
+import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup,
+  RelatedCreationReply } from "../../related-window-creations.zs";
+import { DesktopRouteMessageOperation } from "./document-transport.zs";
+import { hasConfiguredFrontendOrigin, resolveLogicalURL } from "./navigation-policy.zs";
+import { MacOSRelatedWindowRuntime, RelatedNativeFailure, RelatedNativeClosed,
+  createMacOSRelatedWindowRuntime } from "./related-window-native.zs";
+
+function now(): u64 { return u64(math.trunc(clock.CACurrentMediaTime() * 1000)); }
+
+class NativeCreation on thread.main {
+  readonly reservation: RelatedWindowReservation;
+  readonly owner: BridgeDocument;
+  readonly ownerView: WebKit.WKWebView;
+  readonly address: String;
+  readonly title: String;
+  readonly width: u32;
+  readonly height: u32;
+  timer: WebKit.NSTimer | null;
+  runtime: Option<MacOSRelatedWindowRuntime>;
+  completed: boolean;
+
+  function stopTimer(inout this): void {
+    const timer = this.timer;
+    this.timer = null;
+    if (timer != null) timer.invalidate();
+  }
+  function close(inout this): void {
+    this.stopTimer();
+    match (in this.runtime) { some(value) => { let runtime: MacOSRelatedWindowRuntime = value; runtime.close(); } none => {} }
+    this.runtime = Option.none;
+  }
+
+  deinit { this.close(); }
+}
+
+// Internal production coordinator. Only a native, document-authenticated
+// prepare call can open the one-shot WebKit creation gate. The public factory
+// stays unexported until logical-window adoption and family-close preflight land.
+internal class MacOSRelatedWindows on thread.main {
+  readonly documents: RelatedDocuments;
+  readonly creations: RelatedWindowCreations;
+  readonly route: DesktopRouteMessageOperation;
+  private records: Map<i32, NativeCreation>;
+  private retired: Array<MacOSRelatedWindowRuntime>;
+  private closed: boolean;
+
+  constructor(documents: RelatedDocuments, creations: RelatedWindowCreations, route: DesktopRouteMessageOperation) {
+    this.documents = documents;
+    this.creations = creations;
+    this.route = route;
+    this.records = Map<i32, NativeCreation>();
+    this.retired = Array<MacOSRelatedWindowRuntime>();
+    this.closed = false;
+  }
+
+  function count(): usize { return this.records.length; }
+
+  function runtime(in identity: RelatedDocumentIdentity): Option<MacOSRelatedWindowRuntime> {
+    if (!this.documents.isReady(in identity)) return Option.none;
+    const found = this.records.get(identity.windowId);
+    return match (in found) {
+      some(record) => {
+        if (record.reservation.child.token != identity.token) return Option.none;
+        select match (in record.runtime) {
+          some(runtime) => { const retained: MacOSRelatedWindowRuntime = runtime; select Option.some(retained); }
+          none => Option.none;
+        };
+      }
+      none => Option.none;
+    };
+  }
+
+  function prepare(
+    inout this,
+    owner: BridgeDocument,
+    ownerView: WebKit.WKWebView,
+    in identity: RelatedDocumentIdentity,
+    nativeId: i32,
+    title: String,
+    width: u32,
+    height: u32,
+    reply: RelatedCreationReply
+  ): Option<RelatedWindowReservation> {
+    if (this.closed || !owner.isCurrent(in identity) || this.records.has(nativeId) || width == 0 || height == 0) return Option.none;
+    const weakOwner = weak this;
+    const completion: RelatedCreationReply = move (result): void => {
+      // Mark handoff only after the guard accepts readiness/deadline, but
+      // before the caller can synchronously close the newly completed child.
+      match (in result) {
+        ready(child) => {
+          match (attempt weakOwner.upgrade()) {
+            success(owner) => owner.didComplete(in child);
+            failure(_) => {}
+          }
+        }
+        failed(_) => {}
+      }
+      reply(move result);
+    };
+    const reservation = match (this.creations.beginWithReply(in identity, nativeId, now(), now() + 10000, completion)) {
+      some(value) => value; none => return Option.none;
+    };
+    const logical = `/.zapp/related.html?creation=${reservation.child.token}`;
+    const url = resolveLogicalURL(in logical);
+    if (url == null) { this.creations.fail(in reservation); return Option.none; }
+    const absolute = url.absoluteString;
+    if (absolute == null) { this.creations.fail(in reservation); return Option.none; }
+    const address: String = absolute;
+    const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, address,
+      title, width, height, timer: null, runtime: Option<MacOSRelatedWindowRuntime>.none, completed: false });
+    this.records.set(nativeId, record);
+    record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
+      timer.invalidate();
+      match (attempt weakOwner.upgrade()) {
+        success(owner) => owner.fail(in reservation);
+        failure(_) => {}
+      }
+    });
+    return Option.some(copy reservation);
+  }
+
+  private function lookup(in reservation: RelatedWindowReservation): Option<NativeCreation> {
+    const found = this.records.get(reservation.child.windowId);
+    return match (in found) {
+      some(record) => {
+        if (record.reservation.child.token != reservation.child.token
+          || record.reservation.owner.token != reservation.owner.token
+          || record.reservation.owner.windowId != reservation.owner.windowId) return Option.none;
+        const retained: NativeCreation = record;
+        select Option.some(retained);
+      }
+      none => Option.none;
+    };
+  }
+
+  function address(in reservation: RelatedWindowReservation): Option<String> {
+    return match (this.lookup(in reservation)) { some(record) => Option.some(copy record.address); none => Option.none; };
+  }
+
+  private function candidate(in view: WebKit.WKWebView, in action: WebKit.WKNavigationAction): Option<NativeCreation> {
+    if (this.closed || action.targetFrame != null || !action.sourceFrame.mainFrame) return Option.none;
+    const source = action.sourceFrame.request.URL;
+    const url = action.request.URL;
+    if (source == null || url == null || !hasConfiguredFrontendOrigin(in source) || !hasConfiguredFrontendOrigin(in url)) return Option.none;
+    const absolute = url.absoluteString;
+    if (absolute == null) return Option.none;
+    const address: String = absolute;
+    for (const entry of this.records) {
+      const record: NativeCreation = entry.value;
+      if (!record.completed && record.ownerView == view && record.address == address
+        && record.owner.isCurrent(in record.reservation.owner)) return Option.some(record);
+    }
+    return Option.none;
+  }
+
+  function allows(in view: WebKit.WKWebView, in action: WebKit.WKNavigationAction): boolean {
+    return match (this.candidate(in view, in action)) { some(_) => true; none => false; };
+  }
+
+  function create(inout this, in view: WebKit.WKWebView, configuration: WebKit.WKWebViewConfiguration,
+    in action: WebKit.WKNavigationAction): WebKit.WKWebView | null {
+    const record = match (this.candidate(in view, in action)) { some(value) => value; none => return null; };
+    const reservation = record.reservation;
+    const document = match (this.creations.claim(in reservation.owner, in reservation, now())) {
+      some(value) => value; none => { this.fail(in reservation); return null; }
+    };
+    const weakOwner = weak this;
+    const failed: RelatedNativeFailure = move (): void => {
+      match (attempt weakOwner.upgrade()) { success(owner) => owner.fail(in reservation); failure(_) => {} }
+    };
+    const closed: RelatedNativeClosed = move (): void => {
+      match (attempt weakOwner.upgrade()) { success(owner) => owner.fail(in reservation); failure(_) => {} }
+    };
+    const activated: BridgeDocumentActivated = move (identity: RelatedDocumentIdentity): void => {
+      match (attempt weakOwner.upgrade()) { success(owner) => owner.complete(in reservation); failure(_) => {} }
+    };
+    document.whenActivated(activated);
+    const runtime = match (attempt createMacOSRelatedWindowRuntime(configuration, document,
+      `related-${reservation.child.windowId}`, copy record.address, copy record.title,
+      record.width, record.height, this.route, failed, closed)) {
+      success(value) => value;
+      failure(_) => { this.fail(in reservation); return null; }
+    };
+    record.runtime = Option.some(runtime);
+    const cleanup: RelatedCreationCleanup = move (): void => {
+      match (attempt weakOwner.upgrade()) { success(owner) => owner.rollback(in reservation); failure(_) => {} }
+    };
+    if (!this.creations.attach(in reservation, cleanup, now())) return null;
+    return runtime.webView;
+  }
+
+  private function complete(inout this, in reservation: RelatedWindowReservation): void {
+    const record = match (this.lookup(in reservation)) { some(value) => value; none => return; };
+    if (record.completed) return;
+    record.stopTimer();
+    if (!this.creations.complete(in reservation, now())) { this.fail(in reservation); return; }
+    // The reply can synchronously close the child/owner. Never present it again
+    // after that reentrancy, even though this stack retains the former record.
+    if (!this.documents.isReady(in reservation.child)) return;
+    match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => {} }
+  }
+
+  private function didComplete(inout this, in identity: RelatedDocumentIdentity): void {
+    const found = this.records.get(identity.windowId);
+    match (in found) {
+      some(value) => {
+        const record: NativeCreation = value;
+        if (record.reservation.child.token == identity.token) record.completed = true;
+      }
+      none => {}
+    }
+  }
+
+  private function rollback(inout this, in reservation: RelatedWindowReservation): void {
+    const record = match (this.lookup(in reservation)) { some(value) => value; none => return; };
+    this.records.delete(reservation.child.windowId);
+    // As with ordinary windows, retain the completed AppKit graph until the
+    // application run loop unwinds. Failed unpublished allocations are released
+    // before their failure reply instead of accumulating in this retirement list.
+    if (record.completed) {
+      match (in record.runtime) {
+        some(runtime) => { const retained: MacOSRelatedWindowRuntime = runtime; this.retired.push(retained); }
+        none => {}
+      }
+    }
+    record.close();
+  }
+
+  function fail(inout this, in reservation: RelatedWindowReservation): void {
+    this.creations.fail(in reservation);
+    this.rollback(in reservation);
+    this.pruneInvalidated();
+  }
+
+  function pruneInvalidated(inout this): void {
+    this.creations.pruneInvalidated();
+    let retired = Array<RelatedWindowReservation>();
+    for (const entry of this.records) {
+      const reservation = entry.value.reservation;
+      if (!this.documents.isLive(in reservation.child)) retired.push(copy reservation);
+    }
+    for (const reservation of retired) { this.rollback(in reservation); }
+  }
+
+  function closeAll(inout this): void {
+    this.closed = true;
+    this.creations.cancelAll();
+    let pending = Array<RelatedWindowReservation>();
+    for (const entry of this.records) { pending.push(copy entry.value.reservation); }
+    for (const reservation of pending) { this.rollback(in reservation); }
+  }
+}
+
+class RelatedWindowUI on thread.main implements WebKit.WKUIDelegate {
+  readonly windows: Weak<MacOSRelatedWindows>;
+  function create(in view: WebKit.WKWebView, in configuration: WebKit.WKWebViewConfiguration,
+    in action: WebKit.WKNavigationAction, in features: WebKit.WKWindowFeatures
+  ): WebKit.WKWebView | null as "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:" {
+    return match (attempt this.windows.upgrade()) {
+      success(windows) => windows.create(in view, configuration, in action);
+      failure(_) => null;
+    };
+  }
+}
+
+internal function createRelatedWindowUIDelegate(windows: MacOSRelatedWindows): objc.Adapter<WebKit.WKUIDelegate> on thread.main {
+  const controller = new RelatedWindowUI({ windows: weak windows });
+  return objc.adapt<WebKit.WKUIDelegate>(controller);
+}

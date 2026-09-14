@@ -53,7 +53,7 @@ import {
 import { showMacOSFrontendContextMenu } from "./context-menu-backend.zs";
 import { WindowContextMenuOperation } from "../../window.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
-import { navigationProfileAllowsExternalURL } from "./navigation.zs";
+import { navigationProfileAllowsExternalURL } from "./navigation-policy.zs";
 import { requestMacOSHostQuit } from "./application-host.zs";
 import { ApplicationQuitOperation } from "../../application-events.zs";
 import {

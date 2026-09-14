@@ -14,6 +14,7 @@ internal class MacOSWindowRuntime on thread.main {
   readonly configuration: WebKit.WKWebViewConfiguration;
   readonly schemeHandler: objc.Adapter<WebKit.WKURLSchemeHandler>;
   readonly navigationDelegate: objc.Adapter<WebKit.WKNavigationDelegate>;
+  readonly uiDelegate: objc.Adapter<WebKit.WKUIDelegate>;
   readonly windowDelegate: objc.Adapter<WebKit.NSWindowDelegate>;
   readonly presentationObserver: WindowPresentationObserver;
   readonly registration: objc.Registration;

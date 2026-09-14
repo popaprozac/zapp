@@ -9,7 +9,7 @@ import json from "std/json";
 import { Set } from "std/collections";
 import { thread } from "std/thread";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
-import { BridgeDocument } from "../framework/bridge-document.zs";
+import { BridgeDocument, BridgeDocumentActivated } from "../framework/bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } from "../framework/related-documents.zs";
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup } from "../framework/related-window-creations.zs";
 import { DesktopRouteMessageOperation, routeDocumentMessage, requestBridgeDocumentBinding } from "../framework/platform/macos/document-transport.zs";
@@ -48,6 +48,8 @@ class Observations on thread.main {
   created: i32;
   rejected: i32;
   replies: i32;
+  pendingEcho: u64;
+  activated: boolean;
   closed: i32;
   rolledBack: i32;
   releasedMessages: i32;
@@ -90,6 +92,23 @@ class Observations on thread.main {
     this.created = this.created + 1;
   }
 
+  function replyEcho(inout this): void {
+    if (!this.activated || this.pendingEcho == 0 || this.children.length != 1) return;
+    const child = this.children[0];
+    const identity = match (child.document.creationIdentity()) { some(value) => value; none => { this.fail(); return; } };
+    const requestId = this.pendingEcho;
+    this.pendingEcho = 0;
+    this.replies = this.replies + 1;
+    reply(child.view, in identity, requestId, "42");
+  }
+
+  function activation(inout this, in reservation: RelatedWindowReservation): void {
+    if (!this.creations.complete(in reservation, 2)) { this.fail(); return; }
+    this.preparing = Option.none;
+    this.activated = true;
+    this.replyEcho();
+  }
+
   function closeChild(inout this, in view: WebKit.WKWebView): void {
     if (this.closed != 0) return;
     let index: usize = 0;
@@ -124,16 +143,13 @@ class Observations on thread.main {
       return;
     }
     if (request.m == "echo" && identity.windowId == 2) {
-      const reservation = match (copy this.preparing) { some(value) => value; none => { this.fail(); return; } };
-      if (reservation.child.token != identity.token || !this.creations.complete(in reservation, 2)) { this.fail(); return; }
-      this.preparing = Option.none;
       const authority = match (this.documents.capabilitiesFor(in identity)) {
         some(value) => value;
         none => { this.fail(); return; }
       };
       if (!authority.allowsService("notes.list") || authority.allowsService("admin.erase")) { this.fail(); return; }
-      this.replies = this.replies + 1;
-      reply(view, in identity, request.id, "42");
+      this.pendingEcho = request.id;
+      this.replyEcho();
       return;
     }
     if (request.m == "pass" && identity.windowId == 2) { this.childPassed = true; return; }
@@ -243,6 +259,8 @@ class OwnerUI on thread.main implements WebKit.WKUIDelegate {
     }
     const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 300, 180), configuration: configuration);
     const state = this.state;
+    const activated: BridgeDocumentActivated = move (identity: RelatedDocumentIdentity): void => state.activation(in reservation);
+    document.whenActivated(activated);
     const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => state.route(view, move message, identity);
     const messages = new Messages({ state, document, view, controller, address, route, tracksRollback: claimed.failAfterAllocation });
     const registration = objc.register({ add: controller.addScriptMessageHandler(messages, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
@@ -306,7 +324,8 @@ function main(): i32 on thread.main {
   const state = new Observations({ documents, owner: document, creations: new RelatedWindowCreations(documents),
     preparing: Option<RelatedWindowReservation>.none, failAfterAllocation: false,
     ownerIdentity: Option<RelatedDocumentIdentity>.none, children: Array<ChildEndpoint>(),
-    created: 0, rejected: 0, replies: 0, closed: 0, rolledBack: 0, releasedMessages: 0, childPassed: false, failed: false });
+    created: 0, rejected: 0, replies: 0, pendingEcho: 0, activated: false,
+    closed: 0, rolledBack: 0, releasedMessages: 0, childPassed: false, failed: false });
   const route: DesktopRouteMessageOperation = move (message: String, identity: RelatedDocumentIdentity): void => state.route(view, move message, identity);
   const messages = new Messages({ state, document, view, controller, address, route, tracksRollback: false });
   const registration = objc.register({ add: controller.addScriptMessageHandler(messages, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });

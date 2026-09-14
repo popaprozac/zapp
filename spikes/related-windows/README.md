@@ -10,17 +10,17 @@ document, with ordinary object/function references and same-origin enforcement.
 Start with [why, findings, and next steps](../../docs/experiments/related-windows.md).
 See [BENCHMARKS.md](BENCHMARKS.md) for the three-way measurements and limits.
 The [approved public contract](../../docs/plans/related-windows.md) now has runtime
-types and a separately tested lifetime helper. The public factory/native bridge
-creation is still pending; production document routing is now integrated and
-tested separately from this oracle.
+types and a separately tested lifetime helper. Production document routing and
+private native child allocation are integrated and tested separately from this
+oracle; the public factory remains gated.
 
 ## Why Objective-C here?
 
 The small native host isolates public WebKit behavior from compiler/framework
 integration. Like the window-resize research oracle, it is never linked into
-Zapp, Z Notes, or shipped applications. A future implementation belongs in Z
-using checked interop; this experiment does not authorize a new production
-Objective-C layer or a public API.
+Zapp, Z Notes, or shipped applications. The production counterparts use Z with
+checked interop; this experiment does not introduce a production Objective-C
+layer or itself expose a public API.
 
 ## Run
 
@@ -42,6 +42,7 @@ bun run test:creations
 bun run test:document-routing
 bun run test:related-readiness
 bun run test:shell
+bun run test:production
 bun run benchmark
 ```
 
@@ -130,6 +131,32 @@ unprepared-creation refusal, and child-only closure. The server closes in
 `finally`. [Dated output](results/2026-09-13/related-shell.json) is preserved.
 This is shell-delivery evidence, not the public factory or full-family close
 integration. See the [remaining gates](../../docs/plans/related-windows.md#vite-and-packaged-shell-checkpoint).
+
+## Production child allocation and activation
+
+Run `bun run test:production` (or, from the repository root,
+`bun run spikes/related-windows/shell.ts --production`). This uses the production
+Z child allocator, supplied WebKit configuration, retained delegates, separate
+message registration, sender validation, and one-shot creation coordinator.
+Only the owner's prepare route and echo response are test instrumentation.
+
+Eight native/Stage 0 × `-O0`/`-O2` × Vite/packaged cases pass with UBSan and
+strict warnings. They reject unprepared creation, roll back and retry a partial
+allocation, wait for acknowledged bridge activation, verify the empty shell
+and shared owner state, deliver a reply directly to the child, and close it.
+Native completion must precede that child reply; shell readiness alone is not
+enough. Timers, views, and the Vite server have bounded cleanup.
+
+[Production output](results/2026-09-13/production-creations.json),
+[early-call activation output](results/2026-09-13/activation-shell.json), and
+[headless completion output](results/2026-09-13/creation-completion.json) preserve
+the evidence separately. The headless fixture covers failure ordering, expiry,
+and stale owner replies; the production fixture does not wait for its real
+ten-second deadline. This is not a first-paint or allocation benchmark.
+
+The public factory remains gated on logical-window adoption, family close
+preflight, and complete unsolicited event/retirement integration. See the
+[current checkpoint](../../docs/plans/related-windows.md#production-allocation-and-completion-checkpoint).
 
 ## Headless native document registry
 

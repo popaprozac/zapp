@@ -2,6 +2,9 @@ import { thread } from "std/thread";
 import { CapabilitySelection } from "./application-capabilities.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "./related-documents.zs";
 
+internal type BridgeDocumentActivated = (identity: RelatedDocumentIdentity) => void on thread.main;
+function ignoreActivation(identity: RelatedDocumentIdentity): void on thread.main {}
+
 // Root endpoints can host successive documents; related endpoints are terminal
 // after replacement. Platform callbacks validate
 // sender/frame/origin before offering, acknowledging, or accepting a token.
@@ -16,6 +19,8 @@ internal class BridgeDocument on thread.main {
   private committed: boolean;
   private closed: boolean;
   private related: boolean;
+  private activated: boolean;
+  private activationHandler: BridgeDocumentActivated;
 
   internal constructor(windowId: i32, documents: RelatedDocuments, capabilities: CapabilitySelection) {
     this.windowId = windowId;
@@ -27,6 +32,8 @@ internal class BridgeDocument on thread.main {
     this.committed = false;
     this.closed = false;
     this.related = false;
+    this.activated = false;
+    this.activationHandler = ignoreActivation;
   }
 
   // A child can inherit only a live, ready native owner's authority. Reserve its
@@ -57,6 +64,14 @@ internal class BridgeDocument on thread.main {
 
   function requiresShell(): boolean { return this.related; }
 
+  // Native-only notification. A renderer cannot select this callback or use
+  // its realm/token as authority. Install before returning the child WebView.
+  function whenActivated(inout this, handler: BridgeDocumentActivated): boolean {
+    if (!this.related || this.closed || this.activated) return false;
+    this.activationHandler = handler;
+    return true;
+  }
+
   // Native creation bookkeeping may identify a reserved child before readiness.
   // This is not an acceptance path for renderer messages.
   function creationIdentity(): Option<RelatedDocumentIdentity> {
@@ -77,6 +92,8 @@ internal class BridgeDocument on thread.main {
     this.realm = "";
     this.token = "";
     this.committed = false;
+    this.activated = false;
+    this.activationHandler = ignoreActivation;
   }
 
   function didCommit(inout this): void {
@@ -142,6 +159,23 @@ internal class BridgeDocument on thread.main {
       some(identity) => this.documents.observeDocument(in identity);
       none => false;
     };
+  }
+
+  // Registry readiness permits calls flushed by _activateDocument. Creation
+  // completion is stricter: the native evaluateJavaScript reply must confirm
+  // that activation succeeded for this still-current realm and document.
+  function observeActivation(inout this, in token: String, in realm: String): boolean {
+    if (!this.related || this.activated || !this.bindingMatches(in token, in realm)) return false;
+    const identity = match (this.accept(in token)) { some(value) => value; none => return false; };
+    this.activated = true;
+    const handler = this.activationHandler;
+    this.activationHandler = ignoreActivation;
+    handler(identity);
+    return true;
+  }
+
+  function isActivated(in identity: RelatedDocumentIdentity): boolean {
+    return this.activated && this.isCurrent(in identity);
   }
 
   function accept(in token: String): Option<RelatedDocumentIdentity> {

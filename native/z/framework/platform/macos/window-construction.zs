@@ -18,8 +18,8 @@ import {
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import {
   createDesktopNavigationDelegate,
-  resolveLogicalURL,
 } from "./navigation.zs";
+import { resolveLogicalURL } from "./navigation-policy.zs";
 import {
   installWebViewScripts,
 } from "./webview-injections.zs";
@@ -32,6 +32,7 @@ import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
+import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "./related-window-creations.zs";
 
 internal function createMacOSWindowRuntime(
   name: String,
@@ -44,11 +45,15 @@ internal function createMacOSWindowRuntime(
   routeMessage: DesktopRouteMessageOperation,
   didCloseNativeWindow: NativeWindowClosedOperation,
   contextMenus: ContextMenuSessions,
-  menu: ApplicationMenu
+  menu: ApplicationMenu,
+  related: MacOSRelatedWindows
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = WebKit.WKUserContentController.alloc().init();
   const configuration = WebKit.WKWebViewConfiguration.alloc().init();
   configuration.userContentController = contentController;
+  // Both navigation policy and the UI delegate require a native reservation.
+  // This enables the later asynchronous factory without allowing raw popups.
+  configuration.preferences.javaScriptCanOpenWindowsAutomatically = true;
   const schemeHandler = createDesktopAssetSchemeHandler();
   configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "zapp");
   const scripts = attempt installWebViewScripts(
@@ -119,9 +124,12 @@ internal function createMacOSWindowRuntime(
     windowManager,
     contextMenus,
     menu,
-    document
+    document,
+    related
   );
   webView.navigationDelegate = navigationDelegate;
+  const uiDelegate = createRelatedWindowUIDelegate(related);
+  webView.UIDelegate = uiDelegate;
   const windowDelegate = createDesktopWindowDelegate(
     copy id,
     nativeId,
@@ -152,6 +160,7 @@ internal function createMacOSWindowRuntime(
     configuration,
     schemeHandler,
     navigationDelegate,
+    uiDelegate,
     windowDelegate,
     presentationObserver,
     registration,

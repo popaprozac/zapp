@@ -4,6 +4,11 @@ import { BridgeDocument } from "./bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "./related-documents.zs";
 
 internal type RelatedCreationCleanup = () => void on thread.main;
+internal enum RelatedCreationResult {
+  ready RelatedDocumentIdentity,
+  failed String,
+}
+internal type RelatedCreationReply = (result: RelatedCreationResult) => void on thread.main;
 
 // Correlation only. Native callbacks must separately validate their actual
 // sending WebView/frame/origin. Neither identity chooses a capability profile.
@@ -13,15 +18,18 @@ internal readonly struct RelatedWindowReservation {
 }
 
 function ignoreCleanup(): void on thread.main {}
+function ignoreReply(result: RelatedCreationResult): void on thread.main {}
 
 class CreationRecord on thread.main {
   readonly reservation: RelatedWindowReservation;
   readonly document: BridgeDocument;
   readonly deadline: u64;
+  readonly documents: RelatedDocuments;
   claimed: boolean;
   attached: boolean;
   active: boolean;
   cleanup: RelatedCreationCleanup;
+  reply: RelatedCreationReply;
 
   function claim(inout this): boolean {
     if (!this.active || this.claimed) return false;
@@ -36,14 +44,35 @@ class CreationRecord on thread.main {
     return true;
   }
 
-  function complete(inout this): void { this.active = false; }
+  function complete(inout this): void {
+    this.active = false;
+    this.cleanup = ignoreCleanup;
+  }
+
+  function sendCompletion(inout this): void {
+    const reply = this.reply;
+    this.reply = ignoreReply;
+    if (this.documents.isReady(in this.reservation.owner)) reply(RelatedCreationResult.ready(copy this.reservation.child));
+  }
+
+  private function releaseNativeResources(inout this): void {
+    this.cleanup();
+    this.cleanup = ignoreCleanup;
+  }
 
   function fail(inout this): void {
     if (!this.active) return;
     this.active = false;
     // Routing is terminal before cleanup can synchronously call back into Z.
     this.document.close();
-    this.cleanup();
+    this.releaseNativeResources();
+    // Cleanup (including dropping its captures) precedes rejection. It may
+    // reenter or retire the owner, so recheck the original identity afterwards.
+    const reply = this.reply;
+    this.reply = ignoreReply;
+    if (this.documents.isReady(in this.reservation.owner)) {
+      reply(RelatedCreationResult.failed("related window creation did not complete"));
+    }
   }
 
   deinit {
@@ -77,6 +106,17 @@ internal class RelatedWindowCreations on thread.main {
     now: u64,
     deadline: u64
   ): Option<RelatedWindowReservation> {
+    return this.beginWithReply(in owner, windowId, now, deadline, ignoreReply);
+  }
+
+  function beginWithReply(
+    inout this,
+    in owner: RelatedDocumentIdentity,
+    windowId: i32,
+    now: u64,
+    deadline: u64,
+    reply: RelatedCreationReply
+  ): Option<RelatedWindowReservation> {
     if (this.closed || deadline <= now || this.records.has(windowId)) return Option.none;
     const authority = match (this.documents.capabilitiesFor(in owner)) {
       some(value) => value;
@@ -93,6 +133,7 @@ internal class RelatedWindowCreations on thread.main {
     };
     const reservation = RelatedWindowReservation({ owner: copy owner, child });
     this.records.set(windowId, new CreationRecord({ reservation: copy reservation, document, deadline,
+      documents: this.documents, reply,
       claimed: false, attached: false, active: true, cleanup: ignoreCleanup }));
     return Option.some(reservation);
   }
@@ -158,9 +199,10 @@ internal class RelatedWindowCreations on thread.main {
   function complete(inout this, in reservation: RelatedWindowReservation, now: u64): boolean {
     const record = match (this.lookup(in reservation)) { some(value) => value; none => return false; };
     if (!this.valid(record, now)) { this.fail(in reservation); return false; }
-    if (!record.claimed || !record.attached || !record.document.isCurrent(in reservation.child)) return false;
+    if (!record.claimed || !record.attached || !record.document.isActivated(in reservation.child)) return false;
     record.complete();
     this.records.delete(reservation.child.windowId);
+    record.sendCompletion();
     return true;
   }
 

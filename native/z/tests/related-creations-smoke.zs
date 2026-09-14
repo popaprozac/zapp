@@ -4,7 +4,7 @@ import console from "std/console";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
 import { BridgeDocument } from "../framework/bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } from "../framework/related-documents.zs";
-import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup } from "../framework/related-window-creations.zs";
+import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup, RelatedCreationReply, RelatedCreationResult } from "../framework/related-window-creations.zs";
 
 function verify(value: boolean, code: i32): void throws i32 {
   if (!value) { console.error(`creation verification failed: ${code}`); throw code; }
@@ -47,6 +47,59 @@ class CleanupProbe on thread.main {
   function increment(inout this): void { this.count = this.count + 1; }
 }
 
+class ReplyProbe on thread.main {
+  successes: i32;
+  failures: i32;
+  clean: boolean;
+  constructor() { this.successes = 0; this.failures = 0; this.clean = true; }
+  function receive(inout this, creations: RelatedWindowCreations, cleanup: CleanupProbe,
+    result: RelatedCreationResult): void {
+    this.clean = this.clean && creations.count() == 0;
+    match (result) {
+      ready(_) => this.successes = this.successes + 1;
+      failed(_) => { this.failures = this.failures + 1; this.clean = this.clean && cleanup.count == 1; }
+    }
+  }
+}
+
+function replies(): void throws i32 on thread.main {
+  const documents = createRelatedDocuments();
+  const creations = new RelatedWindowCreations(documents);
+  const owner = try identity(documents.registerOwner(1, selection(true)));
+  const cleanup = new CleanupProbe();
+  const probe = new ReplyProbe();
+  const reply: RelatedCreationReply = move (result: RelatedCreationResult): void => probe.receive(creations, cleanup, move result);
+  const ready = try reserved(creations.beginWithReply(in owner, 2, 0, 10, reply));
+  const document = try endpoint(creations.claim(in owner, in ready, 1));
+  const release: RelatedCreationCleanup = move (): void => cleanup.increment();
+  try verify(creations.attach(in ready, release, 1), 70);
+  document.didCommit();
+  const realm = "0123456789abcdef0123456789abcdef";
+  const token = `${ready.child.token}`;
+  document.acknowledge(in token, copy realm);
+  document.observeShell(in token, in realm);
+  try verify(!creations.complete(in ready, 1) && probe.successes == 0, 71);
+  try verify(!document.observeActivation(in token, "stale") && probe.successes == 0, 72);
+  try verify(document.observeActivation(in token, in realm) && creations.complete(in ready, 1), 73);
+  try verify(probe.successes == 1 && probe.failures == 0 && cleanup.count == 0 && probe.clean, 74);
+  try verify(!creations.complete(in ready, 1) && !document.observeActivation(in token, in realm), 75);
+  document.close();
+  try verify(!document.observeActivation(in token, in realm), 76);
+  const failed = try reserved(creations.beginWithReply(in owner, 2, 0, 10, reply));
+  const failedDocument = try endpoint(creations.claim(in owner, in failed, 1));
+  try verify(creations.attach(in failed, release, 1) && creations.fail(in failed), 77);
+  try verify(probe.failures == 1 && cleanup.count == 1 && probe.clean, 78);
+  const expired = try reserved(creations.beginWithReply(in owner, 2, 0, 10, reply));
+  creations.expire(10);
+  try verify(probe.failures == 2 && cleanup.count == 1 && probe.clean, 79);
+  const stale = try reserved(creations.beginWithReply(in owner, 2, 0, 10, reply));
+  const retired = documents.retire(in owner);
+  const replacement = try identity(documents.registerOwner(1, selection(true)));
+  creations.pruneInvalidated();
+  try verify(probe.failures == 2 && creations.count() == 0, 80);
+  creations.cancelAll();
+}
+
 function makeReady(document: BridgeDocument, in reservation: RelatedWindowReservation): void throws i32 on thread.main {
   document.didCommit();
   const realm = "0123456789abcdef0123456789abcdef";
@@ -55,6 +108,9 @@ function makeReady(document: BridgeDocument, in reservation: RelatedWindowReserv
   const token = `${offered.token}`;
   try verify(!document.acknowledge(in token, copy realm), 5);
   try verify(document.observeShell(in token, in realm), 6);
+  try verify(!document.isActivated(in reservation.child), 60);
+  try verify(document.observeActivation(in token, in realm), 61);
+  try verify(!document.observeActivation(in token, in realm), 62);
 }
 
 function abandon(documents: RelatedDocuments, in owner: RelatedDocumentIdentity): void throws i32 on thread.main {
@@ -65,6 +121,7 @@ function abandon(documents: RelatedDocuments, in owner: RelatedDocumentIdentity)
 }
 
 function run(): i32 throws i32 on thread.main {
+  try replies();
   const documents = createRelatedDocuments();
   const creations = new RelatedWindowCreations(documents);
   const owner = try identity(documents.registerOwner(1, selection(true)));

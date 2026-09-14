@@ -11,6 +11,7 @@
     "test:document-routing": "bun run document-routing.ts",
     "test:related-readiness": "bun run document-routing.ts --related",
     "test:shell": "bun run shell.ts",
+    "test:production": "bun run shell.ts --production",
     "benchmark": "bun run benchmark.ts"
   },
   "dependencies": {

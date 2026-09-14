@@ -11,6 +11,8 @@ routing now uses document-bound identities, with a private bridge handshake and
 stale-reply rejection across committed navigation.
 The private minimal shell is served by Vite and embedded by Z packaging, with
 actual WebKit readiness verified through both delivery paths.
+Production checked-Z allocation, one-shot completion/failure replies, and native
+creation deadlines are now wired and exercised by a private WebKit harness.
 **`createRelatedWindow` is not implemented or exported yet.** The example below
 describes the intended API, not a runnable feature today.
 The [platform research](../experiments/related-windows.md) records the evidence
@@ -187,8 +189,10 @@ validation and physical window teardown remain outside this helper.
       shell/bridge readiness in headless tests and an actual WebKit-created child.
 - [x] Deliver the same minimal child shell through Vite and the production
       embedded-asset handler, without loading another frontend entry or HMR client.
-- [ ] Integrate related-child creation, shell/bridge readiness, inherited
-      authority, and partial-creation cleanup into the window manager.
+- [x] Wire the production native allocator/UI delegate, inherited endpoint,
+      activation acknowledgement, deadline, and partial-creation rollback.
+- [ ] Adopt completed related children into the logical window manager and its
+      controls/events; expose authenticated public creation only after the gates below.
 - [ ] Carry family close preflight, real Z task cancellation, origin/capability
       checks, renderer loss, and navigation gates through native integration.
 - [ ] Expose the public factory and add a Z Notes demonstration.
@@ -203,6 +207,8 @@ bun test runtime/document-transport.test.ts
 bun run spikes/related-windows/document-routing.ts
 bun run spikes/related-windows/document-routing.ts --related
 bun run spikes/related-windows/shell.ts
+bun run spikes/related-windows/shell.ts --production
+bun run spikes/related-windows/registry.ts --creations
 bun run check
 ```
 
@@ -429,7 +435,7 @@ whose first body use passed a class argument emitted a duplicate retain.
 Z commit `60230f39` fixes both with destructor-count regressions. The fixture does not wait for
 arbitrary Objective-C autorelease draining to claim failed-registration cleanup.
 
-Scope remains deliberately narrow: the production registry **owns** this guard,
+At that checkpoint, scope remained deliberately narrow: the production registry **owned** this guard,
 but the real allocation/claim proof is still in the checked-Z WebKit fixture.
 Automatic platform deadline scheduling, prepare/claim/readiness wiring into the
 production UI delegate, failure replies, family close preflight, and complete
@@ -437,3 +443,57 @@ document-bound event/retirement integration are still gates. The fixture injects
 deterministic deadline ticks; it does not claim a production timeout timer.
 `createRelatedWindow` remains unexported. No new public API or configuration was
 introduced, and ordinary service calls do not touch the creation table.
+
+### Production allocation and completion checkpoint
+
+The macOS registry now owns `MacOSRelatedWindows`, installs its production
+`WKUIDelegate`, and provides an internal, authenticated prepare entry. A pending
+reservation binds one exact owner WebView/document to one private shell URL.
+Unprepared popups remain refused. The allocator uses WebKit's supplied
+configuration, installs a separate child message controller and registration,
+retains its navigation/UI/window delegates, and returns the child WebView
+without bootstrapping a second frontend application. All new host code is Z.
+
+The child stays hidden until the shell exists and JavaScript successfully
+acknowledges bridge activation. Registry routing readiness alone cannot resolve
+creation. Completion removes the guard before the one-shot reply; failure
+revokes routing and rolls back unpublished resources before rejection. Replies
+target only the original ready owner identity, never a replacement document.
+Presentation rechecks liveness after a potentially reentrant success callback.
+A ten-second monotonic deadline uses one non-repeating native timer per pending
+creation; completed creations stop it. Ordinary service calls use neither this
+timer nor this table.
+
+The production coordinator is split from native allocation and the reusable
+navigation policy to keep the module graph acyclic. The registry can deliver a
+document-bound response directly to a ready child; it does not relay through
+the owner's JavaScript bridge.
+
+`bun run spikes/related-windows/shell.ts --production` runs the actual child
+allocator, delegates, message handler, and activation path. Its root prepare
+route remains test instrumentation. Eight native/Stage 0 × `-O0`/`-O2` ×
+Vite/packaged cases pass with strict Clang warnings, UBSan, empty stderr, and
+bounded process groups. They refuse an unprepared popup, roll back a partial
+allocation, reuse its numeric ID with a fresh identity, wait for activation,
+read shared owner state, verify inherited grants, receive a direct child reply,
+and close only the child. Evidence:
+[production matrix](../../spikes/related-windows/results/2026-09-13/production-creations.json),
+[activation/early-call matrix](../../spikes/related-windows/results/2026-09-13/activation-shell.json),
+[headless completion matrix](../../spikes/related-windows/results/2026-09-13/creation-completion.json).
+The headless matrix additionally verifies duplicate/late activation, cleanup
+before failure replies, deadline expiry, and reply suppression after owner loss.
+The real-time deadline is wired, but this matrix does not wait ten seconds to
+claim timer-expiry evidence. The earlier registration-destruction fixture
+remains distinct from this production allocator test.
+
+The packaged Z Notes application smoke also passes after integration, including
+normal services, worker activity, permission checks, and shutdown. Z commit
+`3350fd12` closes the callback-assignment, receiver/constructor cleanup, and
+optional header-provenance emission gaps encountered here; the framework does
+not carry handwritten native replacements for those valid Z shapes.
+
+The public `createRelatedWindow` factory is still unexported. Next gates are
+logical `WindowManager` adoption, family-wide cancellable close preflight,
+document-bound unsolicited events, and broader renderer/owner retirement cases.
+Nested related-owner creation is also not exposed by the registry's root-only
+prepare entry. No new public API, permission, or configuration was added here.

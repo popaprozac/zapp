@@ -10,7 +10,8 @@ import { ContextMenuSessions } from "../../context-menu.zs";
 import { BridgeResponse } from "../../bridge.zs";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
-import { RelatedWindowCreations } from "../../related-window-creations.zs";
+import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationReply } from "../../related-window-creations.zs";
+import { MacOSRelatedWindows } from "./related-window-creations.zs";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowManager, WindowOptions } from "../../window.zs";
@@ -35,6 +36,7 @@ internal class MacOSWindowRegistry on thread.main {
   readonly routeMessage: DesktopRouteMessageOperation;
   readonly documents: RelatedDocuments;
   readonly creations: RelatedWindowCreations;
+  readonly related: MacOSRelatedWindows;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
   nativeWindows: Map<i32, MacOSWindowRuntime>;
   retiredNativeWindows: Array<MacOSWindowRuntime>;
@@ -103,9 +105,23 @@ internal class MacOSWindowRegistry on thread.main {
       this.routeMessage,
       didClose,
       this.contextMenus,
-      this.menu
+      this.menu,
+      this.related
     );
     this.nativeWindows.set(nativeId, runtime);
+  }
+
+  // Native-only until the public factory's remaining lifecycle gates are met.
+  // Callers supply the authenticated document, never a renderer-chosen owner.
+  function prepareRelatedWindow(inout this, in owner: RelatedDocumentIdentity,
+    title: String, width: u32, height: u32, reply: RelatedCreationReply
+  ): Option<RelatedWindowReservation> {
+    const found = this.nativeWindows.get(owner.windowId);
+    const runtime: MacOSWindowRuntime = match (in found) { some(value) => value; none => return Option.none; };
+    if (this.nextNativeWindowId == 2147483647) return Option.none;
+    const nativeId = this.nextNativeWindowId;
+    this.nextNativeWindowId = nativeId + 1;
+    return this.related.prepare(runtime.document, runtime.webView, in owner, nativeId, move title, width, height, reply);
   }
 
   function nativeWindowClosed(
@@ -118,7 +134,7 @@ internal class MacOSWindowRegistry on thread.main {
         let window = value;
         this.contextMenus.invalidateWindow(in window.id);
         window.document.close();
-        this.creations.pruneInvalidated();
+        this.related.pruneInvalidated();
         let menu = this.menu;
         menu.invalidateFrontendOwner(in window.id);
         this.retiredNativeWindows.push(move window);
@@ -131,7 +147,7 @@ internal class MacOSWindowRegistry on thread.main {
   }
 
   function closeAllNativeWindows(inout this): void on thread.main {
-    this.creations.cancelAll();
+    this.related.closeAll();
     this.contextMenus.invalidateAll();
     // Teardown is already committed, so it bypasses cancellable user close
     // requests. Snapshot the native windows first because close callbacks
@@ -315,7 +331,13 @@ internal class MacOSWindowRegistry on thread.main {
         windowId,
         activeWindowCount
       );
-      none => {}
+      none => {
+        match (this.related.runtime(in document)) {
+          some(window) => deliverWebViewResponse(window.webView, window.window,
+            in response, document, window.document, windowId, activeWindowCount);
+          none => {}
+        }
+      }
     }
   }
 }

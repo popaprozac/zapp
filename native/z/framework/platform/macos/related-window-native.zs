@@ -1,0 +1,148 @@
+import WebKit from "WebKit/WebKit.h";
+import objc from "std/objc";
+import { thread } from "std/thread";
+import { BridgeDocument } from "../../bridge-document.zs";
+import { RelatedDocumentIdentity } from "../../related-documents.zs";
+import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "./document-transport.zs";
+import { DesktopMessageHandler } from "./message-handler.zs";
+import { macOSWindowFrame } from "./window-geometry.zs";
+import { MacOSWindow } from "./window-resize.zs";
+import { installWebViewScripts } from "./webview-injections.zs";
+
+internal type RelatedNativeFailure = () => void on thread.main;
+internal type RelatedNativeClosed = () => void on thread.main;
+
+// An unpublished child owns exactly the same native registration boundary as
+// an ordinary window. This separate runtime cannot accidentally load an app
+// entry or override the inherited origin/capability selection.
+internal class MacOSRelatedWindowRuntime on thread.main {
+  readonly window: MacOSWindow;
+  readonly webView: WebKit.WKWebView;
+  readonly controller: WebKit.WKUserContentController;
+  readonly configuration: WebKit.WKWebViewConfiguration;
+  readonly document: BridgeDocument;
+  readonly navigation: objc.Adapter<WebKit.WKNavigationDelegate>;
+  readonly ui: objc.Adapter<WebKit.WKUIDelegate>;
+  readonly delegate: objc.Adapter<WebKit.NSWindowDelegate>;
+  readonly registration: objc.Registration;
+
+  function close(inout this): void {
+    this.document.close();
+    this.webView.stopLoading();
+    this.window.close();
+  }
+}
+
+class RelatedNavigation on thread.main implements WebKit.WKNavigationDelegate {
+  readonly view: WebKit.WKWebView;
+  readonly address: String;
+  readonly document: BridgeDocument;
+  readonly failed: RelatedNativeFailure;
+
+  function policy(
+    in view: WebKit.WKWebView,
+    in action: WebKit.WKNavigationAction,
+    in decide: (policy: WebKit.WKNavigationActionPolicy) => void
+  ): void as "webView:decidePolicyForNavigationAction:decisionHandler:" {
+    const target = action.targetFrame;
+    const url = action.request.URL;
+    let allowed = false;
+    if (view == this.view && target != null && target.mainFrame && url != null) {
+      const absolute = url.absoluteString;
+      if (absolute != null) {
+        const address: String = absolute;
+        allowed = address == this.address;
+      }
+    }
+    decide(allowed ? WebKit.WKNavigationActionPolicyAllow : WebKit.WKNavigationActionPolicyCancel);
+    if (!allowed) this.failed();
+  }
+
+  function commit(inout this, in view: WebKit.WKWebView, in navigation: WebKit.WKNavigation | null): void as "webView:didCommitNavigation:" {
+    if (view != this.view) return;
+    this.document.didCommit();
+    match (this.document.creationIdentity()) {
+      some(_) => requestBridgeDocumentBinding(in view);
+      none => this.failed();
+    }
+  }
+
+  function failedBeforeCommit(in view: WebKit.WKWebView, in navigation: WebKit.WKNavigation | null,
+    in error: WebKit.NSError): void as "webView:didFailProvisionalNavigation:withError:" {
+    if (view == this.view) this.failed();
+  }
+  function failedAfterCommit(in view: WebKit.WKWebView, in navigation: WebKit.WKNavigation | null,
+    in error: WebKit.NSError): void as "webView:didFailNavigation:withError:" {
+    if (view == this.view) this.failed();
+  }
+  function terminated(inout this, in view: WebKit.WKWebView): void as "webViewWebContentProcessDidTerminate:" {
+    if (view != this.view) return;
+    this.document.retire();
+    this.failed();
+  }
+}
+
+class RelatedUI on thread.main implements WebKit.WKUIDelegate {
+  readonly view: WebKit.WKWebView;
+  readonly window: MacOSWindow;
+  function closed(inout this, in view: WebKit.WKWebView): void as "webViewDidClose:" {
+    // DOM close is already committed, not a second cancellable close request.
+    if (view == this.view) this.window.close();
+  }
+}
+
+class RelatedWindowDelegate on thread.main implements WebKit.NSWindowDelegate {
+  readonly document: BridgeDocument;
+  readonly closed: RelatedNativeClosed;
+  function didClose(inout this, in notification: WebKit.NSNotification): void as "windowWillClose:" {
+    this.document.close();
+    this.closed();
+  }
+}
+
+// The caller must already have claimed a creation reservation against the
+// actual sending WebView/frame/origin. WebKit owns navigation of the returned
+// view: do not allocate a replacement configuration or call loadRequest here.
+internal function createMacOSRelatedWindowRuntime(
+  configuration: WebKit.WKWebViewConfiguration,
+  document: BridgeDocument,
+  id: String,
+  address: String,
+  title: String,
+  width: u32,
+  height: u32,
+  route: DesktopRouteMessageOperation,
+  failed: RelatedNativeFailure,
+  closed: RelatedNativeClosed
+): MacOSRelatedWindowRuntime throws String on thread.main {
+  const controller = WebKit.WKUserContentController.alloc().init();
+  configuration.userContentController = controller;
+  const inject = Array<String>();
+  try installWebViewScripts(controller, in id, in inject);
+  const frame = macOSWindowFrame(width, height);
+  const view = WebKit.WKWebView.alloc().initWithFrame(frame, configuration: configuration);
+  const handler = new DesktopMessageHandler({ document, expectedView: view,
+    expectedController: controller, routeMessage: route });
+  const registration = objc.register({
+    add: controller.addScriptMessageHandler(handler, "zapp"),
+    remove: controller.removeScriptMessageHandlerForName("zapp"),
+  });
+  const window = new MacOSWindow(frame, WebKit.NSWindowStyleMaskTitled
+    | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable
+    | WebKit.NSWindowStyleMaskMiniaturizable);
+  window.title = move title;
+  window.contentView = view;
+  const navigationController = new RelatedNavigation({ view, address, document, failed });
+  const uiController = new RelatedUI({ view, window });
+  const windowController = new RelatedWindowDelegate({ document, closed });
+  const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);
+  const ui = objc.adapt<WebKit.WKUIDelegate>(uiController);
+  const delegate = objc.adapt<WebKit.NSWindowDelegate>(windowController);
+  view.navigationDelegate = navigation;
+  view.UIDelegate = ui;
+  window.delegate = delegate;
+  // The creation coordinator retains this graph before exposing the WebView.
+  // Presentation waits for the acknowledged child activation.
+  return new MacOSRelatedWindowRuntime({ window, webView: view, controller,
+    configuration, document, navigation, ui, delegate, registration });
+}

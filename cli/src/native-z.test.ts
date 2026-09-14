@@ -559,6 +559,9 @@ describe("Z native host inputs", () => {
       "window-runtime.zs",
       "window-registry.zs",
       "document-transport.zs",
+      "navigation-policy.zs",
+      "related-window-creations.zs",
+      "related-window-native.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -591,7 +594,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(21);
+    expect(macOSModules).toHaveLength(24);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSModules[1]).toContain("readonly windows: MacOSWindowRegistry on thread.main");
     expect(macOSModules[1]).not.toContain("function createWindow(");

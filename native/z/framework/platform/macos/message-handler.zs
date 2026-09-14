@@ -3,7 +3,7 @@ import console from "std/console";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { routeDocumentMessage, DesktopRouteMessageOperation } from "./document-transport.zs";
 import { thread } from "std/thread";
-import { hasConfiguredFrontendOrigin } from "./navigation.zs";
+import { hasConfiguredFrontendOrigin } from "./navigation-policy.zs";
 
 internal readonly class DesktopMessageHandler on thread.main
   implements WebKit.WKScriptMessageHandler {

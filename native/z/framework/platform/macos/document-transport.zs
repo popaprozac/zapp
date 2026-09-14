@@ -32,7 +32,14 @@ function confirmDocumentShell(
     // its realm/token/disposal again; native acceptance still rejects retirement
     // even if this activation was queued before JS disposal could run.
     const activation = `(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._activateDocument==='function'&&b._activateDocument(r.realm,r.token)})()`;
-    webView.evaluateJavaScript(move activation, completionHandler: move (result, failure): void => {});
+    // The nested callback owns its snapshots independently of this callback's
+    // environment; native completion lifetime must not borrow outer storage.
+    const activationToken = copy token;
+    const activationRealm = copy realm;
+    webView.evaluateJavaScript(move activation, completionHandler: move (result, failure): void => {
+      if (failure != null || !(result instanceof WebKit.NSNumber) || !result.boolValue) return;
+      document.observeActivation(in activationToken, in activationRealm);
+    });
   });
 }
 
