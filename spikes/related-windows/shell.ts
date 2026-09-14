@@ -1,5 +1,5 @@
 // Real WebKit readiness against Vite and the production embedded-asset handler.
-// No public factory is exposed by this fixture.
+// --factory exercises the exported API; other modes retain private phase probes.
 import { join, resolve } from "node:path";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { RELATED_DOCUMENT_SHELL_PATH } from "../../bootstrap/related-document";
@@ -11,9 +11,10 @@ if (process.platform !== "darwin") throw new Error("The related-shell probe requ
 const root = resolve(import.meta.dir, "../..");
 const zRoot = resolve(root, "../z-lang");
 const retirement = process.argv.includes("--retirement");
-const authority = process.argv.includes("--authority");
+const factory = process.argv.includes("--factory");
+const authority = process.argv.includes("--authority") || factory;
 const production = process.argv.includes("--production") || retirement || authority;
-const artifacts = join(import.meta.dir, ".artifacts", authority ? "authority" : retirement ? "retirement" : production ? "production" : "shell");
+const artifacts = join(import.meta.dir, ".artifacts", factory ? "factory" : authority ? "authority" : retirement ? "retirement" : production ? "production" : "shell");
 // All rewritten/generated compiler inputs stay in the ignored probe workspace.
 await rm(artifacts, { recursive: true, force: true });
 const workspace = join(artifacts, "native", "z");
@@ -25,7 +26,7 @@ await cp(join(root, "native/z/tests", authority ? "related-authority-native-smok
 const assets = join(artifacts, "frontend");
 await mkdir(assets, { recursive: true });
 if (production) {
-  const owner = await Bun.build({ entrypoints: [join(import.meta.dir, authority ? "authority-owner.ts" : "production-owner.ts")],
+  const owner = await Bun.build({ entrypoints: [join(import.meta.dir, factory ? "factory-owner.ts" : authority ? "authority-owner.ts" : "production-owner.ts")],
     target: "browser", format: "iife", minify: true });
   if (!owner.success) throw new Error(owner.logs.map(log => log.message).join("\n"));
   await Bun.write(join(assets, "owner.js"), await owner.outputs[0].text());
@@ -83,7 +84,7 @@ try {
         "-framework", "CoreFoundation", "-framework", "QuartzCore", "-lcompression", source, "-o", binary], { cwd: root, timeoutMs: 30_000 });
       if (compile.status !== 0 || compile.timedOut) throw new Error(JSON.stringify({ frontend, compile }));
       for (const mode of ["vite", "packaged"]) {
-        for (const scenario of authority
+        for (const scenario of factory ? ["factory-ready", "factory-rollback", "factory-invalid", "factory-veto", "factory-denied"] : authority
           ? ["subframe", "denied", "nested-child-close", "nested-owner-close"]
           : retirement
           ? ["owner-replace", "owner-terminate", "child-replace", "child-terminate", "child-navigation"]
@@ -95,7 +96,9 @@ try {
             ? "blocked native bridge message from a WebView subframe\n" : "";
           const pass = outcome.status === 0 && !outcome.timedOut && outcome.stderr === expectedStderr
             && outcome.stdout === (authority
-              ? `related authority WebKit: pass=true completed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} closed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} vetoes=${scenario.startsWith("nested-") ? 1 : 0}\n`
+              ? factory
+                ? `related authority WebKit: pass=true completed=${scenario === "factory-ready" ? 2 : scenario === "factory-veto" ? 1 : 0} closed=${scenario === "factory-ready" ? 2 : scenario === "factory-denied" ? 0 : 1} vetoes=${scenario === "factory-veto" ? 1 : 0}\n`
+                : `related authority WebKit: pass=true completed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} closed=${scenario === "denied" ? 0 : scenario === "subframe" ? 1 : 3} vetoes=${scenario.startsWith("nested-") ? 1 : 0}\n`
               : production
               ? scenario === "stopped"
                 ? "related production WebKit: pass=true completed=0 failed=2 echoes=0 closed=0 vetoed=0\n"

@@ -13,7 +13,14 @@ export interface RelatedWindowInvalidatedEvent {
   readonly reason: string;
 }
 
-/** Approved contract; public related-window creation is not available yet. */
+/** A minimal same-origin document owned by the calling document. */
+export interface RelatedWindowCreateOptions {
+  title?: string;
+  width?: number;
+  height?: number;
+}
+
+/** One original document and its native controls; never retargeted. */
 export interface RelatedWindowHandle extends WindowHandle {
   /** The original document. Never retargeted to a replacement page. */
   readonly document: Document;

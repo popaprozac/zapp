@@ -28,9 +28,12 @@ class NativeCreation on thread.main {
   readonly title: String;
   readonly width: u32;
   readonly height: u32;
+  readonly deadline: u64;
   timer: WebKit.NSTimer | null;
   runtime: Option<MacOSWindowRuntime>;
   completed: boolean;
+  deferPublication: boolean;
+  published: boolean;
   retiring: boolean;
 
   function stopTimer(inout this): void {
@@ -156,7 +159,9 @@ internal class MacOSRelatedWindows on thread.main {
         failed(message) => reply(RelatedCreationResult.failed(move message));
       }
     };
-    const reservation = match (this.creations.beginWithReply(in identity, nativeId, now(), now() + 10000, completion)) {
+    const started = now();
+    const deadline = started + 10000;
+    const reservation = match (this.creations.beginWithReply(in identity, nativeId, started, deadline, completion)) {
       some(value) => value; none => return Option.none;
     };
     const logical = `/.zapp/related.html?creation=${reservation.child.token}`;
@@ -166,7 +171,8 @@ internal class MacOSRelatedWindows on thread.main {
     if (absolute == null) { this.creations.fail(in reservation); return Option.none; }
     const address: String = absolute;
     const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, logicalOwner, address,
-      title, width, height, timer: null, runtime: Option<MacOSWindowRuntime>.none, completed: false, retiring: false });
+      title, width, height, deadline, timer: null, runtime: Option<MacOSWindowRuntime>.none,
+      completed: false, deferPublication: false, published: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
       timer.invalidate();
@@ -194,6 +200,44 @@ internal class MacOSRelatedWindows on thread.main {
 
   function address(in reservation: RelatedWindowReservation): Option<String> {
     return match (this.lookup(in reservation)) { some(record) => Option.some(copy record.address); none => Option.none; };
+  }
+
+  function deferPublication(inout this, in reservation: RelatedWindowReservation): void {
+    match (this.lookup(in reservation)) {
+      some(record) => { if (!record.completed) record.deferPublication = true; }
+      none => {}
+    }
+  }
+
+  // Renderer correlation is only accepted within its authenticated owner.
+  // Keep the token a decimal String across JS; u64 identities are not Numbers.
+  function abortPrepared(inout this, in owner: RelatedDocumentIdentity,
+    nativeId: i32, in token: String): void {
+    const found = this.records.get(nativeId);
+    const reservation = match (in found) {
+      some(record) => { if (record.published) return; select copy record.reservation; }
+      none => return;
+    };
+    if (reservation.owner.windowId != owner.windowId || reservation.owner.token != owner.token
+      || `${reservation.child.token}` != token) return;
+    this.fail(in reservation);
+  }
+
+  function publishPrepared(inout this, in owner: RelatedDocumentIdentity,
+    nativeId: i32, in token: String): boolean {
+    const found = this.records.get(nativeId);
+    const record: NativeCreation = match (in found) { some(value) => value; none => return false; };
+    const reservation = record.reservation;
+    if (!record.completed || !record.deferPublication
+      || reservation.owner.windowId != owner.windowId || reservation.owner.token != owner.token
+      || `${reservation.child.token}` != token || !this.documents.isReady(in reservation.child)
+      || !this.documents.isReady(in owner)) return false;
+    if (record.published) return true;
+    if (now() >= record.deadline) { this.fail(in reservation); return false; }
+    record.published = true;
+    record.stopTimer();
+    match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => return false; }
+    return true;
   }
 
   private function candidate(in view: WebKit.WKWebView, in action: WebKit.WKNavigationAction): Option<NativeCreation> {
@@ -261,12 +305,15 @@ internal class MacOSRelatedWindows on thread.main {
   private function complete(inout this, in reservation: RelatedWindowReservation): void {
     const record = match (this.lookup(in reservation)) { some(value) => value; none => return; };
     if (record.completed) return;
-    record.stopTimer();
+    if (!record.deferPublication) record.stopTimer();
     if (!this.creations.complete(in reservation, now())) { this.fail(in reservation); return; }
     // The reply can synchronously close the child/owner. Never present it again
     // after that reentrancy, even though this stack retains the former record.
     if (!this.documents.isReady(in reservation.child)) return;
-    match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => {} }
+    if (!record.deferPublication) {
+      record.published = true;
+      match (in record.runtime) { some(runtime) => runtime.window.makeKeyAndOrderFront(null); none => {} }
+    }
   }
 
   private function didComplete(inout this, in identity: RelatedDocumentIdentity): boolean {
@@ -282,7 +329,13 @@ internal class MacOSRelatedWindows on thread.main {
         const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height,
           url: copy record.address, capabilities: move capabilities });
         match (windows.adoptRelatedNative(record.logicalOwner, copy runtime.id, move options)) {
-          some(_) => { record.completed = true; return true; }
+          some(_) => {
+            record.completed = true;
+            // Legacy native callers publish via their completion callback;
+            // preserve their reentrant close/retention semantics as well.
+            record.published = !record.deferPublication;
+            return true;
+          }
           none => return false;
         }
       }
@@ -314,7 +367,7 @@ internal class MacOSRelatedWindows on thread.main {
     // As with ordinary windows, retain the completed AppKit graph until the
     // application run loop unwinds. Failed unpublished allocations are released
     // before their failure reply instead of accumulating in this retirement list.
-    if (record.completed) {
+    if (record.published) {
       match (in record.runtime) {
         some(runtime) => { const retained: MacOSWindowRuntime = runtime; this.retired.push(retained); }
         none => {}
@@ -324,8 +377,10 @@ internal class MacOSRelatedWindows on thread.main {
     if (record.completed) {
       const id = `related-${reservation.child.windowId}`;
       match (attempt this.windows.upgrade()) { success(windows) => windows.closedNative(in id); failure(_) => {} }
-      deliverRelatedDocumentInvalidated(record.ownerView, record.owner, in reservation.owner, in reservation.child);
     }
+    // Unpublished creation failures also retire an observing factory. Cleanup
+    // has finished before this notice, exactly as for completed children.
+    deliverRelatedDocumentInvalidated(record.ownerView, record.owner, in reservation.owner, in reservation.child);
   }
 
   function fail(inout this, in reservation: RelatedWindowReservation): void {

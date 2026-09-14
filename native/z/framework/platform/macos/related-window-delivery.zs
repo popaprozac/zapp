@@ -12,6 +12,19 @@ readonly struct RelatedInvalidationEnvelope {
   reason: String;
 }
 
+internal function deliverRelatedDocumentCreated(
+  in webView: WebKit.WKWebView, owner: BridgeDocument,
+  in ownerIdentity: RelatedDocumentIdentity, in child: RelatedDocumentIdentity
+): void on thread.main {
+  if (!owner.isCurrent(in ownerIdentity)) return;
+  const event = RelatedInvalidationEnvelope({ ownerToken: `${ownerIdentity.token}`,
+    windowId: `related-${child.windowId}`, documentToken: `${child.token}`, reason: "" });
+  const encoded = json.encode(in event);
+  const source = javascriptJSON(in encoded);
+  const script = `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._onRelatedDocumentCreated==='function'&&b._onRelatedDocumentCreated(e.ownerToken,e.windowId,e.documentToken)})()`;
+  webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});
+}
+
 // Committed native retirement precedes this best-effort notification. Neither
 // teardown nor cancellation waits for evaluation/JS listeners. Both checks
 // matter: evaluation can land in a replacement realm after native submission.

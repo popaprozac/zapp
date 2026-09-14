@@ -311,18 +311,20 @@ export async function showWindowContextMenu(
   windowId: string,
   items: readonly MenuItem[],
   options: { readonly x: number; readonly y: number },
+  bound?: { readonly bridge: ReturnType<typeof getBridge>; assertActive(): void },
 ): Promise<void> {
+  bound?.assertActive();
   ensurePermission("menu");
-  if ((globalThis as any)[Symbol.for("zapp.windowId")] !== windowId) {
+  if (!bound && (globalThis as any)[Symbol.for("zapp.windowId")] !== windowId) {
     throw new MenuError({ message: "A frontend context menu may only target its originating window." });
   }
   if (!options || !Number.isFinite(options.x) || !Number.isFinite(options.y)
     || options.x < 0 || options.y < 0) {
     throw new MenuError({ message: "Context menu coordinates must be finite, nonnegative viewport coordinates." });
   }
-  wireEvents();
-  const bridge = getBridge();
-  const owner: MenuOwner = { token: ownerToken(), commandsById: new Map() };
+  if (!bound) wireEvents();
+  const bridge = bound?.bridge ?? getBridge();
+  const owner: MenuOwner = { token: `${windowId}:${globalThis.crypto.randomUUID()}`, commandsById: new Map() };
   const wireItems = items.map((item) => serializeItem(item, owner));
   const validate = (entries: WireMenuItem[]): void => {
     for (const item of entries) {
@@ -333,14 +335,15 @@ export async function showWindowContextMenu(
     }
   };
   validate(wireItems);
-  presentations.add(owner.token, owner.commandsById);
+  if (!bound) presentations.add(owner.token, owner.commandsById);
   let selected: Command | undefined;
   try {
     // A user's menu may remain open indefinitely; no arbitrary callback expiry.
     const result = await bridge.invoke("__zapp:menu:popup", {
       windowId, ownerToken: owner.token, items: wireItems, x: options.x, y: options.y,
     }, { timeout: 0 });
-    if (wiredBridge !== bridge || getBridge() !== bridge) return;
+    if (bound) bound.assertActive();
+    else if (wiredBridge !== bridge || getBridge() !== bridge) return;
     if (!isRecord(result) || typeof result.commandId !== "string") {
       throw new MenuError({ message: "Native context menu returned an invalid selection." });
     }
@@ -349,7 +352,7 @@ export async function showWindowContextMenu(
       if (!selected) throw new MenuError({ message: "Native context menu returned an unknown command." });
     }
   } finally {
-    presentations.remove(owner.token);
+    if (!bound) presentations.remove(owner.token);
   }
   if (selected) {
     try {

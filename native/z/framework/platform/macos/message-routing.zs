@@ -53,6 +53,7 @@ import {
 import { showMacOSFrontendContextMenu } from "./context-menu-backend.zs";
 import { WindowContextMenuOperation } from "../../window.zs";
 import { currentMacOSApplication } from "./application-runtime.zs";
+import { routeRelatedWindowBridgeMessage } from "./related-window-bridge.zs";
 import { navigationProfileAllowsExternalURL } from "./navigation-policy.zs";
 import { requestMacOSHostQuit } from "./application-host.zs";
 import { ApplicationQuitOperation } from "../../application-events.zs";
@@ -244,6 +245,11 @@ function selectWindowMessageRoute(
 ): WindowMessageRoute on thread.main {
   const current = currentMacOSApplication();
   const permissions = current.permissions;
+  match (routeRelatedWindowBridgeMessage(in message, in permissions, in request.document, current.windows)) {
+    response(value) => return WindowMessageRoute.framework(value);
+    handled => return WindowMessageRoute.handled;
+    unhandled => {}
+  }
   const selected = current.windows.documents.capabilitiesFor(in request.document);
   const workers = current.applicationWorkers;
   const menu = current.menu;

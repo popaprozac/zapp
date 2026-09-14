@@ -233,6 +233,15 @@ bun cli/src/test-notes-launch-macos.ts dev
 
 ### Menus and windows
 
+**Open related inspector** creates a minimal second native document without
+loading another frontend entrypoint. Open two inspectors and edit the title in
+either one or in Z Notes: the UI shares the same owner state and ordinary
+callbacks. The child button's generated service call remains owner code; each
+child also receives its own native bridge, used directly by its handle controls.
+Closing an inspector disposes its subscription/UI references without closing its
+siblings. The demo styles its child explicitly; automatic CSS/theme/HMR sharing
+is separate future work. See the [related-window guide](../../docs/related-windows.md).
+
 Z Notes installs an application menu from both sides of Zapp's command model.
 Before `run()`, native Z supplies the initial standard roles plus a
 project-owned **Notes → Log Note Count** command that calls the registered Z

@@ -35,6 +35,29 @@ function realm() {
   return { bridge, posts, nonce, timers, context, document, domListeners };
 }
 
+test("creation notices are generation-bound one-shot signals, not terminal retirement", () => {
+  const page = realm();
+  page.bridge._bindDocument(page.nonce, "90");
+  let ready = 0, retired = 0;
+  page.bridge._observeRelatedDocument("related-2", "91", () => retired++, () => ready++);
+  expect(page.bridge._onRelatedDocumentCreated("80", "related-2", "91")).toBe(false);
+  expect(page.bridge._onRelatedDocumentCreated("90", "related-2", "92")).toBe(false);
+  expect(page.bridge._onRelatedDocumentCreated("90", "related-2", "91")).toBe(true);
+  expect(page.bridge._onRelatedDocumentCreated("90", "related-2", "91")).toBe(false);
+  expect([ready, retired]).toEqual([1, 0]);
+  expect(page.bridge._onRelatedDocumentInvalidated("90", "related-2", "91", "closed")).toBe(true);
+  expect([ready, retired]).toEqual([1, 1]);
+  expect(page.bridge._onRelatedDocumentCreated("90", "related-2", "91")).toBe(false);
+});
+
+test("failure before creation prevents a late ready signal", () => {
+  const page = realm();
+  page.bridge._bindDocument(page.nonce, "100");
+  page.bridge._observeRelatedDocument("related-2", "101", () => {}, () => { throw new Error("stale ready"); });
+  page.bridge._onRelatedDocumentInvalidated("100", "related-2", "101", "failed");
+  expect(page.bridge._onRelatedDocumentCreated("100", "related-2", "101")).toBe(false);
+});
+
 test("related document calls wait for DOM presence and native activation", async () => {
   const page = realm();
   const result = page.bridge.invoke("notes.list", {}, { timeout: 0 });

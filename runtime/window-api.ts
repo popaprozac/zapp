@@ -5,7 +5,9 @@
  * import the pre-rewrite window implementation or expose its broader surface.
  */
 
-import { getBridge } from "./bridge";
+import { getBridge, type ZappBridge } from "./bridge";
+import { createRelatedWindowBinding } from "./related-window";
+import { RelatedWindowEvent, type RelatedWindowHandle, type RelatedWindowCreateOptions } from "./related-window-contract";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
 import { showWindowContextMenu, type MenuItem } from "./menu-api";
@@ -23,7 +25,7 @@ export type {
   RelatedWindowInvalidatedErrorPayload,
 } from "./window-errors";
 export { RelatedWindowEvent } from "./related-window-contract";
-export type { RelatedWindowHandle, RelatedWindowInvalidatedEvent } from "./related-window-contract";
+export type { RelatedWindowHandle, RelatedWindowInvalidatedEvent, RelatedWindowCreateOptions } from "./related-window-contract";
 
 /** Frontend-safe options accepted by the Z-owned window factory. */
 export interface WindowCreateOptions {
@@ -209,8 +211,8 @@ function requiredWindowId(value: unknown, operation: "create" | "current"): stri
   });
 }
 
-function windowAction(action: string, args: UnknownRecord): void {
-  const bridge = getBridge() as ReturnType<typeof getBridge> & {
+function windowAction(action: string, args: UnknownRecord, target = getBridge()): void {
+  const bridge = target as ReturnType<typeof getBridge> & {
     post?: (message: string) => void;
   };
   const message = JSON.stringify({ t: 4, m: action, a: args });
@@ -233,10 +235,19 @@ function subscription(cleanup: () => void): WindowEventSubscription {
 }
 
 class FocusedWindowHandle implements WindowHandle {
-  constructor(readonly id: string) {}
+  constructor(readonly id: string, private readonly bound?: { bridge: ZappBridge; assertActive(): void }) {}
+
+  private bridge(): ZappBridge {
+    this.bound?.assertActive();
+    return this.bound?.bridge ?? getBridge();
+  }
+
+  private action(name: string, args: UnknownRecord = {}): void {
+    windowAction(name, { windowId: this.id, ...args }, this.bridge());
+  }
 
   showContextMenu(items: readonly MenuItem[], options: ContextMenuOptions): Promise<void> {
-    return showWindowContextMenu(this.id, items, options);
+    return showWindowContextMenu(this.id, items, options, this.bound);
   }
 
   subscribe(
@@ -280,7 +291,7 @@ class FocusedWindowHandle implements WindowHandle {
     handler: (event: WindowNavigationRequestedEvent) => void,
   ): WindowEventSubscription;
   subscribe(event: WindowEvent, handler: FocusedEventHandler): WindowEventSubscription {
-    const cleanup = getBridge().on(WINDOW_EVENT_NAMES[event], (value) => {
+    const cleanup = this.bridge().on(WINDOW_EVENT_NAMES[event], (value) => {
       if (!isRecord(value) || value.windowId !== this.id) return;
 
       if (event === WindowEvent.RESIZE) {
@@ -326,19 +337,19 @@ class FocusedWindowHandle implements WindowHandle {
     return subscription(cleanup);
   }
 
-  show(): void { windowAction("show", { windowId: this.id }); }
-  focus(): void { windowAction("focus", { windowId: this.id }); }
-  minimize(): void { windowAction("minimize", { windowId: this.id }); }
-  unminimize(): void { windowAction("unminimize", { windowId: this.id }); }
-  maximize(): void { windowAction("maximize", { windowId: this.id }); }
-  unmaximize(): void { windowAction("unmaximize", { windowId: this.id }); }
+  show(): void { this.action("show"); }
+  focus(): void { this.action("focus"); }
+  minimize(): void { this.action("minimize"); }
+  unminimize(): void { this.action("unminimize"); }
+  maximize(): void { this.action("maximize"); }
+  unmaximize(): void { this.action("unmaximize"); }
   setFullscreen(value: boolean): void {
-    windowAction("setFullscreen", { windowId: this.id, fullscreen: value });
+    this.action("setFullscreen", { fullscreen: value });
   }
-  hide(): void { windowAction("hide", { windowId: this.id }); }
-  close(): void { windowAction("close", { windowId: this.id }); }
+  hide(): void { this.action("hide"); }
+  close(): void { this.action("close"); }
   setTitle(title: string): void {
-    windowAction("setTitle", { windowId: this.id, title });
+    this.action("setTitle", { title });
   }
 }
 
@@ -360,4 +371,19 @@ export async function createWindow(
     : await getBridge().invoke("__window:create", options as UnknownRecord);
   const windowId = isRecord(result) ? result.windowId : undefined;
   return new FocusedWindowHandle(requiredWindowId(windowId, "create"));
+}
+
+/** Create a minimal same-origin document with its own native bridge. */
+export async function createRelatedWindow(options: RelatedWindowCreateOptions = {}): Promise<RelatedWindowHandle> {
+  const binding = await createRelatedWindowBinding(options);
+  const handle = new FocusedWindowHandle(binding.id, {
+    bridge: binding.bridge, assertActive: () => binding.lifetime.assertActive(),
+  });
+  const subscribe = handle.subscribe.bind(handle);
+  Object.defineProperty(handle, "document", { value: binding.document, enumerable: true });
+  Object.defineProperty(handle, "subscribe", { value: (event: WindowEvent | typeof RelatedWindowEvent.INVALIDATED, handler: any) =>
+    event === RelatedWindowEvent.INVALIDATED ? binding.lifetime.subscribe(handler) : subscribe(event as any, handler) });
+  // Native retirement can occur between the binding's and public continuation.
+  binding.lifetime.assertActive();
+  return handle as unknown as RelatedWindowHandle;
 }

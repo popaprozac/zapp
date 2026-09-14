@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   RelatedWindowEvent,
+  createRelatedWindow,
   RelatedWindowInvalidatedError,
   WindowEvent,
   type RelatedWindowHandle,
@@ -10,6 +11,12 @@ import {
 
 test("related handle preserves existing controls and typed subscription overloads", () => {
   const compile = (related: RelatedWindowHandle, ordinary: WindowHandle) => {
+    const created: Promise<RelatedWindowHandle> = createRelatedWindow({ title: "Inspector", width: 400, height: 300 });
+    void created;
+    // @ts-expect-error A related shell is not an independent frontend entrypoint.
+    void createRelatedWindow({ url: "/other.html" });
+    // @ts-expect-error Injection policy is not a first-tier option.
+    void createRelatedWindow({ inject: ["base"] });
     const base: WindowHandle = related;
     base.focus();
     related.close();

@@ -2,14 +2,15 @@
 
 Status: **proposals for deliberation; no public API or styling default approved**,
 2026-09-13. Captured from the side-chat handoff. This work does not replace the
-current [close/lifetime integration sequence](related-windows.md).
+shipped [factory and close/lifetime contract](related-windows.md).
 
 ## Current behavior
 
-The intended related-window factory provides a minimal same-origin document,
+The related-window factory provides a minimal same-origin document,
 its own native bridge, and a document handle for ordinary DOM rendering or a
 framework portal. It does not load another frontend application entrypoint or
-accept an arbitrary child URL. The public factory remains unexported.
+accept an arbitrary child URL. The [public factory](../related-windows.md) is
+exported from `@zappdev/runtime/window` on macOS.
 
 `createMacOSRelatedWindowRuntime` currently passes an empty profile selection to
 `installWebViewScripts`. The framework bridge and document/window identity

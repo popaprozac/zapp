@@ -14,6 +14,7 @@ reference. Engineering plans and historical material are separated below.
 | [`application-activation.md`](application-activation.md) | Reopen/custom URL events, single-instance forwarding, startup buffering, and shutdown guarantees |
 | [`trays.md`](trays.md) | Native status-menu items, shared commands, and background application lifetime |
 | [`windows.md`](windows.md) | Z and TypeScript window visibility, focus, minimization, and native state events |
+| [`related-windows.md`](related-windows.md) | Related inspectors, shared frontend state, direct child bridges, and terminal cleanup (macOS) |
 | [`api-reference.md`](api-reference.md#application-lifecycle) | Current frontend application lifecycle; later sections contain explicitly labeled legacy APIs |
 
 Existing document filenames are retained so links remain stable. Future designs
@@ -32,7 +33,7 @@ for using its public APIs.
 | [`plans/application-startup-integration.md`](plans/application-startup-integration.md) | Startup integration checkpoint, upstream compiler gates, and resume sequence |
 | [`plans/window-resize-polish.md`](plans/window-resize-polish.md) | Experimental native resize measurements, visual A/B probe, and pending Z interop design |
 | [`experiments/related-windows.md`](experiments/related-windows.md) | Related-window DOM/portal feasibility, three-way benchmarks, and security/lifecycle gates (research only) |
-| [`plans/related-windows.md`](plans/related-windows.md) | Approved related-document API, tested runtime foundation, and remaining native integration gates (not available yet) |
+| [`plans/related-windows.md`](plans/related-windows.md) | Public related-document factory, implementation evidence, and remaining hardening/styling gates |
 | [`z-host-sdks.md`](z-host-sdks.md) | Future `libzapp` host SDK architecture, including Bun FFI and WebView IPC |
 
 ## Historical and contributor references

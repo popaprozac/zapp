@@ -1,6 +1,6 @@
 # Related windows
 
-Status: **approved contract, implementation in progress**, 2026-09-14.
+Status: **first public macOS factory implemented**, 2026-09-14.
 
 The runtime now provides the event/error/type declarations, a tested internal
 document-lifetime helper, and terminal disposal of the production WebView bridge.
@@ -26,8 +26,10 @@ retire the original child rather than retargeting its lifetime.
 The creation-authority gate now also covers actual subframes and nested related
 owners through the production registry/delegates, with inherited permissions,
 grandchild close vetoes, branch retirement, and full-family teardown verified.
-**`createRelatedWindow` is not implemented or exported yet.** The example below
-describes the intended API, not a runnable feature today.
+`createRelatedWindow` is exported from `@zappdev/runtime/window`, with a Z Notes
+inspector demo. See the [developer guide](../related-windows.md) for current
+options, lifetime rules, and styling limitations. Historical checkpoints below
+describe what was available at each stage, not additional current restrictions.
 The [platform research](../experiments/related-windows.md) records the evidence
 and remaining native integration gates separately.
 
@@ -76,7 +78,7 @@ terminal invalidation subscription. `ChildWindow` remains available vocabulary
 for future native parenting features; related documents do not imply all of
 those semantics.
 
-Intended usage after integration:
+Current usage:
 
 ```ts
 import { createRelatedWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
@@ -111,7 +113,7 @@ installs the framework bridge and document/window identity scripts. It does not
 automatically inherit owner profiles or synchronize application CSS. Explicit
 child injection and natural component styling are a separate
 [unapproved design track](related-window-styling.md), not part of the implemented
-behavior or an approved factory option. Close/lifetime integration remains next.
+behavior or an approved factory option.
 
 ## What creation promises
 
@@ -223,7 +225,7 @@ validation and physical window teardown remain outside this helper.
 - [x] Finish the scoped creation-authority audit (including subframes and nested
       owners) before public factory integration; actual renderer-crash/recovery
       stress and broader platform coverage remain separate hardening work.
-- [ ] Expose the public factory and add a Z Notes demonstration.
+- [x] Expose the public factory and add a Z Notes demonstration.
 - [ ] Re-run representative application benchmarks and other-platform probes.
 
 Focused validation from the repository root:
@@ -774,3 +776,53 @@ renderer-crash/recovery stress and Windows/Linux coverage remain separate work.
 Next is the approved public factory and Z Notes demonstration, preserving
 prepare → observe → open ordering and failure cleanup. No child CSS/injection
 defaults or additional public options were introduced.
+
+## Public factory and Z Notes — 2026-09-14
+
+`createRelatedWindow({ title, width, height })` now exports the approved handle
+from `@zappdev/runtime/window`. It uses native preparation, installs its terminal
+observer before `window.open`, waits for native activation, validates the original
+document/bridge, and acknowledges publication. The native deadline remains armed
+until publication; the final gate checks monotonic time as well as the timer.
+
+Unpublished failures close their native resources before rollback acknowledgement.
+Published handles cannot use the private abort path to bypass native close vetoes.
+The observer's activation notification is one-shot and generation-bound; its
+separate terminal notification remains installed for the handle's lifetime.
+No polling or second per-service request registry was added. Existing controls,
+subscriptions, and context menus bind directly to the child's bridge.
+
+Z Notes now has **Open related inspector** and **Close inspectors** buttons. The
+small demo shares title editing and an owner-defined service callback across
+documents without loading another frontend entrypoint. Styling is explicit in
+the demo: automatic stylesheet/theme/HMR synchronization and child injection
+profiles remain unapproved proposals, not hidden defaults.
+
+The factory harness exercises success with sibling isolation and shared object/
+callback identity, denied capabilities, blocked `window.open`, an invalid shell
+after native allocation/activation, late invalidation subscribers, and attempted
+abort of a published window using its exact native token while a close veto is
+active. Both packaged and dev Z Notes launch commands are tested independently.
+
+Verification: [40 public-factory WebKit executions](../../spikes/related-windows/results/2026-09-14/public-factory.json)
+and the [32-case existing creation/close regression](../../spikes/related-windows/results/2026-09-14/public-factory-creation-regression.json)
+pass across native/Stage 0, `-O0`/`-O2`, Vite/packaged delivery, strict warnings,
+and UBSan. The [four registry](../../spikes/related-windows/results/2026-09-14/public-factory-registry.json)
+and [four reservation/rollback](../../spikes/related-windows/results/2026-09-14/public-factory-reservations.json)
+headless cases also pass, along with 100 focused runtime/CLI tests and both
+TypeScript checks. `bun cli/src/test-notes-launch-macos.ts` passes packaged and
+dev launches with secondary-launch forwarding, worker/WebView verification,
+ordered shutdown, and Vite port 5173 released. The actual factory matrix runs
+with `bun run spikes/related-windows/shell.ts --factory`.
+
+This also exposed and fixed Z's parenthesized-conditional/closure lookahead
+ambiguity (`e205edd5`); the framework test keeps its original valid expression.
+
+Before expanding styling, keep repeated open/close memory pressure in the next
+checkpoint: the existing native host conservatively retains **published** retired
+AppKit runtime graphs until the application loop unwinds. Routing/cancellation
+is already terminal, and unpublished failure graphs are released, but this is
+not yet a claim of constant native memory under long-lived window churn. Test
+whether published graphs can be safely released sooner rather than concealing
+that lifetime cost in a startup benchmark. Broader renderer-crash/recovery and
+Windows/Linux coverage remain separate hardening work.

@@ -18,6 +18,7 @@ test("focused window package exposes its intended public values", () => {
     "RelatedWindowInvalidatedError",
     "WindowError",
     "WindowEvent",
+    "createRelatedWindow",
     "createWindow",
     "currentWindow",
   ]);

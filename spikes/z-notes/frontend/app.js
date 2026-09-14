@@ -20,6 +20,9 @@ import {
   notes,
 } from "zapp:services";
 import { noteIndexer } from "zapp:workers";
+import { installRelatedWindowDemo } from "./related-window-demo.js";
+
+installRelatedWindowDemo();
 
 const button = document.querySelector("#ping");
 const cancelButton = document.querySelector("#cancel");

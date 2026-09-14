@@ -12,6 +12,7 @@ import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationReply } from "../../related-window-creations.zs";
 import { MacOSRelatedWindows } from "./related-window-creations.zs";
+import { deliverRelatedDocumentCreated } from "./related-window-delivery.zs";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowManager, WindowOptions } from "../../window.zs";
@@ -111,7 +112,6 @@ internal class MacOSWindowRegistry on thread.main {
     this.nativeWindows.set(nativeId, runtime);
   }
 
-  // Native-only until the public factory's remaining lifecycle gates are met.
   // Callers supply the authenticated document, never a renderer-chosen owner.
   function prepareRelatedWindow(inout this, in owner: RelatedDocumentIdentity,
     title: String, width: u32, height: u32, reply: RelatedCreationReply
@@ -127,6 +127,16 @@ internal class MacOSWindowRegistry on thread.main {
     this.nextNativeWindowId = nativeId + 1;
     const logicalOwner = match (this.windowManager.get(in runtime.id)) { some(value) => value; none => return Option.none; };
     return this.related.prepare(runtime.document, runtime.webView, logicalOwner, in owner, nativeId, move title, width, height, reply);
+  }
+
+  function deliverRelatedCreation(in owner: RelatedDocumentIdentity, in child: RelatedDocumentIdentity): void {
+    if (!this.documents.isReady(in owner) || !this.documents.isReady(in child)) return;
+    const found = this.nativeWindows.get(owner.windowId);
+    const runtime: MacOSWindowRuntime = match (in found) {
+      some(value) => value;
+      none => match (this.related.runtime(in owner)) { some(value) => value; none => return; }
+    };
+    deliverRelatedDocumentCreated(runtime.webView, runtime.document, in owner, in child);
   }
 
   function nativeWindowClosed(
