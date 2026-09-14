@@ -10,6 +10,8 @@ import { createRelatedWindowBinding } from "./related-window";
 import { RelatedWindowEvent, type RelatedWindowHandle, type RelatedWindowCreateOptions } from "./related-window-contract";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
+import { checkedTitleBar, type TitleBarOptions } from "./window-titlebar";
+export type { TitleBarOptions, TitleBarStyle } from "./window-titlebar";
 import { showWindowContextMenu, type MenuItem } from "./menu-api";
 
 /** Explicit top-left viewport CSS coordinates, e.g. MouseEvent.clientX/Y. */
@@ -35,6 +37,7 @@ export interface WindowCreateOptions {
   height?: number;
   visible?: boolean;
   resizable?: boolean;
+  titleBar?: TitleBarOptions;
 }
 
 /** Native window content dimensions in platform-independent logical units. */
@@ -365,10 +368,12 @@ export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
   ensurePermission("window:create");
+  const titleBar = checkedTitleBar(options.titleBar);
+  const checked = titleBar === undefined ? { ...options } : { ...options, titleBar };
   const host = (globalThis as any).__zappBridge;
   const result = host?.createWindow
-    ? host.createWindow(options)
-    : await getBridge().invoke("__window:create", options as UnknownRecord);
+    ? host.createWindow(checked)
+    : await getBridge().invoke("__window:create", checked as UnknownRecord);
   const windowId = isRecord(result) ? result.windowId : undefined;
   return new FocusedWindowHandle(requiredWindowId(windowId, "create"));
 }

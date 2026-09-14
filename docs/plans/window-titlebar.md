@@ -1,8 +1,9 @@
 # Window titlebar customization
 
-Status: design checkpoint, 2026-09-14. No titlebar options have been added to
-the Z-owned public window API yet. This document separates approved decisions
-from the remaining implementation and interaction work.
+Status: appearance implementation, 2026-09-14. Typed titlebar creation options
+are implemented in the Z and focused TypeScript APIs and both native creation
+paths. See the [developer guide](../window-titlebar.md). Drag interactions and
+measured CSS geometry remain subsequent slices.
 
 ## Agreed configuration and independence
 
@@ -10,7 +11,7 @@ Use a nested `titleBar` configuration. Native title text visibility is an
 independent boolean, defaulting to `true` regardless of the selected style:
 
 ```ts
-// Agreed authoring shape; implementation follows.
+// Implemented for ordinary and related macOS windows.
 const window = await createWindow({
   title: "Z Notes",
   titleBar: {
@@ -29,7 +30,7 @@ const window = await createWindow({
   encoded in title visibility or confused with fully frameless windows.
 - Omitting `titleBar` should preserve today's ordinary native window.
 
-The research-backed style proposal retains `default`, `hidden`, and
+The implemented styles retain `default`, `hidden`, and
 `hiddenInset`: standard chrome; full-size content with transparent titlebar
 chrome; and that full-size treatment with an inset native control arrangement.
 Both hidden modes retain native controls. Unlike the older preset descriptions,
@@ -68,9 +69,9 @@ These frameworks do not all give `hidden` identical control-visibility semantics
 
 ## Bounded implementation sequence
 
-1. Add checked, typed titlebar creation options to the Z and focused TypeScript
-   APIs, including the related-window path. Apply native appearance before
-   showing a window. Do not add dynamic setters or arbitrary button offsets.
+1. **Implemented:** checked, typed titlebar creation options in the Z and focused TypeScript
+   APIs, including the related-window path. Native appearance is applied before
+   showing a window, without dynamic setters or arbitrary button offsets.
 2. Implement the distinct move-only and titlebar-region intents. Retain CSS
    drag/no-drag authoring, with explicit exclusion/interactive-element tests.
    Settle any changed precedence or public marker vocabulary before shipping it.
@@ -92,3 +93,27 @@ Separate follow-ups: fully frameless windows, individual control options,
 arbitrary traffic-light positioning, vibrancy/transparency, and application
 toolbars. Related-window injection and advanced stylesheet adapters remain
 separate workstreams and do not block this framework feature.
+
+## Appearance checkpoint evidence
+
+- `bun native/z/testing/window-focus.ts --titlebar`: checked defaults, invalid
+  bridge options, registry preservation, and title updates, through Stage 0 and
+  native lowering at `-O0`/`-O2` with UBSan.
+- Add `--native` for the six-case AppKit matrix. All styles retain controls,
+  visibility is independent, and creation stays hidden until ordered front.
+  This host measured a 9-point control top inset for default/hidden and 19 for
+  hiddenInset, with either title visibility. These are observations, not API
+  constants or promised cross-OS geometry.
+- Existing focus, controls, presentation, registry, events, adoption, and family
+  smokes pass in both compiler paths and optimization modes.
+- `VITE_ZAPP_STYLE_SMOKE=1 bun cli/src/test-notes-launch-macos.ts packaged`
+  and the matching `dev` command pass using real ordinary/related creation.
+  Native checks cover independent chrome, hidden publication, and hidden-title
+  updates; shared CSS, Svelte, HMR, worker shutdown, and Vite cleanup still pass.
+- 298 runtime tests, root TypeScript checks, and Svelte checks pass.
+- The probes exposed and closed two upstream Z gaps: enum equality across
+  imported spellings, and missing inferred boolean evidence for native enum
+  comparisons. No new syntax or production Objective-C shim was needed.
+
+The next checkpoint is drag-region semantics and measured frontend layout
+insets, followed by the custom Notes header and user visual review.

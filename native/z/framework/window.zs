@@ -1,5 +1,6 @@
 import { Map } from "std/collections";
 import { WindowPresentationState } from "./window-presentation.zs";
+import { TitleBarOptions } from "./window-titlebar.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -16,6 +17,7 @@ export struct WindowOptions {
   height: u32 = 640;
   visible: boolean = true;
   resizable: boolean = true;
+  titleBar: TitleBarOptions = TitleBarOptions();
   inject: Array<String> = Array<String>();
   capabilities: Array<String> = Array<String>("default");
   navigation: String = "default";

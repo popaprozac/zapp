@@ -30,6 +30,7 @@ import {
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "./related-window-creations.zs";
@@ -103,12 +104,13 @@ internal function createMacOSWindowRuntime(
   if (options.resizable) {
     style = style | WebKit.NSWindowStyleMaskResizable;
   }
-  const window = new MacOSWindow(frame, style);
+  const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in options.titleBar));
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;
   window.title = move title;
   window.contentView = webView;
+  applyMacOSTitleBar(in window, in options.titleBar, in id);
   const initialURL = resolveLogicalURL(in options.url);
   if (initialURL == null) {
     throw WindowError({

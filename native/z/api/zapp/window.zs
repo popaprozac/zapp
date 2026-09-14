@@ -28,6 +28,13 @@ import {
   WindowSize as FrameworkWindowSize,
 } from "../../framework/events.zs";
 
+import {
+  TitleBarStyle as FrameworkTitleBarStyle,
+  TitleBarOptions as FrameworkTitleBarOptions,
+} from "../../framework/window-titlebar.zs";
+
+export type TitleBarStyle = FrameworkTitleBarStyle;
+export type TitleBarOptions = FrameworkTitleBarOptions;
 export type Window = FrameworkWindow;
 export type WindowManager = FrameworkWindowManager;
 export type WindowOptions = FrameworkWindowOptions;

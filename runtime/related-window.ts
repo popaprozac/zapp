@@ -1,6 +1,7 @@
 import { getBridge, type ZappBridge } from "./bridge";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
+import { checkedTitleBar } from "./window-titlebar";
 import { bindRelatedDocumentLifetime, type RelatedDocumentLifetime } from "./related-window-lifetime";
 import type { RelatedWindowCreateOptions } from "./related-window-contract";
 import { shareRelatedWindowStyles } from "./related-window-styles";
@@ -15,8 +16,8 @@ interface Prepared { windowId: string; documentToken: string; nativeId: number; 
 /** @internal No frontend owner, profile, URL, or navigation override crosses here. */
 function checkedOptions(options: RelatedWindowCreateOptions) {
   if (!options || typeof options !== "object" || Array.isArray(options)
-    || Object.keys(options).some(key => !["title", "width", "height", "visible", "styles", "theme"].includes(key))) {
-    throw new TypeError("Related windows accept only title, width, height, visible, styles, and theme.");
+    || Object.keys(options).some(key => !["title", "width", "height", "visible", "titleBar", "styles", "theme"].includes(key))) {
+    throw new TypeError("Related windows accept only title, width, height, visible, titleBar, styles, and theme.");
   }
   if (options.title !== undefined && typeof options.title !== "string") throw new TypeError("Related window title must be a string.");
   for (const key of ["width", "height"] as const) {
@@ -27,7 +28,8 @@ function checkedOptions(options: RelatedWindowCreateOptions) {
   }
   if (options.visible !== undefined && typeof options.visible !== "boolean") throw new TypeError("Related window visible must be a boolean.");
   if (options.styles !== undefined && options.styles !== "shared" && options.styles !== "independent") throw new TypeError('Related window styles must be "shared" or "independent".');
-  return { native: { title: options.title, width: options.width, height: options.height, visible: options.visible },
+  return { native: { title: options.title, width: options.width, height: options.height, visible: options.visible,
+    ...(options.titleBar === undefined ? {} : { titleBar: checkedTitleBar(options.titleBar) }) },
     styles: options.styles ?? "shared", theme: normalizeRelatedWindowTheme(options.theme) };
 }
 

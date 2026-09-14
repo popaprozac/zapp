@@ -39,8 +39,10 @@ The calling document is the owner. Both the application's permission ceiling
 and that document's capability profile must permit `window:create`. The child
 inherits the family's authority; it cannot select a stronger profile.
 
-The supported options are `title`, `width`, `height`, `visible`, `styles`, and
-`theme`. Dimensions are positive integer logical units, defaulting to 900 × 640.
+The supported options are `title`, `width`, `height`, `visible`, `titleBar`,
+`styles`, and `theme`. Dimensions are positive integer logical units, defaulting to 900 × 640.
+Native [titlebar appearance](window-titlebar.md) is child-local and independent
+of shared application styles and title text visibility.
 The child is a minimal same-origin shell: there is no `url`, second frontend
 entrypoint, or injection-profile option. Unknown options fail before allocation.
 

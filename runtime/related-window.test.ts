@@ -90,6 +90,23 @@ test("blocked opening awaits rollback and detaches its observer before rejection
   release(); expect((await pending).code).toBe("WINDOW_ERROR");
 });
 
+test("related titlebar options are child-local, checked, and snapshotted before preparation", async () => {
+  const f = fixture(), invoke = f.owner.invoke;
+  const titleBar = { style: "hiddenInset" as const, titleVisible: false };
+  let sent: any;
+  f.owner.invoke = async (method: string, args: unknown) => {
+    if (method === "__window:prepare-related") { sent = args; titleBar.titleVisible = true; }
+    return invoke(method);
+  };
+  await createRelatedWindow({ titleBar });
+  expect(sent.titleBar).toEqual({ style: "hiddenInset", titleVisible: false });
+  f.invalidate();
+  const before = f.calls.length;
+  await expect(createRelatedWindow({ titleBar: { titleVisibile: false } as any })).rejects.toBeInstanceOf(TypeError);
+  await expect(createRelatedWindow({ titleBar: { style: "frameless" } as any })).rejects.toBeInstanceOf(TypeError);
+  expect(f.calls).toHaveLength(before);
+});
+
 test("retirement before or during publication never exposes a handle", async () => {
   for (const phase of ["open", "publish"] as const) {
     const f = fixture();

@@ -7,6 +7,8 @@ import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "./do
 import { DesktopMessageHandler } from "./message-handler.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { TitleBarOptions } from "../../window-titlebar.zs";
+import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
 import { installWebViewScripts } from "./webview-injections.zs";
 import { WindowManager } from "../../window.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
@@ -102,6 +104,7 @@ internal function createMacOSRelatedWindowRuntime(
   title: String,
   width: u32,
   height: u32,
+  titleBar: TitleBarOptions,
   route: DesktopRouteMessageOperation,
   failed: RelatedNativeFailure,
   closed: NativeWindowClosedOperation,
@@ -121,11 +124,13 @@ internal function createMacOSRelatedWindowRuntime(
     add: controller.addScriptMessageHandler(handler, "zapp"),
     remove: controller.removeScriptMessageHandlerForName("zapp"),
   });
-  const window = new MacOSWindow(frame, WebKit.NSWindowStyleMaskTitled
+  const style = WebKit.NSWindowStyleMaskTitled
     | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable
-    | WebKit.NSWindowStyleMaskMiniaturizable);
+    | WebKit.NSWindowStyleMaskMiniaturizable;
+  const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in titleBar));
   window.title = move title;
   window.contentView = view;
+  applyMacOSTitleBar(in window, in titleBar, in id);
   const navigationController = new RelatedNavigation({ view, address, document, failed, allowsCreation });
   const uiController = new RelatedUI({ view, window, createChild });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);

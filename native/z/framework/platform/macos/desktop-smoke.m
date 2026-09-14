@@ -165,8 +165,17 @@ void zapp_desktop_smoke_observe_response(
                 matched++;
                 BOOL visible = [phase isEqualToString:@"shown"] && [window.title isEqualToString:@"Public style small"];
                 expected = expected && window.visible == visible;
+                BOOL standard = [window.title isEqualToString:@"Public style wide"];
+                BOOL inset = [window.title isEqualToString:@"Public style small"] || [window.title hasPrefix:@"Public style ordinary"];
+                BOOL titleVisible = [window.title isEqualToString:@"Public style small"] || standard;
+                expected = expected && window.titlebarAppearsTransparent == !standard
+                  && !!(window.styleMask & NSWindowStyleMaskFullSizeContentView) == !standard
+                  && (window.titleVisibility == NSWindowTitleVisible) == titleVisible
+                  && (window.toolbar != nil) == inset;
+                if ([window.title hasPrefix:@"Public style ordinary"])
+                  expected = expected && [window.title isEqualToString:@"Public style ordinary updated"];
               }
-              if (matched == 3 && expected) {
+              if (matched == 4 && expected) {
                 [web_view evaluateJavaScript:[NSString stringWithFormat:@"document.body.dataset.publicStyleNative='%@'", phase] completionHandler:nil];
               }
             }

@@ -1,5 +1,6 @@
 import json from "std/json";
 import { thread } from "std/thread";
+import { FrontendTitleBarOptions, validTitleBarFields, checkedTitleBar } from "./window-titlebar-bridge.zs";
 import {
   BridgeMessage,
   BridgeMessageKind,
@@ -26,6 +27,7 @@ readonly struct FrontendWindowOptions {
   height: u32 = 640;
   visible: boolean = true;
   resizable: boolean = true;
+  titleBar: FrontendTitleBarOptions = FrontendTitleBarOptions();
 }
 
 readonly struct FrontendWindowCreated {
@@ -131,6 +133,13 @@ function createWindow(
       `INVALID_WINDOW_OPTIONS: ${error.message}`
     );
     success(options) => {
+      if (!validTitleBarFields(in message.arguments)) return bridgeFailure(
+        message.id, "INVALID_ARGUMENTS", "INVALID_WINDOW_OPTIONS: titleBar accepts only style and titleVisible"
+      );
+      const titleBar = match (attempt checkedTitleBar(in options.titleBar)) {
+        success(value) => value;
+        failure(error) => return bridgeFailure(message.id, "INVALID_ARGUMENTS", `INVALID_WINDOW_OPTIONS: ${error}`);
+      };
       const created = attempt windows.create(WindowOptions({
         title: copy options.title,
         url: copy options.url,
@@ -138,6 +147,7 @@ function createWindow(
         height: options.height,
         visible: options.visible,
         resizable: options.resizable,
+        titleBar,
         capabilities: capabilities.copyNames(),
         navigation: move inheritedNavigation,
       }));

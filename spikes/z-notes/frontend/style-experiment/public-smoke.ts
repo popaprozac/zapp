@@ -1,6 +1,6 @@
 // Public factory integration; no private mirroring helper creates these styles.
-import { createRelatedWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
-import type { RelatedWindowHandle } from "@zappdev/runtime/window";
+import { createWindow, createRelatedWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
+import type { WindowHandle } from "@zappdev/runtime/window";
 import styles from "./fixture.module.css";
 import dotURL from "./dot.svg?no-inline";
 import externalURL from "./external.css?url&no-inline";
@@ -9,7 +9,7 @@ function assert(value: unknown, label: string): asserts value { if (!value) thro
 
 export async function verifyPublicStyling(pulse: () => Promise<unknown>) {
   const deadline = performance.now() + 8_000;
-  const handles: RelatedWindowHandle[] = [];
+  const handles: WindowHandle[] = [];
   const nodes: Element[] = [];
   const owner = document.documentElement;
   const original = owner.getAttribute("data-zapp-test-theme");
@@ -27,6 +27,7 @@ export async function verifyPublicStyling(pulse: () => Promise<unknown>) {
   };
   async function open(name: string, width: number, independent = false) {
     const handle = await createRelatedWindow({ title: `Public style ${name}`, width, height: 300, visible: false,
+      titleBar: { style: independent ? "hidden" : name === "small" ? "hiddenInset" : "default", titleVisible: !independent },
       ...(independent ? { styles: "independent" as const } : {}),
       ...(!independent ? { theme: { attributes: ["data-zapp-test-theme"], classes: ["zapp-test-dark"], variables: ["--zapp-test-accent"] } } : {}),
     });
@@ -46,6 +47,10 @@ export async function verifyPublicStyling(pulse: () => Promise<unknown>) {
       .zapp-test-dark [data-style-probe]{--public-class:dark}`);
     sheet.nonce = "private-styling-test";
     const a = await open("small", 330), b = await open("wide", 800), c = await open("independent", 330, true);
+    const ordinary = await createWindow({ title: "Public style ordinary", visible: false,
+      titleBar: { style: "hiddenInset", titleVisible: false } });
+    handles.push(ordinary);
+    ordinary.setTitle("Public style ordinary updated");
     document.body.dataset.publicStylePhase = "hidden"; await pulse();
     await until(() => document.body.dataset.publicStyleNative === "hidden", "native windows stay hidden after publication");
     for (const child of [a, b]) {

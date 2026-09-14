@@ -1,4 +1,5 @@
 import type { WindowEventSubscription, WindowHandle } from "./window-api";
+import type { TitleBarOptions } from "./window-titlebar";
 
 /** Terminal events for one related document, not generic native-window events. */
 export const RelatedWindowEvent = {
@@ -30,6 +31,8 @@ export interface RelatedWindowCreateOptions {
   height?: number;
   /** Default true. False keeps the published native window hidden until show(). */
   visible?: boolean;
+  /** Child-local native chrome, not inherited from the owner's window. */
+  titleBar?: TitleBarOptions;
   /** Default shared: live head-owned DOM styles, before child-local sheets. */
   styles?: "shared" | "independent";
   /** Omitted by default; no arbitrary root state is copied. */
