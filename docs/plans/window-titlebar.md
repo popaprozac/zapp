@@ -152,7 +152,7 @@ mouse-up may not be delivered, so cleanup must not depend solely on mouse-up.
 The next checkpoint is the bounded native gesture hookup and per-window layout
 insets, followed by the custom Notes header and user visual review.
 
-## Native gesture prototype: observer installation still pending
+## Native gesture prototype: upstream foundations ready
 
 The one-shot DOM snapshot component and unit tests now exist in
 `bootstrap/window-drag.ts`. It requires a trusted left mouse-down, matching
@@ -169,28 +169,31 @@ The two original upstream blockers are resolved in Z commits `9faef330` and
 `2b2883cd`: ordinary Z weak observer fields and private synchronous Z-only
 helpers now execute with guarded receivers in both compiler paths.
 
-Resuming integration exposed one additional boundary, verified with minimal
-`z check` probes through Stage 0 and the native driver:
+Resuming integration exposed one additional boundary:
 
 - The runtime constructs and owns the observer, then must install its weak
-  handle on the native window. A non-private Z-only setter is still rejected.
+  handle on the native window. A non-private Z-only setter was rejected.
 - Giving that setter `as "selector:"` correctly rejects its `Weak<T>` parameter:
   an ordinary Z weak handle is not an Objective-C parameter ABI.
 - Making the setter private prevents the runtime from calling it. The earlier
   upstream fixtures created observers inside native entries, so they did not
   exercise this external installation step.
 
-Proposed next upstream extension, awaiting approval: allow ordinary Z visibility
-on synchronous Z-only instance methods while retaining the existing effect,
-receiver-access, lifetime and executor rules. No `as` means a Z call; explicit
-`as` remains the native ABI boundary. Do not route this through a registry,
-raw pointer, invented selector ABI, or a constructor workaround.
+This extension was approved and landed in Z commit `1b6e6da8`. Synchronous
+Z-only instance methods now obey ordinary public, package-internal, and private
+visibility with the existing effect, receiver-access, lifetime and executor
+rules. No `as` means a Z call; explicit `as` remains the native ABI boundary.
+No registry, raw pointer, invented selector ABI, or constructor workaround is
+needed. The upstream matrix verifies external weak installation, imported
+methods, visibility, observer expiration, allocation balance and native reentry
+at O0/O2 with UBSan in both compiler paths. Fixed-point bootstrap also passes.
 
 The Z repository's `docs/native-subclass-z-state-design.md` describes the landed
 bounded tiers. The saved prototype remains uncompiled and unapplied; its
 temporary selector annotations are not an approved implementation.
 
-Once approved and implemented upstream, resume by validating native event/input
+Resume the framework integration by removing the draft's temporary selector
+annotations from Z-only methods, then validating native event/input
 ordering, callback expiration, document retirement, first-click behavior and
 real drags. The prototype's Fill preference branch is incomplete; do not call
 its double-click behavior finished. Geometry and the custom Notes header follow.
