@@ -3,6 +3,7 @@ import json from "std/json";
 import { thread } from "std/thread";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
+import { windowChromeScript } from "./window-chrome.zs";
 
 internal type DesktopRouteMessageOperation = (
   message: String,
@@ -31,7 +32,8 @@ function confirmDocumentShell(
     // Registry readiness precedes queued JS calls. The eventual script checks
     // its realm/token/disposal again; native acceptance still rejects retirement
     // even if this activation was queued before JS disposal could run.
-    const activation = `(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._activateDocument==='function'&&b._activateDocument(r.realm,r.token)})()`;
+    const chrome = windowChromeScript(in webView);
+    const activation = `${chrome};(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._activateDocument==='function'&&b._activateDocument(r.realm,r.token)})()`;
     // The nested callback owns its snapshots independently of this callback's
     // environment; native completion lifetime must not borrow outer storage.
     const activationToken = copy token;
@@ -88,7 +90,8 @@ internal function routeDocumentMessage(
       some(identity) => {
         const binding = DocumentBinding({ realm: copy body, token: `${identity.token}`, shell: document.requiresShell() });
         const source = json.encode(in binding);
-        const script = `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._bindDocument==='function'&&b._bindDocument(r.realm,r.token,r.shell)})()`;
+        const chrome = windowChromeScript(in webView);
+        const script = `${chrome};(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._bindDocument==='function'&&b._bindDocument(r.realm,r.token,r.shell)})()`;
         webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});
       }
       none => {}

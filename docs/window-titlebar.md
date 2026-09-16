@@ -14,7 +14,10 @@ const main = await createWindow({
 const inspector = await createRelatedWindow({
   title: "Inspector",
   visible: false,
-  titleBar: { style: "default", titleVisible: true },
+  resizable: false,
+  maximizable: false,
+  fullscreenable: false,
+  titleBar: { style: "hiddenInset", titleVisible: false },
 });
 // Mount into inspector.document, then present it.
 inspector.show();
@@ -55,6 +58,49 @@ unknown styles, misspelled nested keys, and invalid value types are rejected
 before allocating a window. Related windows choose their own titlebar; neither
 owner chrome nor owner geometry is inherited through shared CSS.
 
+## Layout around native chrome
+
+Zapp sets two CSS custom properties on each document's root:
+
+- `--zapp-titlebar-height`: top content overlap in viewport CSS pixels. Zero
+  for ordinary content below native chrome, not the physical titlebar height.
+- `--zapp-window-controls-inset-left`: the horizontal space occupied by the
+  native controls inside this viewport, measured from its left edge. Add your
+  own design spacing after that edge.
+
+The values come from native layout, not fixed offsets. They are initialized
+before related-window publication and refreshed at document binding, resizing,
+and fullscreen completion. They are local to each document; selecting them in
+`theme.variables` is rejected so an owner's geometry cannot overwrite a child.
+
+To keep an entire page below the chrome:
+
+```css
+main { padding-top: calc(var(--zapp-titlebar-height, 0px) + 16px); }
+```
+
+Or place a header beside the native controls and start other content below it:
+
+```css
+.custom-header {
+  min-height: max(64px, var(--zapp-titlebar-height, 0px));
+  padding-left: calc(var(--zapp-window-controls-inset-left, 0px) + 16px);
+}
+```
+
+## Resizing and presentation policy
+
+`resizable`, `maximizable`, and `fullscreenable` are independent creation
+options, each defaulting to `true`. They apply to ordinary and related windows
+and to Z's `WindowOptions`. `resizable` controls interactive edge resizing;
+`maximizable` permits zoom/maximize; `fullscreenable` permits native fullscreen
+entry. The operating system still determines supported presentation behavior.
+
+Disallowed maximize/fullscreen requests are no-ops, including native actions,
+not just disabled frontend controls. Leaving fullscreen remains possible.
+These are presentation policies, not security capabilities. The inspector
+example disables all three; other windows retain their defaults.
+
 ## Current boundaries
 
 These are creation options, not dynamic setters. No arbitrary control offsets,
@@ -64,9 +110,9 @@ it is not a user-configurable application toolbar API.
 
 Full-size content can extend under native controls and title text. The shared
 DOM resolver and native gesture hookup now follow the approved rules below;
-real drag validation, complete double-click preferences and per-window CSS
-insets remain unfinished. Keep important content clear of that area; do not treat a
-fixed padding value as a cross-platform geometry guarantee. Ordinary native
+real drag validation and complete double-click preferences remain unfinished.
+Use the measured insets above rather than treating fixed padding as a
+cross-platform geometry guarantee. Ordinary native
 chrome remains the default. Windows/Linux appearance mappings are not yet
 implemented in this path.
 

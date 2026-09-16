@@ -32,6 +32,9 @@ class NativeCreation on thread.main {
   readonly deadline: u64;
   visible: boolean;
   titleBar: TitleBarOptions;
+  resizable: boolean;
+  maximizable: boolean;
+  fullscreenable: boolean;
   timer: WebKit.NSTimer | null;
   runtime: Option<MacOSWindowRuntime>;
   completed: boolean;
@@ -173,7 +176,8 @@ internal class MacOSRelatedWindows on thread.main {
     const address: String = absolute;
     const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, logicalOwner, address,
       title, width, height, deadline, timer: null, runtime: Option<MacOSWindowRuntime>.none,
-      visible: true, titleBar: TitleBarOptions(), completed: false, deferPublication: false, published: false, retiring: false });
+      visible: true, titleBar: TitleBarOptions(), resizable: true, maximizable: true, fullscreenable: true,
+      completed: false, deferPublication: false, published: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
       timer.invalidate();
@@ -203,9 +207,13 @@ internal class MacOSRelatedWindows on thread.main {
     return match (this.lookup(in reservation)) { some(record) => Option.some(copy record.address); none => Option.none; };
   }
 
-  function deferPublication(inout this, in reservation: RelatedWindowReservation, visible: boolean, titleBar: TitleBarOptions): void {
+  function deferPublication(inout this, in reservation: RelatedWindowReservation, visible: boolean, titleBar: TitleBarOptions,
+    resizable: boolean, maximizable: boolean, fullscreenable: boolean): void {
     match (this.lookup(in reservation)) {
-      some(record) => { if (!record.completed) { record.deferPublication = true; record.visible = visible; record.titleBar = titleBar; } }
+      some(record) => { if (!record.completed) {
+        record.deferPublication = true; record.visible = visible; record.titleBar = titleBar;
+        record.resizable = resizable; record.maximizable = maximizable; record.fullscreenable = fullscreenable;
+      } }
       none => {}
     }
   }
@@ -291,7 +299,8 @@ internal class MacOSRelatedWindows on thread.main {
     };
     const runtime = match (attempt createMacOSRelatedWindowRuntime(configuration, document,
       `related-${reservation.child.windowId}`, copy record.address, copy record.title,
-      record.width, record.height, record.titleBar, this.route, failed, closed, allowsCreation, createChild, this.windows)) {
+      record.width, record.height, record.titleBar, record.resizable, record.maximizable, record.fullscreenable,
+      this.route, failed, closed, allowsCreation, createChild, this.windows)) {
       success(value) => value;
       failure(_) => { this.fail(in reservation); return null; }
     };
@@ -328,7 +337,8 @@ internal class MacOSRelatedWindows on thread.main {
         let capabilities = Array<String>();
         for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
         const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height, visible: record.visible,
-          titleBar: record.titleBar, url: copy record.address, capabilities: move capabilities });
+          titleBar: record.titleBar, resizable: record.resizable, maximizable: record.maximizable,
+          fullscreenable: record.fullscreenable, url: copy record.address, capabilities: move capabilities });
         match (windows.adoptRelatedNative(record.logicalOwner, copy runtime.id, move options)) {
           some(_) => {
             record.completed = true;

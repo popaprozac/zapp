@@ -27,6 +27,8 @@ readonly struct FrontendWindowOptions {
   height: u32 = 640;
   visible: boolean = true;
   resizable: boolean = true;
+  maximizable: boolean = true;
+  fullscreenable: boolean = true;
   titleBar: FrontendTitleBarOptions = FrontendTitleBarOptions();
 }
 
@@ -147,6 +149,8 @@ function createWindow(
         height: options.height,
         visible: options.visible,
         resizable: options.resizable,
+        maximizable: options.maximizable,
+        fullscreenable: options.fullscreenable,
         titleBar,
         capabilities: capabilities.copyNames(),
         navigation: move inheritedNavigation,

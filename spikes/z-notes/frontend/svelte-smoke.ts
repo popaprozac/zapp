@@ -35,6 +35,9 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     const first = await manager.open(); const second = await manager.open();
     assert(first && second, get(manager.state).error || "two windows must open");
     await until(() => subscribers === 2, "two component roots");
+    document.body.dataset.inspectorChrome = "pending";
+    await pulse();
+    await until(() => document.body.dataset.inspectorChrome === "ok", "native inspector creation policies");
     const firstDocument = first.document, secondDocument = second.document;
     const styleSelector = "[data-zapp-shared-style]";
     const firstStyle = firstDocument.querySelector(styleSelector);
@@ -58,6 +61,14 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     assert(input.value === "Owner edit", "owner → child reactivity");
     const panel = firstDocument.querySelector<HTMLElement>("[data-note-inspector]");
     await until(() => !!panel && firstDocument.defaultView!.getComputedStyle(panel).getPropertyValue("--inspector-style-ready").trim() === "yes", "ordinary imported CSS in child document");
+    const rootStyle = firstDocument.defaultView!.getComputedStyle(firstDocument.documentElement);
+    const topInset = parseFloat(rootStyle.getPropertyValue("--zapp-titlebar-height"));
+    const leftInset = parseFloat(rootStyle.getPropertyValue("--zapp-window-controls-inset-left"));
+    assert(topInset > 0 && leftInset > 0, "child-local native chrome measurements arrive before inspector presentation");
+    const header = firstDocument.querySelector<HTMLElement>("header")!;
+    assert(header.getBoundingClientRect().bottom >= topInset, "inspector content clears native top chrome");
+    assert(header.firstElementChild!.getBoundingClientRect().left >= leftInset, "inspector heading clears traffic lights");
+    assert(input.getBoundingClientRect().top >= topInset, "editable content is below the native chrome");
     assert(!firstDocument.querySelector("[data-svelte-notes]"), "child must not bootstrap the owner workspace");
     assert(!firstDocument.querySelector('script[src*="app.js"]'), "child must not load an application entrypoint");
     const save = [...firstDocument.querySelectorAll("button")].find(button => button.textContent?.includes("Save through"));

@@ -60,6 +60,8 @@ function createDisplay(in window: MacOSWindow): QuartzCore.CADisplayLink on thre
 // Internal AppKit geometry controller. Public Window APIs remain platform-neutral.
 internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   private gestures: Option<Weak<MacOSWindowGestures>>;
+  private allowMaximize: boolean;
+  private allowFullscreen: boolean;
   private displayLink: QuartzCore.CADisplayLink | null;
   private startFrame: WebKit.CGRect;
   private targetFrame: WebKit.CGRect;
@@ -98,11 +100,26 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.systemResize = false;
     this.needsDisplay = true;
     this.gestures = Option.none;
+    this.allowMaximize = true;
+    this.allowFullscreen = true;
     this.releasedWhenClosed = false;
   }
 
   internal function observeGestures(inout this, observer: Weak<MacOSWindowGestures>): void {
     this.gestures = Option.some(observer);
+  }
+
+  internal function configurePresentation(inout this, maximizable: boolean, fullscreenable: boolean): void {
+    this.allowMaximize = maximizable;
+    this.allowFullscreen = fullscreenable;
+  }
+
+  internal function allowsFullscreen(): boolean { return this.allowFullscreen; }
+
+  override function toggleFullScreen(inout this, in sender: objc.Object | null): void as "toggleFullScreen:" {
+    // A creation policy forbids entry, never an exit back to an ordinary window.
+    if (!this.allowFullscreen && usize(this.styleMask & WebKit.NSWindowStyleMaskFullScreen) == 0) return;
+    super.toggleFullScreen(sender);
   }
 
   private function gestureObserver(): Option<MacOSWindowGestures> {
@@ -195,6 +212,7 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   }
 
   override function zoom(inout this, in sender: objc.Object | null): void as "zoom:" {
+    if (!this.allowMaximize && !this.systemResize) return;
     if (this.systemResize) {
       super.zoom(sender);
       return;

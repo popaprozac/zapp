@@ -17,6 +17,8 @@ export struct WindowOptions {
   height: u32 = 640;
   visible: boolean = true;
   resizable: boolean = true;
+  maximizable: boolean = true;
+  fullscreenable: boolean = true;
   titleBar: TitleBarOptions = TitleBarOptions();
   inject: Array<String> = Array<String>();
   capabilities: Array<String> = Array<String>("default");
@@ -364,7 +366,7 @@ class WindowManagerState on thread.main {
     match (found) {
       some(record) => {
         let current = record;
-        current.presentation.requestMaximized(value);
+        if (!value || current.options.maximizable) current.presentation.requestMaximized(value);
         this.windows.set(copy id, move current);
         this.drivePresentation(in id);
       }
@@ -377,7 +379,7 @@ class WindowManagerState on thread.main {
     match (found) {
       some(record) => {
         let current = record;
-        current.presentation.requestFullscreen(value);
+        if (!value || current.options.fullscreenable) current.presentation.requestFullscreen(value);
         this.windows.set(copy id, move current);
         this.drivePresentation(in id);
       }

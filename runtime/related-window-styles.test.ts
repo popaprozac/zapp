@@ -3,6 +3,12 @@ import { styleDOM } from "./related-window-dom.test";
 import { shareRelatedWindowStyles } from "./related-window-styles";
 import { normalizeRelatedWindowTheme, shareRelatedWindowTheme } from "./related-window-theme";
 
+test("native chrome geometry cannot be inherited from an owner theme", () => {
+  for (const name of ["--zapp-titlebar-height", "--zapp-window-controls-inset-left"]) {
+    expect(() => normalizeRelatedWindowTheme({ variables: [name] })).toThrow(/document-local/);
+  }
+});
+
 function style(doc: Document, text: string) {
   const node = doc.createElement("style"); node.textContent = text; doc.head.append(node); return node;
 }

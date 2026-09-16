@@ -6,7 +6,7 @@
 </script>
 
 <main class="inspector" data-note-inspector>
-  <header>
+  <header data-zapp-drag-region>
     <span class="inspector-icon" aria-hidden="true">i</span>
     <div><p class="eyebrow">Z Notes</p><h1>Note inspector</h1></div>
     <span class="connected"><span aria-hidden="true"></span>Live</span>

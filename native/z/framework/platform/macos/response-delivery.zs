@@ -7,6 +7,7 @@ import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
 import { configuredFrontendIsDevelopment } from "./configured-webview.zs";
 import { setMacOSApplicationResult } from "./application-host.zs";
+import { windowChromeScript } from "./window-chrome.zs";
 import {
   observeConfiguredWebViewResponse,
 } from "./configured-smoke.zs";
@@ -172,7 +173,9 @@ internal function deliverWebViewWindowResize(
 ): void on thread.main {
   const payload = WebViewWindowSizePayload({ width, height });
   const dataJson = json.encode(in payload);
-  const script = windowEventScript(in windowId, "resize", in dataJson);
+  const event = windowEventScript(in windowId, "resize", in dataJson);
+  const chrome = windowChromeScript(in webView);
+  const script = `${chrome};${event}`;
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}

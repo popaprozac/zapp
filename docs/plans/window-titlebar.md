@@ -3,8 +3,8 @@
 Status: appearance implementation, 2026-09-14. Typed titlebar creation options
 are implemented in the Z and focused TypeScript APIs and both native creation
 paths. See the [developer guide](../window-titlebar.md). The native gesture
-hookup is installed; real drag validation, complete double-click preferences,
-and measured CSS geometry remain subsequent checks. The exclusion-first DOM
+hookup is installed; real drag validation and complete double-click preferences
+remain subsequent checks. Measured CSS geometry is implemented. The exclusion-first DOM
 policy below is approved and implemented in the shared bootstrap resolver.
 
 ## Agreed configuration and independence
@@ -80,10 +80,10 @@ These frameworks do not all give `hidden` identical control-visibility semantics
    positive marker cannot turn a button or an excluded subtree into a drag
    handle. The closest positive HTML marker selects titlebar versus move;
    inherited CSS drag does not downgrade a titlebar to move-only.
-3. Publish per-window native chrome measurements for frontend layout, including
+3. **Implemented:** Publish per-window native chrome measurements for frontend layout, including
    related documents. Shared application CSS must not copy owner window geometry
    into a differently sized/styled child.
-4. Demonstrate a custom Svelte Notes header with functioning native controls,
+4. **Inspector implemented; visual review pending:** Demonstrate a custom Svelte Notes header with functioning native controls,
    clickable search/actions, drag regions, and the existing smooth resize path.
 
 Acceptance checks include all three styles with title text both visible and
@@ -224,5 +224,35 @@ These are not yet proof of real dragging, first-click behavior on an unfocused
 window, or double-click UX. The Fill preference branch remains incomplete and
 currently performs no action; no private AppKit selector or approximate fill
 geometry has been introduced. Resolve that behavior before calling double-click
-support complete. Native layout insets, a custom Notes header, and user visual
-review follow.
+support complete. User visual review remains necessary for actual gestures.
+
+## Inspector geometry and resize safety
+
+The Notes inspector uses `hiddenInset` with a custom move-only header, hidden
+native title text, and all three presentation options disabled: `resizable`,
+`maximizable`, and `fullscreenable`. The options are independent and default to
+true for ordinary and related windows. Native action overrides, native window
+policy, and manager requests enforce them; disabling only the button is not
+sufficient. Production implementation remains Z-only.
+
+The reported live-resize abort was a native-compiler parity bug, not a titlebar
+restriction. Native match arms store their statement bodies outside the ordinary
+statement-child list. The superclass handoff analysis missed those bodies and
+held `sendEvent:` access across AppKit's synchronous resize callback. Z commit
+`f5682911` fixes that traversal without permitting partially evaluated super
+expressions or dropping unrelated loans. Rebuild the native compiler after
+updating Z; disabling inspector resizing alone does not fix other windows.
+
+Per-document measurements now populate `--zapp-titlebar-height` and
+`--zapp-window-controls-inset-left`. They use AppKit geometry transformed into
+WebView coordinates and account for page zoom. An ordinary titlebar reports zero
+content overlap. Related documents do not inherit owner geometry. The renderer
+setter is installed once, ignores identical values, and receives short updates
+alongside the existing resize delivery; measurement does not allocate an Array.
+
+Checks cover both compilers at O0/O2 with UBSan: match-arm handoff emission in the
+actual window override, gesture lifetime, independent presentation policies,
+bridge validation, and native chrome/control layout. The Notes WebKit smoke
+also checks fixed-size native inspectors, heading/input clearance, independent
+child metrics, Svelte sharing, and teardown. Manual edge-resize and visual header
+review are the remaining user checks; these gates do not synthesize a mouse drag.

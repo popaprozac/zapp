@@ -177,6 +177,17 @@ function verifyManager(): i32 throws WindowError on thread.main {
   windows.maximizedChangedNative(in window.id, true);
   if (probe.fullscreens != requests || probe.maximizes != 4) return 45;
   subscription.unsubscribe();
+  const restricted = try windows.create(WindowOptions({ resizable: true, maximizable: false, fullscreenable: false }));
+  const maxBefore = probe.maximizes;
+  const fullBefore = probe.fullscreens;
+  restricted.maximize(); restricted.setFullscreen(true);
+  if (probe.maximizes != maxBefore || probe.fullscreens != fullBefore) return 46;
+  const zoomOnly = try windows.create(WindowOptions({ resizable: false, maximizable: true, fullscreenable: false }));
+  zoomOnly.maximize(); zoomOnly.setFullscreen(true);
+  if (probe.maximizes != maxBefore + 1 || probe.fullscreens != fullBefore) return 47;
+  const fullOnly = try windows.create(WindowOptions({ resizable: false, maximizable: false, fullscreenable: true }));
+  fullOnly.maximize(); fullOnly.setFullscreen(true);
+  if (probe.maximizes != maxBefore + 1 || probe.fullscreens != fullBefore + 1) return 48;
   windows.stop();
   return 0;
 }

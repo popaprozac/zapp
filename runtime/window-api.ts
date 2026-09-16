@@ -37,6 +37,10 @@ export interface WindowCreateOptions {
   height?: number;
   visible?: boolean;
   resizable?: boolean;
+  /** Allow maximizing/zooming. Independent of interactive edge resizing. */
+  maximizable?: boolean;
+  /** Allow entering native fullscreen. Does not prevent leaving fullscreen. */
+  fullscreenable?: boolean;
   titleBar?: TitleBarOptions;
 }
 
@@ -368,6 +372,9 @@ export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
   ensurePermission("window:create");
+  for (const key of ["resizable", "maximizable", "fullscreenable"] as const) {
+    if (options[key] !== undefined && typeof options[key] !== "boolean") throw new TypeError(`Window ${key} must be a boolean.`);
+  }
   const titleBar = checkedTitleBar(options.titleBar);
   const checked = titleBar === undefined ? { ...options } : { ...options, titleBar };
   const host = (globalThis as any).__zappBridge;

@@ -10,6 +10,7 @@
   min-height: 100vh;
   width: 100%;
   padding: 22px;
+  padding-top: 0;
   color-scheme: light dark;
   color: var(--ink);
   background:
@@ -18,7 +19,12 @@
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
 [data-note-inspector] *, [data-note-inspector] *::before { box-sizing: border-box; }
-[data-note-inspector] header { display: flex; align-items: center; gap: 12px; }
+[data-note-inspector] header {
+  display: flex; align-items: center; gap: 12px; user-select: none;
+  min-height: max(64px, var(--zapp-titlebar-height, 0px));
+  padding-left: max(0px, calc(var(--zapp-window-controls-inset-left, 0px) + 16px - 22px));
+  border-bottom: 1px solid var(--line);
+}
 [data-note-inspector] h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.4px; }
 [data-note-inspector] .eyebrow { margin: 0; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; }
 [data-note-inspector] .inspector-icon {
@@ -63,7 +69,8 @@
 [data-note-inspector] footer > span { max-width: 150px; font-size: 10px; color: var(--muted); }
 [data-note-inspector] [role="alert"] { color: light-dark(#ad2222, #ffaaaa); }
 @media (max-width: 360px) {
-  [data-note-inspector] { padding: 16px; }
+  [data-note-inspector] { padding: 0 16px 16px; }
+  [data-note-inspector] header { padding-left: var(--zapp-window-controls-inset-left, 0px); }
   [data-note-inspector] dl > div { grid-template-columns: 1fr 1fr; }
   [data-note-inspector] .connected { font-size: 0; }
 }

@@ -31,6 +31,10 @@ export interface RelatedWindowCreateOptions {
   height?: number;
   /** Default true. False keeps the published native window hidden until show(). */
   visible?: boolean;
+  /** Independent creation policies, each defaulting to true. */
+  resizable?: boolean;
+  maximizable?: boolean;
+  fullscreenable?: boolean;
   /** Child-local native chrome, not inherited from the owner's window. */
   titleBar?: TitleBarOptions;
   /** Default shared: live head-owned DOM styles, before child-local sheets. */

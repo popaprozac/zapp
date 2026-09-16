@@ -19,6 +19,9 @@ export function normalizeRelatedWindowTheme(value: unknown): RelatedWindowThemeO
       throw new TypeError(`Invalid related window theme ${key}; use data-* attribute names, class tokens, or --custom-property names.`);
     }
     result[key] = [...new Set(names)];
+    if (key === "variables" && (names as string[]).some(name => name === "--zapp-titlebar-height" || name === "--zapp-window-controls-inset-left")) {
+      throw new TypeError("Native window chrome variables are document-local and cannot be shared as theme state.");
+    }
   }
   return result;
 }

@@ -222,6 +222,14 @@ test("focused creation uses the checked bridge and validates its identity", asyn
       args: { title: "Diagnostics", width: 480 },
     }]);
 
+    await createWindow({ resizable: false, maximizable: true, fullscreenable: false });
+    expect(invokes.at(-1)?.args).toEqual({ resizable: false, maximizable: true, fullscreenable: false });
+    const count = invokes.length;
+    for (const key of ["resizable", "maximizable", "fullscreenable"]) {
+      await expect(createWindow({ [key]: "false" } as any)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(invokes.length).toBe(count);
+
     (globalThis as any)[BRIDGE_KEY].invoke = () => Promise.resolve({});
     await expect(createWindow()).rejects.toBeInstanceOf(WindowError);
   } finally {

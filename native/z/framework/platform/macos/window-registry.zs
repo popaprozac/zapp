@@ -236,7 +236,8 @@ internal class MacOSWindowRegistry on thread.main {
         const current = usize(window.window.styleMask & WebKit.NSWindowStyleMaskFullScreen) != 0;
         // Refusal/no-op must release the logical transition rather than leave
         // later requests waiting for a delegate notification that cannot fire.
-        if (current == value || usize(window.window.styleMask & WebKit.NSWindowStyleMaskResizable) == 0) {
+        const disallowed = usize(window.window.collectionBehavior & WebKit.NSWindowCollectionBehaviorFullScreenNone) != 0;
+        if (current == value || (value && disallowed)) {
           let windows = this.windowManager;
           windows.fullscreenChangedNative(in id, current);
           return;

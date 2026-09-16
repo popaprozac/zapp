@@ -49,6 +49,9 @@ export async function verifyPublicStyling(pulse: () => Promise<unknown>) {
       .zapp-test-dark [data-style-probe]{--public-class:dark}`);
     sheet.nonce = "private-styling-test";
     const a = await open("small", 330), b = await open("wide", 800), c = await open("independent", 330, true);
+    assert(parseFloat(a.value("--zapp-titlebar-height")) > 0 && parseFloat(a.value("--zapp-window-controls-inset-left")) > 0, "inset child's own native metrics");
+    assert(parseFloat(b.value("--zapp-titlebar-height")) === 0 && parseFloat(b.value("--zapp-window-controls-inset-left")) === 0, "ordinary child does not inherit owner/inset geometry");
+    assert(parseFloat(c.value("--zapp-titlebar-height")) > 0, "independent styles retain native geometry");
     for (const child of [a, b, c]) verifyWindowDragPolicy(child.doc);
     const ordinary = await createWindow({ title: "Public style ordinary", visible: false,
       titleBar: { style: "hiddenInset", titleVisible: false } });

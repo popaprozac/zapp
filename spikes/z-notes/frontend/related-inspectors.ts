@@ -21,7 +21,11 @@ export function createInspectorManager(model: NotesModel) {
     let target: HTMLDivElement | undefined;
     let rollback: (() => void) | undefined;
     try {
-      handle = await createRelatedWindow({ title: "Note inspector", width: 440, height: 600, visible: false });
+      handle = await createRelatedWindow({
+        title: "Note inspector", width: 440, height: 640, visible: false,
+        resizable: false, maximizable: false, fullscreenable: false,
+        titleBar: { style: "hiddenInset", titleVisible: false },
+      });
       if (disposed) { handle.close(); return; }
       const windowHandle = handle;
       target = handle.document.createElement("div");

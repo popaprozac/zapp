@@ -3,6 +3,7 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
 import { macOSContentDimension } from "./window-geometry.zs";
+import { updateWindowChrome } from "./window-chrome.zs";
 import { MacOSWindow, queueWindowPresentation, queueWindowFullscreen } from "./window-resize.zs";
 import {
   deliverWebViewWindowEvent,
@@ -164,11 +165,13 @@ class DesktopWindowDelegate on thread.main
 
   function didEnterFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowDidEnterFullScreen:" {
     this.window.setSystemResize(true);
+    updateWindowChrome(in this.webView);
     queueWindowFullscreen(this.window);
   }
 
   function didExitFullScreen(inout this, in notification: WebKit.NSNotification): void as "windowDidExitFullScreen:" {
     this.window.setSystemResize(false);
+    updateWindowChrome(in this.webView);
     queueWindowFullscreen(this.window);
     queueWindowPresentation(this.window);
   }

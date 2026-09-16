@@ -10,6 +10,8 @@ import { MacOSWindow } from "./window-resize.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
 import { TitleBarOptions } from "../../window-titlebar.zs";
 import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
+import { applyMacOSWindowPolicy } from "./window-policy.zs";
+import { installWindowChrome } from "./window-chrome.zs";
 import { installWebViewScripts } from "./webview-injections.zs";
 import { WindowManager } from "../../window.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
@@ -106,6 +108,9 @@ internal function createMacOSRelatedWindowRuntime(
   width: u32,
   height: u32,
   titleBar: TitleBarOptions,
+  resizable: boolean,
+  maximizable: boolean,
+  fullscreenable: boolean,
   route: DesktopRouteMessageOperation,
   failed: RelatedNativeFailure,
   closed: NativeWindowClosedOperation,
@@ -125,15 +130,18 @@ internal function createMacOSRelatedWindowRuntime(
     add: controller.addScriptMessageHandler(handler, "zapp"),
     remove: controller.removeScriptMessageHandlerForName("zapp"),
   });
-  const style = WebKit.NSWindowStyleMaskTitled
-    | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable
+  let style = WebKit.NSWindowStyleMaskTitled
+    | WebKit.NSWindowStyleMaskClosable
     | WebKit.NSWindowStyleMaskMiniaturizable;
+  if (resizable) style = style | WebKit.NSWindowStyleMaskResizable;
   const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in titleBar));
   const gestures = new MacOSWindowGestures(window, view, document);
   window.observeGestures(weak gestures);
   window.title = move title;
   window.contentView = view;
   applyMacOSTitleBar(in window, in titleBar, in id);
+  applyMacOSWindowPolicy(window, maximizable, fullscreenable);
+  installWindowChrome(in view, in controller);
   const navigationController = new RelatedNavigation({ view, address, document, failed, allowsCreation });
   const uiController = new RelatedUI({ view, window, createChild });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);

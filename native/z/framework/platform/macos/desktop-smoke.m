@@ -143,6 +143,7 @@ void zapp_desktop_smoke_observe_response(
           @"shellReveal:document.body?.dataset?.shellReveal??null,"
           @"deepLinkNote:document.body?.dataset?.deepLinkNote??null,"
           @"svelteInspector:document.body?.dataset?.svelteInspector??null,"
+          @"inspectorChrome:document.body?.dataset?.inspectorChrome??null,"
           @"styleExperiment:document.body?.dataset?.styleExperiment??null,"
           @"styleHmrPhase:document.body?.dataset?.styleHmrPhase??null,"
           @"styleMetrics:document.body?.dataset?.styleMetrics??null,"
@@ -155,6 +156,20 @@ void zapp_desktop_smoke_observe_response(
           @"})"
         completionHandler:^(id state, NSError *state_error) {
           if (native_id == 1 && zapp_svelte_smoke_enabled() && [state isKindOfClass:[NSString class]]) {
+            if ([(NSString *)state containsString:@"\"inspectorChrome\":\"pending\""]) {
+              NSUInteger inspectors = 0;
+              BOOL valid = YES;
+              for (NSWindow *window in NSApp.windows) {
+                if (![window.title isEqualToString:@"Note inspector"]) continue;
+                inspectors++;
+                valid = valid && !(window.styleMask & NSWindowStyleMaskResizable)
+                  && (window.collectionBehavior & NSWindowCollectionBehaviorFullScreenNone)
+                  && ![window standardWindowButton:NSWindowZoomButton].enabled
+                  && window.titleVisibility == NSWindowTitleHidden;
+              }
+              if (inspectors == 2 && valid)
+                [web_view evaluateJavaScript:@"document.body.dataset.inspectorChrome='ok'" completionHandler:nil];
+            }
             for (NSString *phase in @[@"hidden", @"shown"]) {
               NSString *marker = [NSString stringWithFormat:@"\"publicStylePhase\":\"%@\"", phase];
               if (![(NSString *)state containsString:marker]) continue;

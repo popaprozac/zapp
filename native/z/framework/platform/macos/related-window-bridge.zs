@@ -14,6 +14,9 @@ readonly struct RelatedOptions {
   width: u32 = 900;
   height: u32 = 640;
   visible: boolean = true;
+  resizable: boolean = true;
+  maximizable: boolean = true;
+  fullscreenable: boolean = true;
   titleBar: FrontendTitleBarOptions = FrontendTitleBarOptions();
 }
 readonly struct RelatedPrepared {
@@ -35,7 +38,8 @@ function validOptions(in source: String): boolean {
   return match (in value) {
     object(fields) => {
       for (const field of fields) {
-        if (field.key != "title" && field.key != "width" && field.key != "height" && field.key != "visible" && field.key != "titleBar") return false;
+        if (field.key != "title" && field.key != "width" && field.key != "height" && field.key != "visible"
+          && field.key != "resizable" && field.key != "maximizable" && field.key != "fullscreenable" && field.key != "titleBar") return false;
       }
       select true;
     }
@@ -71,7 +75,7 @@ internal function routeRelatedWindowBridgeMessage(
     none => return WindowBridgeRoute.response(creationFailure(message.id, "The owning document is no longer active."));
   };
   if (!capabilities.allowsPermission("window:create")) return WindowBridgeRoute.response(bridgeCapabilityFailure(message.id, "window:create"));
-  if (!validOptions(in message.arguments) || !validTitleBarFields(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Native related window options accept only title, width, height, visible, and titleBar (style, titleVisible)."));
+  if (!validOptions(in message.arguments) || !validTitleBarFields(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window options: expected title, width, height, visible, resizable, maximizable, fullscreenable, or titleBar (style, titleVisible)."));
   const options = match (attempt json.decode<RelatedOptions>(in message.arguments)) {
     success(value) => value;
     failure(_) => return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window dimensions or title."));
@@ -97,7 +101,7 @@ internal function routeRelatedWindowBridgeMessage(
     some(value) => value;
     none => return WindowBridgeRoute.response(creationFailure(message.id, "Related window creation could not be prepared."));
   };
-  windows.related.deferPublication(in reservation, options.visible, titleBar);
+  windows.related.deferPublication(in reservation, options.visible, titleBar, options.resizable, options.maximizable, options.fullscreenable);
   const address = match (windows.related.address(in reservation)) {
     some(value) => value;
     none => { windows.related.fail(in reservation); return WindowBridgeRoute.response(creationFailure(message.id, "Related window shell is unavailable.")); }

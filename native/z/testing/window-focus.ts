@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
+import assert from "node:assert/strict";
 import { runBoundedCommand } from "../../../cli/src/bounded-process";
 
 const root = resolve(import.meta.dir, "../../..");
@@ -32,6 +33,12 @@ try {
         ? [resolve(zRoot, ".z-cache/bootstrap/z"), "emit", input]
         : [process.execPath, resolve(zRoot, "compiler/src/cli.ts"), mode === "stage0" ? "emit" : "self-host-emit", input];
       const source = await run(command, 180_000);
+      if (gesturesOnly) {
+        const eventBody = source.match(/-\s*\(void\)sendEvent:[^{;\n]+\{([\s\S]*?)(?=\n-\s*\()/)?.[1];
+        assert.ok(eventBody, `${mode}: missing native sendEvent override`);
+        assert.equal(eventBody.match(/_z_native_subclass_handoff_begin\(/g)?.length, 2,
+          `${mode}: both live/expired observer arms must release access during superclass event routing`);
+      }
       const file = join(directory, `${fixture}-${mode}.${native ? "m" : "c"}`);
       await writeFile(file, source);
       for (const optimization of ["-O0", "-O2"]) {

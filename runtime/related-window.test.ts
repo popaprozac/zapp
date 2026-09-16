@@ -90,6 +90,23 @@ test("blocked opening awaits rollback and detaches its observer before rejection
   release(); expect((await pending).code).toBe("WINDOW_ERROR");
 });
 
+test("related window policies are checked and carried independently to native preparation", async () => {
+  const f = fixture(), invoke = f.owner.invoke;
+  let sent: any;
+  f.owner.invoke = async (method: string, args: any) => {
+    if (method === "__window:prepare-related") sent = args;
+    return invoke(method);
+  };
+  await createRelatedWindow({ resizable: false, maximizable: true, fullscreenable: false });
+  expect([sent.resizable, sent.maximizable, sent.fullscreenable]).toEqual([false, true, false]);
+  const before = f.calls.length;
+  for (const key of ["resizable", "maximizable", "fullscreenable"]) {
+    await expect(createRelatedWindow({ [key]: "false" } as any)).rejects.toBeInstanceOf(TypeError);
+    await expect(createRelatedWindow({ [key]: null } as any)).rejects.toBeInstanceOf(TypeError);
+  }
+  expect(f.calls.length).toBe(before);
+});
+
 test("related titlebar options are child-local, checked, and snapshotted before preparation", async () => {
   const f = fixture(), invoke = f.owner.invoke;
   const titleBar = { style: "hiddenInset" as const, titleVisible: false };

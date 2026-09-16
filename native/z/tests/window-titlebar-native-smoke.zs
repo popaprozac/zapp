@@ -4,6 +4,8 @@ import { thread } from "std/thread";
 import { TitleBarOptions, TitleBarStyle } from "../framework/window-titlebar.zs";
 import { applyMacOSTitleBar, macOSTitleBarStyleMask } from "../framework/platform/macos/window-titlebar.zs";
 import { MacOSWindow } from "../framework/platform/macos/window-resize.zs";
+import { measureWindowChrome } from "../framework/platform/macos/window-chrome.zs";
+import { applyMacOSWindowPolicy } from "../framework/platform/macos/window-policy.zs";
 
 struct Lifetime on thread.main {
   window: MacOSWindow;
@@ -16,6 +18,8 @@ function verify(style: TitleBarStyle, titleVisible: boolean): f64 throws i32 on 
     | WebKit.NSWindowStyleMaskMiniaturizable | WebKit.NSWindowStyleMaskResizable;
   const window = new MacOSWindow(WebKit.NSMakeRect(200, 200, 420, 260), macOSTitleBarStyleMask(mask, in options));
   const lifetime = Lifetime({ window });
+  const view = WebKit.WKWebView.alloc().initWithFrame(WebKit.NSMakeRect(0, 0, 420, 260));
+  window.contentView = view;
   window.title = "Zapp titlebar probe";
   applyMacOSTitleBar(in window, in options, "probe");
   if (window.visible) throw 1;
@@ -39,10 +43,34 @@ function verify(style: TitleBarStyle, titleVisible: boolean): f64 throws i32 on 
   if (button.hidden || minimize.hidden || zoom.hidden) throw 8;
   const rect = button.convertRect(button.bounds, toView: null);
   const inset = window.frame.size.height - rect.origin.y - rect.size.height;
+  const metrics = measureWindowChrome(in window, in view);
+  if (style == TitleBarStyle.default) {
+    if (metrics.top != 0 || metrics.controlsLeft != 0) throw 11;
+  } else {
+    if (metrics.top <= 0 || metrics.controlsLeft <= 0) throw 12;
+    view.pageZoom = 2.0;
+    const scaled = measureWindowChrome(in window, in view);
+    if (scaled.top != metrics.top / 2 || scaled.controlsLeft != metrics.controlsLeft / 2) throw 13;
+    view.pageZoom = 1.0;
+  }
   const label = match (style) { default => "default"; hidden => "hidden"; hiddenInset => "hiddenInset"; };
-  console.log(`titlebar: style=${label} titleVisible=${titleVisible} controlsTop=${inset}`);
+  console.log(`titlebar: style=${label} titleVisible=${titleVisible} controlsTop=${inset} overlap=${metrics.top} controlsLeft=${metrics.controlsLeft}`);
   window.orderOut(null);
   if (window.visible) throw 9;
+  applyMacOSWindowPolicy(window, false, false);
+  if (zoom.enabled || window.allowsFullscreen()) throw 14;
+  if (usize(window.styleMask & WebKit.NSWindowStyleMaskResizable) == 0) throw 15;
+  const before = window.frame;
+  window.zoom(null);
+  window.toggleFullScreen(null);
+  const after = window.frame;
+  if (before.origin.x != after.origin.x || before.origin.y != after.origin.y
+    || before.size.width != after.size.width || before.size.height != after.size.height) throw 16;
+  if (usize(window.styleMask & WebKit.NSWindowStyleMaskFullScreen) != 0) throw 17;
+  applyMacOSWindowPolicy(window, true, false);
+  if (!zoom.enabled || window.allowsFullscreen()) throw 18;
+  applyMacOSWindowPolicy(window, false, true);
+  if (!zoom.enabled || !window.allowsFullscreen()) throw 19;
   return inset;
 }
 

@@ -32,6 +32,8 @@ import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
 import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
+import { applyMacOSWindowPolicy } from "./window-policy.zs";
+import { installWindowChrome } from "./window-chrome.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "./related-window-creations.zs";
@@ -114,6 +116,8 @@ internal function createMacOSWindowRuntime(
   window.title = move title;
   window.contentView = webView;
   applyMacOSTitleBar(in window, in options.titleBar, in id);
+  applyMacOSWindowPolicy(window, options.maximizable, options.fullscreenable);
+  installWindowChrome(in webView, in contentController);
   const initialURL = resolveLogicalURL(in options.url);
   if (initialURL == null) {
     throw WindowError({
