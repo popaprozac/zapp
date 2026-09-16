@@ -301,15 +301,25 @@ function checkDocumentEndpoint(): void throws i32 on thread.main {
   const realm = "0123456789abcdef0123456789abcdef";
   const beforeCommit = match (endpoint.offer(in realm)) { some(value) => true; none => false; };
   try verify(!beforeCommit, 70);
+  const initiallyReady = match (endpoint.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!initiallyReady, 170);
   endpoint.didCommit();
   const first = try document(endpoint.offer(in realm));
   const firstToken = `${first.token}`;
   try verify(!endpoint.isCurrent(in first), 71);
+  const offeredReady = match (endpoint.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!offeredReady, 171);
   try verify(!endpoint.acknowledge("0", copy realm), 72);
   try verify(endpoint.acknowledge(in firstToken, copy realm), 73);
   try verify(endpoint.isCurrent(in first), 74);
+  const readyFirst = try document(endpoint.readyIdentity());
+  try verify(readyFirst.token == first.token, 172);
+  const wrongToken = match (endpoint.accept("not-the-token")) { some(value) => true; none => false; };
+  try verify(!wrongToken, 173);
   const firstRequest = try request(registry.beginRequest(in first, 1));
   endpoint.didCommit();
+  const navigationReady = match (endpoint.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!navigationReady, 174);
   const second = try document(endpoint.offer(in realm));
   const secondToken = `${second.token}`;
   try verify(second.token > first.token, 75);
@@ -322,10 +332,14 @@ function checkDocumentEndpoint(): void throws i32 on thread.main {
   try verify(!endpoint.isCurrent(in first) && endpoint.isCurrent(in second), 80);
   endpoint.retire();
   try verify(!endpoint.isCurrent(in second) && registry.count() == 0, 81);
+  const retiredReady = match (endpoint.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!retiredReady, 175);
   endpoint.close();
   endpoint.didCommit();
   const afterClose = match (endpoint.offer(in realm)) { some(value) => true; none => false; };
   try verify(!afterClose, 82);
+  const closedReady = match (endpoint.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!closedReady, 176);
 }
 
 function relatedEndpoint(value: Option<BridgeDocument>): BridgeDocument throws i32 {
@@ -352,10 +366,14 @@ function checkRelatedEndpoint(): void throws i32 on thread.main {
   try verify(!child.observeShell(in token, in realm), 93);
   try verify(!child.acknowledge(in token, copy realm), 94);
   try verify(child.bindingMatches(in token, in realm) && !child.isCurrent(in identity), 95);
+  const childWithoutShell = match (child.readyIdentity()) { some(value) => true; none => false; };
+  try verify(!childWithoutShell, 177);
   const earlyRequest = match (registry.beginRequest(in identity, 1)) { some(value) => true; none => false; };
   try verify(!earlyRequest, 96);
   try verify(!child.observeShell("0", in realm) && !child.observeShell(in token, in wrongRealm), 97);
   try verify(child.observeShell(in token, in realm) && child.isCurrent(in identity), 98);
+  const readyChild = try document(child.readyIdentity());
+  try verify(readyChild.token == identity.token, 178);
   const capabilities = match (registry.capabilitiesFor(in identity)) { some(value) => value; none => throw 99; };
   try verify(capabilities.allowsService("notes.list") && !capabilities.allowsService("notes.delete"), 100);
 

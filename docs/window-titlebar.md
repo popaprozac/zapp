@@ -63,9 +63,9 @@ implied. The inset preset uses an internal empty native toolbar for AppKit layou
 it is not a user-configurable application toolbar API.
 
 Full-size content can extend under native controls and title text. The shared
-DOM resolver now follows the approved drag-region rules below; connecting it to
-native gestures and publishing per-window CSS insets remain the next slice.
-Until then, keep important content clear of that area; do not treat a
+DOM resolver and native gesture hookup now follow the approved rules below;
+real drag validation, complete double-click preferences and per-window CSS
+insets remain unfinished. Keep important content clear of that area; do not treat a
 fixed padding value as a cross-platform geometry guarantee. Ordinary native
 chrome remains the default. Windows/Linux appearance mappings are not yet
 implemented in this path.

@@ -7,6 +7,7 @@ import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "./do
 import { DesktopMessageHandler } from "./message-handler.zs";
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { MacOSWindowGestures } from "./window-drag.zs";
 import { TitleBarOptions } from "../../window-titlebar.zs";
 import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
 import { installWebViewScripts } from "./webview-injections.zs";
@@ -128,6 +129,8 @@ internal function createMacOSRelatedWindowRuntime(
     | WebKit.NSWindowStyleMaskClosable | WebKit.NSWindowStyleMaskResizable
     | WebKit.NSWindowStyleMaskMiniaturizable;
   const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in titleBar));
+  const gestures = new MacOSWindowGestures(window, view, document);
+  window.observeGestures(weak gestures);
   window.title = move title;
   window.contentView = view;
   applyMacOSTitleBar(in window, in titleBar, in id);
@@ -145,5 +148,5 @@ internal function createMacOSRelatedWindowRuntime(
   return new MacOSWindowRuntime({ id, nativeId: document.windowId, window, webView: view,
     contentController: controller, configuration, document, schemeHandler: Option.none,
     navigationDelegate: navigation, uiDelegate: ui, windowDelegate: delegate,
-    presentationObserver, registration, capabilitySelection: document.capabilities });
+    presentationObserver, gestures, registration, capabilitySelection: document.capabilities });
 }

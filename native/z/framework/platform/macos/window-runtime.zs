@@ -4,6 +4,7 @@ import { BridgeDocument } from "../../bridge-document.zs";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowPresentationObserver } from "./window-presentation.zs";
+import { MacOSWindowGestures } from "./window-drag.zs";
 
 internal class MacOSWindowRuntime on thread.main {
   readonly id: String;
@@ -19,6 +20,7 @@ internal class MacOSWindowRuntime on thread.main {
   readonly uiDelegate: objc.Adapter<WebKit.WKUIDelegate>;
   readonly windowDelegate: objc.Adapter<WebKit.NSWindowDelegate>;
   readonly presentationObserver: WindowPresentationObserver;
+  readonly gestures: MacOSWindowGestures;
   readonly registration: objc.Registration;
   readonly document: BridgeDocument;
   readonly capabilitySelection: CapabilitySelection;

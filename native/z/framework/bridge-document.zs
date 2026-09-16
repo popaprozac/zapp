@@ -179,10 +179,17 @@ internal class BridgeDocument on thread.main {
   }
 
   function accept(in token: String): Option<RelatedDocumentIdentity> {
+    if (this.token != token) return Option.none;
+    return this.readyIdentity();
+  }
+
+  // Native gestures need readiness, not authentication against a token that
+  // this same endpoint already owns. Renderer calls check their token above.
+  function readyIdentity(): Option<RelatedDocumentIdentity> {
     if (this.closed || !this.committed) return Option.none;
     return match (in this.identity) {
       some(identity) => {
-        if (this.token != token || !this.documents.isReady(in identity)) {
+        if (!this.documents.isReady(in identity)) {
           return Option<RelatedDocumentIdentity>.none;
         }
         select Option.some(copy identity);

@@ -3,6 +3,7 @@ import clock from "QuartzCore/CABase.h";
 import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
+import { MacOSWindowGestures } from "./window-drag.zs";
 
 internal const windowPresentationNotification: String = "ZappWindowPresentationChanged";
 internal const windowFullscreenNotification: String = "ZappWindowFullscreenCompleted";
@@ -58,6 +59,7 @@ function createDisplay(in window: MacOSWindow): QuartzCore.CADisplayLink on thre
 
 // Internal AppKit geometry controller. Public Window APIs remain platform-neutral.
 internal class MacOSWindow extends WebKit.NSWindow on thread.main {
+  private gestures: Option<Weak<MacOSWindowGestures>>;
   private displayLink: QuartzCore.CADisplayLink | null;
   private startFrame: WebKit.CGRect;
   private targetFrame: WebKit.CGRect;
@@ -95,7 +97,35 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.shuttingDown = false;
     this.systemResize = false;
     this.needsDisplay = true;
+    this.gestures = Option.none;
     this.releasedWhenClosed = false;
+  }
+
+  internal function observeGestures(inout this, observer: Weak<MacOSWindowGestures>): void {
+    this.gestures = Option.some(observer);
+  }
+
+  private function gestureObserver(): Option<MacOSWindowGestures> {
+    return match (in this.gestures) {
+      some(observer) => match (attempt observer.upgrade()) {
+        success(value) => Option.some(value);
+        failure(_) => Option.none;
+      }
+      none => Option.none;
+    };
+  }
+
+  override function sendEvent(inout this, in event: WebKit.NSEvent): void as "sendEvent:" {
+    match (this.gestureObserver()) {
+      some(observer) => {
+        observer.before(event);
+        // Preserve native input ordering; never pump the run loop or withhold
+        // an interactive click while awaiting renderer hit classification.
+        super.sendEvent(event);
+        observer.after(event);
+      }
+      none => super.sendEvent(event);
+    }
   }
 
   override function isZoomed(): boolean as "isZoomed" {

@@ -70,6 +70,68 @@ test("titlebar, move-only, inherited CSS, and unmarked content remain distinct",
   expect(resolveWindowDrag([titlebar(), handle()])).toBe("titlebar");
 });
 
+test("a pending gesture cannot follow a reparented or reassigned hit path", () => {
+  const gesture = createWindowDragGesture(() => 100);
+  const child = element(), header = titlebar();
+  const record = () => gesture.record({ isTrusted: true, button: 0, ctrlKey: false,
+    clientX: 1, clientY: 2, detail: 1, composedPath: () => [child, header] } as unknown as MouseEvent);
+  (child as any).parentNode = header;
+  record();
+  (child as any).parentNode = element("button");
+  expect(gesture.take(1, 2, 1)).toBe(0);
+  (child as any).assignedSlot = header;
+  record();
+  (child as any).assignedSlot = element("slot");
+  expect(gesture.take(1, 2, 1)).toBe(0);
+});
+
+test("document-bound gestures require activation and retire with their document", async () => {
+  const listeners = new Map<string, Array<(event: Event) => void>>();
+  const posts: string[] = [];
+  const listen = (name: string, fn: (event: Event) => void) => {
+    const callbacks = listeners.get(name) ?? []; callbacks.push(fn); listeners.set(name, callbacks);
+  };
+  const context = createContext({ console, crypto, performance: { now: () => 100 },
+    document: { head: {}, body: {}, addEventListener: listen, removeEventListener() {} },
+    setTimeout, clearTimeout, postNative: (message: string) => posts.push(message), listen,
+  });
+  runInContext(`globalThis.window=globalThis;window.addEventListener=listen;
+    window.webkit={messageHandlers:{zapp:{postMessage:postNative}}};
+    globalThis[Symbol.for('zapp.documentTransport')]=1;`, context);
+  runInContext(await bundleWebviewBootstrapRaw(), context, { timeout: 1000 });
+  const bridge = runInContext("globalThis[Symbol.for('zapp.bridge')]", context);
+  const nonce = posts[0]!.slice("@hello\n".length);
+  const down = () => { for (const listener of listeners.get("mousedown") ?? []) listener({
+    isTrusted: true, button: 0, ctrlKey: false, clientX: 1, clientY: 2, detail: 1,
+    composedPath: () => [titlebar()],
+  } as unknown as MouseEvent); };
+  down();
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(0);
+  expect(bridge._bindDocument(nonce, "1", true)).toBe(true);
+  down();
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(0);
+  expect(bridge._activateDocument(nonce, "1")).toBe(true);
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(-1); // no pre-activation snapshot
+  down();
+  expect(bridge._takeWindowDrag("old", 1, 2, 1)).toBe(0);
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(2);
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(-1);
+  for (const event of ["blur", "pagehide"]) {
+    down();
+    for (const listener of listeners.get(event) ?? []) listener({} as Event);
+    expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(-1);
+  }
+  down();
+  expect(bridge._bindDocument(nonce, "2")).toBe(true);
+  expect(bridge._takeWindowDrag("1", 1, 2, 1)).toBe(0);
+  expect(bridge._takeWindowDrag("2", 1, 2, 1)).toBe(-1);
+  down(); bridge._dispose(new Error("closed"));
+  expect(bridge._takeWindowDrag("2", 1, 2, 1)).toBe(0);
+  down();
+  expect(bridge._takeWindowDrag("2", 1, 2, 1)).toBe(0);
+  expect(posts.some(message => message.includes('"m":"setDragRegion"'))).toBe(false);
+});
+
 test("interactive controls beat both inherited CSS and explicit drag markers", () => {
   const cases: Array<[string, Record<string, string>, boolean?]> = [
     ["button", {}], ["input", {}], ["select", {}], ["textarea", {}],

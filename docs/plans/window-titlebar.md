@@ -2,9 +2,10 @@
 
 Status: appearance implementation, 2026-09-14. Typed titlebar creation options
 are implemented in the Z and focused TypeScript APIs and both native creation
-paths. See the [developer guide](../window-titlebar.md). Drag interactions and
-measured CSS geometry remain subsequent slices. The exclusion-first DOM policy
-below is approved and implemented in the shared bootstrap resolver.
+paths. See the [developer guide](../window-titlebar.md). The native gesture
+hookup is installed; real drag validation, complete double-click preferences,
+and measured CSS geometry remain subsequent checks. The exclusion-first DOM
+policy below is approved and implemented in the shared bootstrap resolver.
 
 ## Agreed configuration and independence
 
@@ -73,7 +74,7 @@ These frameworks do not all give `hidden` identical control-visibility semantics
 1. **Implemented:** checked, typed titlebar creation options in the Z and focused TypeScript
    APIs, including the related-window path. Native appearance is applied before
    showing a window, without dynamic setters or arbitrary button offsets.
-2. **Policy implemented; native hookup pending:** distinct move-only and
+2. **Policy and native hookup implemented; visual validation pending:** distinct move-only and
    titlebar-region intents, using existing markers and CSS drag/no-drag.
    Interactive controls and any no-drag ancestor always win. An explicit
    positive marker cannot turn a button or an excluded subtree into a drag
@@ -152,18 +153,20 @@ mouse-up may not be delivered, so cleanup must not depend solely on mouse-up.
 The next checkpoint is the bounded native gesture hookup and per-window layout
 insets, followed by the custom Notes header and user visual review.
 
-## Native gesture prototype: upstream foundations ready
+## Native gesture integration checkpoint
 
 The one-shot DOM snapshot component and unit tests now exist in
 `bootstrap/window-drag.ts`. It requires a trusted left mouse-down, matching
 coordinates/click count, a short age limit, and an unchanged live hit path.
 Release prevents move-only dragging; a completed titlebar double-click remains
-classifiable. It is not installed in the production bridge yet.
+classifiable. It is now installed in document-bound bridges. Pre-activation
+input is discarded, and token replacement, disposal, blur and pagehide clear
+the snapshot. A reparented or reassigned hit path cannot authorize a gesture.
 
-The native integration draft is saved in
+The historical native integration draft is saved in
 [`prototypes/native-window-drag.patch`](prototypes/native-window-drag.patch).
-Do not apply it as a working implementation: it did not pass Z checking.
-Production native source has been restored to the last working checkpoint.
+Do not apply it: it has been superseded by `window-drag.zs` and the native
+window's ordinary Z-only weak-observer installation method.
 
 The two original upstream blockers are resolved in Z commits `9faef330` and
 `2b2883cd`: ordinary Z weak observer fields and private synchronous Z-only
@@ -189,11 +192,37 @@ methods, visibility, observer expiration, allocation balance and native reentry
 at O0/O2 with UBSan in both compiler paths. Fixed-point bootstrap also passes.
 
 The Z repository's `docs/native-subclass-z-state-design.md` describes the landed
-bounded tiers. The saved prototype remains uncompiled and unapplied; its
-temporary selector annotations are not an approved implementation.
+bounded tiers. The implementation uses no temporary selector annotations for
+Z-only methods. The runtime retains the observer; the native window and pending
+renderer completion use weak Z handles. Original mouse-down delivery proceeds
+before a bounded asynchronous query. The completion rechecks the document,
+window, event identity, and age; it does not pump the main run loop.
 
-Resume the framework integration by removing the draft's temporary selector
-annotations from Z-only methods, then validating native event/input
-ordering, callback expiration, document retirement, first-click behavior and
-real drags. The prototype's Fill preference branch is incomplete; do not call
-its double-click behavior finished. Geometry and the custom Notes header follow.
+Validation so far:
+
+- 309 runtime tests and TypeScript checks pass.
+- The headless document registry/readiness smoke passes in both compiler paths
+  at O0/O2 with UBSan, including navigation, closed endpoints, and unready children.
+- The AppKit titlebar matrix still passes in both compiler paths at O0/O2.
+- `bun native/z/testing/window-focus.ts --gestures --native` checks original
+  control-click input, weak observer expiration, and input fallback after release
+  in both compiler paths at O0/O2 with UBSan.
+- The packaged and development Notes smokes pass, including ordinary/related
+  windows, Svelte styling, worker calls, secondary launch and ordered shutdown.
+  Development also verifies CSS HMR update/removal and release of Vite's port.
+- The integration exposed three upstream native compiler gaps, now corrected:
+  class/instance property-name collisions, signed pointer-sized template
+  formatting, and assignment through object-returning class properties.
+  The fixes have focused positive/negative tests and fixed-point bootstrap proof.
+
+One full standalone Stage 0 window-graph check reached its 120-second limit
+while other compiler validation was running. The focused Stage 0 native tests
+above pass; the full graph passes with the native driver. Re-measure that
+standalone check in isolation before calling it a performance regression.
+
+These are not yet proof of real dragging, first-click behavior on an unfocused
+window, or double-click UX. The Fill preference branch remains incomplete and
+currently performs no action; no private AppKit selector or approximate fill
+geometry has been introduced. Resolve that behavior before calling double-click
+support complete. Native layout insets, a custom Notes header, and user visual
+review follow.

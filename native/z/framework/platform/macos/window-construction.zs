@@ -30,6 +30,7 @@ import {
 import { macOSWindowFrame } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { MacOSWindowGestures } from "./window-drag.zs";
 import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
@@ -105,6 +106,8 @@ internal function createMacOSWindowRuntime(
     style = style | WebKit.NSWindowStyleMaskResizable;
   }
   const window = new MacOSWindow(frame, macOSTitleBarStyleMask(style, in options.titleBar));
+  const gestures = new MacOSWindowGestures(window, webView, document);
+  window.observeGestures(weak gestures);
   const title = options.title.byteLength == 0
     ? copy name
     : copy options.title;
@@ -165,6 +168,7 @@ internal function createMacOSWindowRuntime(
     uiDelegate,
     windowDelegate,
     presentationObserver,
+    gestures,
     registration,
     document,
     capabilitySelection,

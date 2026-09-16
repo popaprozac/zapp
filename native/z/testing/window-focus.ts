@@ -9,6 +9,7 @@ const zRoot = resolve(process.argv.slice(2).find((arg) => !arg.startsWith("--"))
 const native = process.argv.includes("--native");
 const presentationOnly = process.argv.includes("--presentation");
 const titlebarOnly = process.argv.includes("--titlebar");
+const gesturesOnly = process.argv.includes("--gestures");
 const directory = await mkdtemp(join(tmpdir(), "zapp-window-focus-"));
 async function run(command: string[], timeoutMs: number): Promise<string> {
   const result = await runBoundedCommand(command, { cwd: root, timeoutMs });
@@ -18,7 +19,9 @@ async function run(command: string[], timeoutMs: number): Promise<string> {
 }
 try {
   if (native && process.platform !== "darwin") throw new Error("native focus probe requires macOS");
-  const fixtures = titlebarOnly ? [native ? "window-titlebar-native-smoke" : "window-titlebar-smoke"]
+  if (gesturesOnly && !native) throw new Error("gesture lifetime probe requires --native");
+  const fixtures = gesturesOnly ? ["window-gesture-lifetime-native-smoke"]
+    : titlebarOnly ? [native ? "window-titlebar-native-smoke" : "window-titlebar-smoke"]
     : native ? ["window-focus-native-smoke", "window-presentation-native-smoke"]
     : ["window-focus-smoke", "window-controls-smoke", "window-presentation-smoke", "window-manager-smoke", "window-events-smoke", "window-adoption-smoke", "window-family-smoke"];
   for (const fixture of fixtures) {

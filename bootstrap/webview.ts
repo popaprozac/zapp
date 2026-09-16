@@ -5,7 +5,7 @@
  * Built by bootstrap/codegen.ts → minified → embedded as C string in .zapp/zapp_bootstrap.zc.
  */
 
-import { resolveWindowDrag, windowDragPath } from "./window-drag";
+import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./window-drag";
 
 (function () {
   const BRIDGE_KEY = Symbol.for("zapp.bridge");
@@ -30,6 +30,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
     : "";
   let documentToken = "";
   let documentActive = false;
+  const windowGesture = createWindowDragGesture();
   let documentNeedsShell = false;
   let documentReadyListener: (() => void) | undefined;
   let waitingForDocument: string[] = [];
@@ -165,6 +166,12 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
   };
 
   const bridge = {
+    // Only the native host asks about its original mouse-down. A replacement
+    // or unready document cannot authorize a gesture from the previous realm.
+    _takeWindowDrag(token: string, x: number, y: number, clicks: number): number {
+      if (disposed || !documentActive || token !== documentToken) return 0;
+      return windowGesture.take(x, y, clicks);
+    },
     // Native evaluates this in the current document, but a late evaluation may
     // land after navigation. The realm guard prevents binding its replacement.
     _bindDocument(expectedRealm: string, token: string, needsShell = false): boolean {
@@ -173,6 +180,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
         || (token.length === documentToken.length && token < documentToken))) return false;
       if (token === documentToken && needsShell !== documentNeedsShell) return false;
       if (documentToken && token !== documentToken) {
+        windowGesture.clear();
         documentActive = false;
         retireRelatedObservers("The owning document was replaced.");
         const error = new Error("Native document session was replaced");
@@ -542,6 +550,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
     _dispose(error: Error): void {
       if (disposed) return;
       disposed = error;
+      windowGesture.clear();
       clearDocumentReadyListener();
       documentActive = false;
       retireRelatedObservers("The owning document was retired.");
@@ -560,6 +569,16 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
 
   (globalThis as any)[BRIDGE_KEY] = bridge;
   bridge._requestDocumentBinding();
+
+  if (documentBound) {
+    document.addEventListener("mousedown", (event) => {
+      if (!disposed && documentActive) windowGesture.record(event);
+      else windowGesture.clear();
+    }, true);
+    document.addEventListener("mouseup", () => windowGesture.release(), true);
+    window.addEventListener("blur", () => windowGesture.clear());
+    window.addEventListener("pagehide", () => windowGesture.clear());
+  }
 
   // Cleanup workers on page unload — terminate every worker this webview owns.
   window.addEventListener("pagehide", () => {
@@ -580,7 +599,7 @@ import { resolveWindowDrag, windowDragPath } from "./window-drag";
   // symbol is guaranteed present when this IIFE runs.
   const _cfg = (globalThis as any)[Symbol.for("zapp.bootstrapConfig")];
   const _isIOS = _cfg?.permissions?.platform === "ios";
-  if (!_isIOS) {
+  if (!_isIOS && !documentBound) {
     // Two intents, tracked separately:
     //   inDrag     — pointer is over a draggable region (move the window). Set by
     //                app-region:drag / --zapp-drag:drag / data-zapp-drag-region,
