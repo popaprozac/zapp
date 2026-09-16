@@ -21,6 +21,29 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
   const note = get(model.state).items[0];
   assert(note, "expected a persisted note");
   model.select(note.id);
+  await tick();
+  const mainHeader = document.querySelector<HTMLElement>(".workspace-header")!;
+  const mainRootStyle = getComputedStyle(document.documentElement);
+  const mainTop = parseFloat(mainRootStyle.getPropertyValue("--zapp-titlebar-height"));
+  const mainLeft = parseFloat(mainRootStyle.getPropertyValue("--zapp-window-controls-inset-left"));
+  assert(mainTop > 0 && mainLeft > 0, "owner uses its own inset titlebar geometry");
+  assert(mainHeader.getBoundingClientRect().top === 0, "owner header starts at the viewport top");
+  assert(mainHeader.getBoundingClientRect().bottom >= mainTop, "owner header clears native top chrome");
+  assert(mainHeader.firstElementChild!.getBoundingClientRect().left >= mainLeft, "owner title clears traffic lights");
+  const search = document.querySelector<HTMLInputElement>("#note-search")!;
+  const selectedBeforeSearch = get(model.state).selectedId;
+  search.value = "__no_note_matches_this_search__";
+  search.dispatchEvent(new Event("input", { bubbles: true })); await tick();
+  assert(document.querySelector("[data-empty-search]"), "header search filters the visible list");
+  assert(!document.querySelector("#notes li"), "search hides unmatched rows");
+  assert(get(model.state).selectedId === selectedBeforeSearch, "search does not change shared selection");
+  search.value = "";
+  search.dispatchEvent(new Event("input", { bubbles: true })); await tick();
+  assert(document.querySelector("#notes li"), "clearing search restores the visible list");
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  await new Promise(requestAnimationFrame);
+  assert(mainHeader.getBoundingClientRect().top === 0, "header remains under native controls while diagnostics scroll");
+  window.scrollTo(0, 0);
   let subscribers = 0;
   // Count only the inspector roots' subscriptions to the SAME store. The main
   // workspace keeps its own subscription; it must survive each child closing.

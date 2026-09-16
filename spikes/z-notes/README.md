@@ -27,7 +27,7 @@ zapp/
 frontend/
 ├── index.html        # Vite frontend entry
 ├── app.js            # application ES module and generated-service consumer
-├── NotesWorkspace.svelte # notes list and editor
+├── NotesWorkspace.svelte # custom titlebar, local search, notes list and editor
 ├── NoteInspector.svelte # related-document metadata/editor component
 ├── note-inspector.css # ordinary imported CSS shared with related inspectors
 ├── notes-model.ts     # shared selection and unsaved presentation state
@@ -238,7 +238,19 @@ bun cli/src/test-notes-launch-macos.ts dev
 
 ### Menus and windows
 
-**Open note inspector** mounts a Svelte metadata/editor component into a minimal
+The main window uses `titleBar: { style: hiddenInset, titleVisible: false }` in
+its Z `WindowOptions`. Its sticky Svelte header lays out beside native controls
+using each document's measured `--zapp-titlebar-height` and
+`--zapp-window-controls-inset-left`. Search filters the current presentation
+snapshot (including unsaved titles); it does not change the selected note,
+write to SQLite, or add another backend search API. Clearing it restores the
+list. The framework diagnostics remain below the workspace.
+
+The header uses `data-zapp-titlebar`; search and buttons are automatically
+excluded from dragging. See [Window titlebars](../../docs/window-titlebar.md)
+for the gesture contract and remaining macOS double-click limitations.
+
+**Inspector** in that header mounts a Svelte metadata/editor component into a minimal
 second native document without loading another frontend entrypoint. Select a
 note, open two inspectors, and edit its title in any of the three windows. The
 same owner-held store carries selection and unsaved text. Save persists through

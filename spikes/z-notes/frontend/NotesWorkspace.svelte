@@ -8,6 +8,10 @@
   let view = $derived(model.state);
   let inspectorState = $derived(inspectors.state);
   let creating = $state(false);
+  let search = $state("");
+  let query = $derived(search.trim().toLocaleLowerCase());
+  let visibleNotes = $derived($view.items.filter(note => !query
+    || `${note.draftTitle}\n${note.subtitle ?? ""}\n${note.id}`.toLocaleLowerCase().includes(query)));
   async function create() {
     if (creating) return;
     creating = true;
@@ -16,13 +20,20 @@
 </script>
 
 <section aria-label="Notes workspace" data-svelte-notes>
+  <header class="workspace-header" data-zapp-titlebar>
+    <div class="workspace-heading"><h1>Z Notes</h1><span>{$view.items.length} notes</span></div>
+    <input id="note-search" type="search" aria-label="Search notes" placeholder="Search notes" bind:value={search} />
+    <button id="related-inspector" type="button" disabled={$inspectorState.opening} onclick={() => inspectors.open()}>Inspector</button>
+  </header>
+  <div class="workspace-content">
+  <p class="workspace-description">Notes are owned by a Z service and persisted in SQLite.</p>
   <form class="controls" onsubmit={event => { event.preventDefault(); void create(); }}>
     <input id="note-title" aria-label="New note title" value={$view.draftTitle}
       oninput={event => model.setDraftTitle(event.currentTarget.value)} />
     <button id="ping" type="submit" disabled={creating}>Create a note in Z</button>
   </form>
   <ul id="notes" aria-live="polite">
-    {#each $view.items as note (note.id)}
+    {#each visibleNotes as note (note.id)}
       {@const selected = String(note.id) === $view.selectedId}
       <li class:selected data-selected-note={selected ? String(note.id) : undefined} aria-current={selected ? "true" : undefined}
         oncontextmenu={event => {
@@ -52,16 +63,39 @@
     {/each}
   </ul>
   {#if $view.loaded && !$view.items.length}<p>No notes yet. Create one to get started.</p>{/if}
+  {#if $view.loaded && $view.items.length && !visibleNotes.length}<p data-empty-search>No notes match “{search}”.</p>{/if}
   {#if $view.error}<p role="alert">{$view.error}</p>{/if}
   <h2>Related note inspectors</h2>
   <div class="controls">
-    <button id="related-inspector" type="button" disabled={$inspectorState.opening} onclick={() => inspectors.open()}>Open note inspector</button>
     <button id="close-inspectors" type="button" onclick={() => inspectors.closeAll()}>Close inspectors</button>
   </div>
   <p id="related-status">{$inspectorState.error || `${$inspectorState.count} inspector(s) share this Svelte state. Select a note, then edit its title in either window.`}</p>
+  </div>
 </section>
 
 <style>
+  section { display: contents; }
+  .workspace-header {
+    position: sticky; top: 0; z-index: 1;
+    display: flex; align-items: center; gap: 12px; box-sizing: border-box;
+    min-height: max(66px, var(--zapp-titlebar-height, 0px));
+    padding: 10px 20px 10px calc(var(--zapp-window-controls-inset-left, 0px) + 16px);
+    border-bottom: 1px solid light-dark(#d8dfe9, #394355);
+    background: light-dark(#edf2f9, #232c3c); user-select: none;
+  }
+  .workspace-heading { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 90px; }
+  h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.5px; white-space: nowrap; }
+  .workspace-heading span { color: light-dark(#657286, #aebbcf); font-size: 12px; white-space: nowrap; }
+  .workspace-header input { width: clamp(110px, 24vw, 240px); flex: 0 1 240px; padding: 7px 10px; }
+  .workspace-header button { flex-shrink: 0; padding: 7px 11px; }
+  .workspace-content { max-width: 760px; margin: auto; padding: 0 24px 24px; }
+  .workspace-description { color: light-dark(#657286, #aebbcf); font-size: 13px; margin: 20px 0; }
+  @media (max-width: 620px) { .workspace-heading span { display: none; } }
+  @media (max-width: 440px) {
+    .workspace-header { flex-wrap: wrap; gap: 8px; padding-top: max(14px, var(--zapp-titlebar-height, 0px)); padding-left: 16px; }
+    .workspace-heading { flex-basis: 100%; }
+    .workspace-header input { flex: 1; }
+  }
   .controls, .note-actions { display: flex; flex-wrap: wrap; gap: 10px; }
   input { min-width: 0; box-sizing: border-box; width: 100%; padding: 10px 12px;
     border: 1px solid #80808060; border-radius: 8px; background: transparent; color: inherit; font: inherit; }

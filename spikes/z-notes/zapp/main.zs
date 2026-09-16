@@ -23,6 +23,8 @@ import {
   WindowClosedEvent,
   WindowNavigationRequestedEvent,
   WindowOptions,
+  TitleBarOptions,
+  TitleBarStyle,
 } from "zapp/window";
 import {
   ApplicationWorkerEvent,
@@ -285,6 +287,10 @@ async function main(): i32 on thread.main {
     inject: Array<String>("base"),
     width: 720,
     height: 460,
+    titleBar: TitleBarOptions({
+      style: TitleBarStyle.hiddenInset,
+      titleVisible: false,
+    }),
   }));
   const window = match (createdWindow) {
     success(value) => value;

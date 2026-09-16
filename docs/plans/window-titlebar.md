@@ -83,7 +83,7 @@ These frameworks do not all give `hidden` identical control-visibility semantics
 3. **Implemented:** Publish per-window native chrome measurements for frontend layout, including
    related documents. Shared application CSS must not copy owner window geometry
    into a differently sized/styled child.
-4. **Inspector implemented; visual review pending:** Demonstrate a custom Svelte Notes header with functioning native controls,
+4. **Main header and inspector implemented; gesture review pending:** Demonstrate a custom Svelte Notes header with functioning native controls,
    clickable search/actions, drag regions, and the existing smooth resize path.
 
 Acceptance checks include all three styles with title text both visible and
@@ -225,6 +225,29 @@ window, or double-click UX. The Fill preference branch remains incomplete and
 currently performs no action; no private AppKit selector or approximate fill
 geometry has been introduced. Resolve that behavior before calling double-click
 support complete. User visual review remains necessary for actual gestures.
+
+## Main Notes header
+
+The ordinary Notes window now selects `hiddenInset` with independently hidden
+native title text. Its Svelte header consumes the per-document chrome metrics,
+keeps the titlebar region visible while the workspace/diagnostics scroll, and
+places ordinary search and inspector controls inside the exclusion-aware header.
+Search filters only the presentation snapshot, preserving shared selection and
+unsaved edits; it introduces no framework or service API.
+
+The packaged and development WebKit gates verify owner/child chrome separately,
+header positioning while scrolling, search/clear behavior, related state and
+stylesheet lifetimes, real CSS HMR update/prune, and Vite port release. These
+checks do not substitute for native drag, first-click or double-click input.
+
+An interactive dev run additionally verified typing/clearing search and opening
+and closing the related inspector through the header. The automation could not
+reliably target the native frame edges, so dragging, first-click while inactive,
+and manual resizing are still visual acceptance checks, not claimed passes.
+
+The installed macOS SDK still exposes no public Fill action. The public Zoom
+action is not equivalent to Fill. No private selector or silent Zoom fallback
+has been added; the custom titlebar's Fill preference remains a documented gap.
 
 ## Inspector geometry and resize safety
 

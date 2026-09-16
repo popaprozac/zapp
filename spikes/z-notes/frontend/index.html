@@ -11,14 +11,23 @@
       }
 
       body {
-        display: grid;
         min-height: 100vh;
         margin: 0;
-        place-content: center;
+        color: light-dark(#242e3e, #eaf0fa);
+        background: light-dark(#f8fafd, #1c2431);
       }
 
       main {
-        width: min(560px, calc(100vw - 64px));
+        width: 100%;
+      }
+
+      #notes-workspace { display: contents; }
+
+      .diagnostics {
+        box-sizing: border-box;
+        max-width: 808px;
+        margin: 0 auto;
+        padding: 0 24px 32px;
       }
 
       button {
@@ -88,9 +97,8 @@
   </head>
   <body>
     <main>
-      <h1>Z Notes</h1>
-      <p>Notes are owned by a Z service and persisted in SQLite.</p>
       <div id="notes-workspace"></div>
+      <div class="diagnostics">
       <h2>Framework diagnostics</h2>
       <div class="controls">
         <button id="cancel" type="button">Cancel a suspended request</button>
@@ -158,6 +166,7 @@
       </div>
       <pre id="shell-result">No shell operation has been requested.</pre>
       <pre id="status">Waiting for the bridge…</pre>
+      </div>
     </main>
 
     <script type="module" src="/app.js"></script>
