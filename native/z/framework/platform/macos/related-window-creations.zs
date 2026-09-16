@@ -11,6 +11,8 @@ import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanu
   RelatedCreationReply, RelatedCreationResult } from "../../related-window-creations.zs";
 import { Window, WindowManager, WindowOptions } from "../../window.zs";
 import { TitleBarOptions } from "../../window-titlebar.zs";
+import { WindowSizeLimits } from "../../window-sizing.zs";
+import { applyMacOSSizeLimits } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
@@ -36,6 +38,7 @@ class NativeCreation on thread.main {
   resizable: boolean;
   maximizable: boolean;
   fullscreenable: boolean;
+  sizeLimits: WindowSizeLimits;
   timer: WebKit.NSTimer | null;
   runtime: Option<MacOSWindowRuntime>;
   completed: boolean;
@@ -178,6 +181,7 @@ internal class MacOSRelatedWindows on thread.main {
     const record = new NativeCreation({ reservation: copy reservation, owner, ownerView, logicalOwner, address,
       title, width, height, deadline, timer: null, runtime: Option<MacOSWindowRuntime>.none,
       visible: true, titleBar: TitleBarOptions(), resizable: true, maximizable: true, fullscreenable: true,
+      sizeLimits: WindowSizeLimits(),
       completed: false, deferPublication: false, published: false, retiring: false });
     this.records.set(nativeId, record);
     record.timer = WebKit.NSTimer.scheduledTimerWithTimeInterval(10.0, repeats: false, block: move (timer): void => {
@@ -217,6 +221,10 @@ internal class MacOSRelatedWindows on thread.main {
       } }
       none => {}
     }
+  }
+
+  internal function configureSizeLimits(in reservation: RelatedWindowReservation, limits: WindowSizeLimits): void {
+    match (this.lookup(in reservation)) { some(record) => { record.sizeLimits = limits; } none => {} }
   }
 
   // Renderer correlation is only accepted within its authenticated owner.
@@ -306,6 +314,8 @@ internal class MacOSRelatedWindows on thread.main {
       success(value) => value;
       failure(_) => { this.fail(in reservation); return null; }
     };
+    const nativeWindow = runtime.window;
+    applyMacOSSizeLimits(in nativeWindow, record.sizeLimits);
     record.runtime = Option.some(runtime);
     const cleanup: RelatedCreationCleanup = move (): void => {
       match (attempt weakOwner.upgrade()) { success(owner) => owner.rollback(in reservation); failure(_) => {} }
@@ -339,6 +349,8 @@ internal class MacOSRelatedWindows on thread.main {
         let capabilities = Array<String>();
         for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
         const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height, visible: record.visible,
+          minWidth: record.sizeLimits.minWidth, minHeight: record.sizeLimits.minHeight,
+          maxWidth: record.sizeLimits.maxWidth, maxHeight: record.sizeLimits.maxHeight,
           inspectable: runtime.webView.inspectable ? Inspectable.enabled : Inspectable.disabled,
           titleBar: record.titleBar, resizable: record.resizable, maximizable: record.maximizable,
           fullscreenable: record.fullscreenable, url: copy record.address, capabilities: move capabilities });

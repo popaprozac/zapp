@@ -2,6 +2,8 @@ import { Map } from "std/collections";
 import { WindowPresentationState } from "./window-presentation.zs";
 import { TitleBarOptions } from "./window-titlebar.zs";
 import { Inspectable } from "./window-inspection.zs";
+import { WindowSize } from "./events.zs";
+import { WindowSizeLimits, checkedWindowSize } from "./window-sizing.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -16,6 +18,10 @@ export struct WindowOptions {
   url: String = "/";
   width: u32 = 900;
   height: u32 = 640;
+  minWidth: Option<u32> = Option<u32>.none;
+  minHeight: Option<u32> = Option<u32>.none;
+  maxWidth: Option<u32> = Option<u32>.none;
+  maxHeight: Option<u32> = Option<u32>.none;
   visible: boolean = true;
   resizable: boolean = true;
   maximizable: boolean = true;
@@ -54,6 +60,22 @@ internal type WindowBooleanOperation = (
   value: boolean
 ) => void on thread.main;
 
+internal type WindowGetSizeOperation = (in id: String) => WindowSize throws WindowError on thread.main;
+internal type WindowSetSizeOperation = (in id: String, size: WindowSize) => void throws WindowError on thread.main;
+
+function unavailableWindowSize(in id: String): WindowSize throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window size is unavailable" });
+}
+
+function unavailableWindowResize(in id: String, size: WindowSize): void throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window sizing is unavailable" });
+}
+
+internal function windowSizeLimits(in options: WindowOptions): WindowSizeLimits {
+  return WindowSizeLimits({ minWidth: options.minWidth, minHeight: options.minHeight,
+    maxWidth: options.maxWidth, maxHeight: options.maxHeight });
+}
+
 internal struct WindowBackend {
   create: WindowCreateOperation;
   show: WindowOperation;
@@ -65,6 +87,8 @@ internal struct WindowBackend {
   hide: WindowOperation;
   close: WindowOperation;
   setTitle: WindowTitleOperation;
+  getSize: WindowGetSizeOperation = unavailableWindowSize;
+  setSize: WindowSetSizeOperation = unavailableWindowResize;
   showContextMenu: WindowContextMenuOperation = unavailableContextMenu;
 }
 
@@ -114,6 +138,22 @@ export readonly class Window on thread.main {
   readonly id: String;
   readonly events: WindowEvents;
   internal readonly manager: Weak<WindowManager>;
+
+  function getSize(): WindowSize throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    return try owner.getSize(in this.id);
+  }
+
+  function setSize(size: WindowSize): void throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    try owner.setSize(in this.id, size);
+  }
 
   async function showContextMenu(
     in menu: Menu,
@@ -258,15 +298,19 @@ class WindowManagerState on thread.main {
     owner: Weak<WindowManager>,
     options: WindowOptions
   ): Window throws WindowError {
+    let checked = move options;
+    const size = try checkedWindowSize(WindowSize({ width: checked.width, height: checked.height }), windowSizeLimits(in checked));
+    checked.width = size.width;
+    checked.height = size.height;
     const id = `win-${this.nextId}`;
     this.nextId = this.nextId + 1;
     const window = new Window(copy id, owner);
-    if (this.active) try this.backend.create(in id, in options);
+    if (this.active) try this.backend.create(in id, in checked);
     this.windows.set(
       move id,
       WindowRecord({
         window,
-        options,
+        options: move checked,
       })
     );
     return window;
@@ -637,6 +681,19 @@ class WindowManagerState on thread.main {
     }
   }
 
+  function sizeLimits(in id: String): Option<WindowSizeLimits> {
+    const found = this.windows.get(id);
+    // Only copy the four scalar limits; no String/Array copies and no Map view
+    // may remain live when native resizing invokes application callbacks.
+    return match (in found) {
+      some(record) => Option.some(WindowSizeLimits({
+        minWidth: record.options.minWidth, minHeight: record.options.minHeight,
+        maxWidth: record.options.maxWidth, maxHeight: record.options.maxHeight,
+      }));
+      none => Option.none;
+    };
+  }
+
   function options(in id: String): Option<WindowOptions> {
     const found = this.windows.get(id);
     return match (in found) {
@@ -746,6 +803,23 @@ export readonly class WindowManager on thread.main {
 
   function all(): Array<Window> on thread.main {
     return this.state.all();
+  }
+
+  internal function getSize(in id: String): WindowSize throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    return try this.state.backend.getSize(in id);
+  }
+
+  internal function setSize(in id: String, size: WindowSize): void throws WindowError on thread.main {
+    if (!this.state.active) throw WindowError({ id: copy id, message: "native window is not available" });
+    const limits = match (this.state.sizeLimits(in id)) {
+      some(value) => value;
+      none => throw WindowError({ id: copy id, message: "window is no longer available" });
+    };
+    const checked = try checkedWindowSize(size, limits);
+    try this.state.backend.setSize(in id, checked);
   }
 
   internal function show(inout this, in id: String): void on thread.main {

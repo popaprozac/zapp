@@ -90,6 +90,30 @@ test("blocked opening awaits rollback and detaches its observer before rejection
   release(); expect((await pending).code).toBe("WINDOW_ERROR");
 });
 
+test("related size limits and queries preserve the child document bridge and lifetime", async () => {
+  const f = fixture(), invoke = f.owner.invoke;
+  let sent: any;
+  f.owner.invoke = async (method: string, args: unknown) => {
+    if (method === "__window:prepare-related") sent = args;
+    return invoke(method);
+  };
+  const handle = await createRelatedWindow({ minWidth: 200, maxHeight: 700 });
+  expect(sent.minWidth).toBe(200); expect(sent.maxHeight).toBe(700);
+  f.childBridge.invoke = async (method: string) => {
+    f.calls.push(`child:${method}`);
+    return { width: 400, height: 500 } as any;
+  };
+  await handle.setSize({ width: 400, height: 500 });
+  expect(await handle.getSize()).toEqual({ width: 400, height: 500 });
+  expect(f.calls.slice(-2)).toEqual(["child:__window:set-size", "child:__window:get-size"]);
+  f.invalidate();
+  await expect(handle.getSize()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  await expect(handle.setSize({ width: 400, height: 500 })).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  const before = f.calls.length;
+  await expect(createRelatedWindow({ minWidth: 900, maxWidth: 100 })).rejects.toBeInstanceOf(TypeError);
+  expect(f.calls).toHaveLength(before);
+});
+
 test("related window policies are checked and carried independently to native preparation", async () => {
   const f = fixture(), invoke = f.owner.invoke;
   let sent: any;

@@ -2,7 +2,7 @@ import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
-import { MacOSWindow, windowPresentationNotification, windowFullscreenNotification } from "./window-resize.zs";
+import { MacOSWindow, applyPendingWindowSize, windowPresentationNotification, windowFullscreenNotification } from "./window-resize.zs";
 import { deliverWebViewWindowEvent } from "./response-delivery.zs";
 
 internal struct WindowPresentationObserver on thread.main {
@@ -40,6 +40,7 @@ internal function observeWindowPresentation(
     queue: null,
     usingBlock: move (notification): void => {
       if (!observedWindow.presentationStable()) return;
+      applyPendingWindowSize(observedWindow);
       match (attempt owner.upgrade()) {
         success(windows) => {
           const maximized = observedWindow.zoomed;
@@ -60,6 +61,7 @@ internal function observeWindowPresentation(
     object: window,
     queue: null,
     usingBlock: move (notification): void => {
+      applyPendingWindowSize(observedWindow);
       match (attempt owner.upgrade()) {
         success(windows) => {
           const fullscreen = usize(observedWindow.styleMask & WebKit.NSWindowStyleMaskFullScreen) != 0;

@@ -622,6 +622,23 @@ document.querySelector("#unmaximize-window").addEventListener("click", () => win
 document.querySelector("#fullscreen-window").addEventListener("click", () => windowHandle.setFullscreen(true));
 document.querySelector("#exit-fullscreen-window").addEventListener("click", () => windowHandle.setFullscreen(false));
 
+for (const [id, width, height] of [["compact-window", 720, 460], ["roomy-window", 1100, 760]]) {
+  document.querySelector(`#${id}`).addEventListener("click", async () => {
+    try {
+      await windowHandle.setSize({ width, height });
+      document.querySelector("#window-size").textContent = `Requested ${width} × ${height}; restores later if maximized/fullscreen. Resize events report actual dimensions.`;
+    } catch (error) {
+      document.querySelector("#window-size").textContent = String(error);
+    }
+  });
+}
+document.querySelector("#measure-window").addEventListener("click", async () => {
+  try {
+    const { width, height } = await windowHandle.getSize();
+    document.querySelector("#window-size").textContent = `Native content: ${width} × ${height} logical units.`;
+  } catch (error) { document.querySelector("#window-size").textContent = String(error); }
+});
+
 async function verifyTypedServiceError() {
   try {
     await notes.create({ title: "", state: "active" });

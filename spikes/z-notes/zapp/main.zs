@@ -287,6 +287,8 @@ async function main(): i32 on thread.main {
     inject: Array<String>("base"),
     width: 720,
     height: 460,
+    minWidth: Option.some(u32(600)),
+    minHeight: Option.some(u32(400)),
     titleBar: TitleBarOptions({
       style: TitleBarStyle.hiddenInset,
       titleVisible: false,

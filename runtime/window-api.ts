@@ -10,6 +10,7 @@ import { createRelatedWindowBinding } from "./related-window";
 import { RelatedWindowEvent, type RelatedWindowHandle, type RelatedWindowCreateOptions } from "./related-window-contract";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
+import { checkSizeOptions, positiveDimension } from "./window-sizing";
 import { checkedTitleBar, type TitleBarOptions } from "./window-titlebar";
 export type { TitleBarOptions, TitleBarStyle } from "./window-titlebar";
 import { showWindowContextMenu, type MenuItem } from "./menu-api";
@@ -35,6 +36,10 @@ export interface WindowCreateOptions {
   url?: string;
   width?: number;
   height?: number;
+  minWidth?: number;
+  minHeight?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   visible?: boolean;
   resizable?: boolean;
   /** Allow maximizing/zooming. Independent of interactive edge resizing. */
@@ -113,6 +118,10 @@ export interface WindowEventSubscription {
 /** Identity-bearing frontend proxy for one native Zapp window. */
 export interface WindowHandle {
   readonly id: string;
+  /** Read native content dimensions, not cached or requested dimensions. */
+  getSize(): Promise<WindowSize>;
+  /** Request content size; native limits clamp it. Resolves on handling, not animation completion. */
+  setSize(size: WindowSize): Promise<void>;
   /** Present a native menu in this WebView; resolves on selection or dismissal. */
   showContextMenu(items: readonly MenuItem[], options: ContextMenuOptions): Promise<void>;
 
@@ -257,6 +266,21 @@ class FocusedWindowHandle implements WindowHandle {
     return showWindowContextMenu(this.id, items, options, this.bound);
   }
 
+  async getSize(): Promise<WindowSize> {
+    const value = await this.bridge().invoke("__window:get-size", { windowId: this.id });
+    if (!isRecord(value) || !positiveDimension(value.width) || !positiveDimension(value.height)) {
+      throw new WindowError({ operation: "getSize", windowId: this.id, message: "Native window returned invalid content dimensions." });
+    }
+    return { width: value.width, height: value.height };
+  }
+
+  async setSize(size: WindowSize): Promise<void> {
+    if (!isRecord(size) || !positiveDimension(size.width) || !positiveDimension(size.height)) {
+      throw new TypeError("Window size requires positive u32 width and height in logical units.");
+    }
+    await this.bridge().invoke("__window:set-size", { windowId: this.id, size: { width: size.width, height: size.height } });
+  }
+
   subscribe(
     event: typeof WindowEvent.FOCUS,
     handler: (event: WindowFocusedEvent) => void,
@@ -372,6 +396,7 @@ export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
   ensurePermission("window:create");
+  checkSizeOptions(options);
   for (const key of ["resizable", "maximizable", "fullscreenable"] as const) {
     if (options[key] !== undefined && typeof options[key] !== "boolean") throw new TypeError(`Window ${key} must be a boolean.`);
   }

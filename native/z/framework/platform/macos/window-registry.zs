@@ -1,4 +1,7 @@
 import WebKit from "WebKit/WebKit.h";
+import { WindowSize } from "../../events.zs";
+import { macOSWindowSize } from "./window-geometry.zs";
+import { requestWindowSize } from "./window-resize.zs";
 import { showMacOSNativeWindow, focusMacOSNativeWindow,
   minimizeMacOSNativeWindow, unminimizeMacOSNativeWindow,
   setMacOSNativeWindowMaximized, setMacOSNativeWindowFullscreen } from "./window-activation.zs";
@@ -181,16 +184,34 @@ internal class MacOSWindowRegistry on thread.main {
       windows.push(move window);
     }
     for (const window of windows) {
-      window.window.close();
+      const nativeWindow = window.window;
+      nativeWindow.close();
     }
   }
 
   function showWindow(in id: String): void on thread.main {
     const found = this.nativeWindow(in id);
     match (found) {
-      some(window) => showMacOSNativeWindow(in window.window);
+      some(window) => { const nativeWindow = window.window; showMacOSNativeWindow(in nativeWindow); }
       none => {}
     }
+  }
+
+  function getWindowSize(in id: String): WindowSize throws WindowError on thread.main {
+    const runtime = match (this.nativeWindow(in id)) {
+      some(value) => value;
+      none => throw WindowError({ id: copy id, message: "native window is no longer available" });
+    };
+    const window = runtime.window;
+    return try macOSWindowSize(in window);
+  }
+
+  function setWindowSize(in id: String, size: WindowSize): void throws WindowError on thread.main {
+    const runtime = match (this.nativeWindow(in id)) {
+      some(value) => value;
+      none => throw WindowError({ id: copy id, message: "native window is no longer available" });
+    };
+    requestWindowSize(runtime.window, f64(size.width), f64(size.height));
   }
 
   function focusWindow(in id: String): void on thread.main {
@@ -198,7 +219,7 @@ internal class MacOSWindowRegistry on thread.main {
     // AppKit's synchronous focus callbacks, which may close this window.
     const found = this.nativeWindow(in id);
     match (found) {
-      some(window) => focusMacOSNativeWindow(in window.window);
+      some(window) => { const nativeWindow = window.window; focusMacOSNativeWindow(in nativeWindow); }
       none => {}
     }
   }
@@ -208,7 +229,7 @@ internal class MacOSWindowRegistry on thread.main {
     sessions.invalidateWindow(in id);
     const found = this.nativeWindow(in id);
     match (found) {
-      some(window) => minimizeMacOSNativeWindow(in window.window);
+      some(window) => { const nativeWindow = window.window; minimizeMacOSNativeWindow(in nativeWindow); }
       none => {}
     }
   }
@@ -216,7 +237,7 @@ internal class MacOSWindowRegistry on thread.main {
   function unminimizeWindow(in id: String): void on thread.main {
     const found = this.nativeWindow(in id);
     match (found) {
-      some(window) => unminimizeMacOSNativeWindow(in window.window);
+      some(window) => { const nativeWindow = window.window; unminimizeMacOSNativeWindow(in nativeWindow); }
       none => {}
     }
   }
@@ -224,7 +245,7 @@ internal class MacOSWindowRegistry on thread.main {
   function setWindowMaximized(in id: String, value: boolean): void on thread.main {
     const found = this.nativeWindow(in id);
     match (found) {
-      some(window) => setMacOSNativeWindowMaximized(in window.window, value);
+      some(window) => { const nativeWindow = window.window; setMacOSNativeWindowMaximized(in nativeWindow, value); }
       none => {}
     }
   }
@@ -242,7 +263,8 @@ internal class MacOSWindowRegistry on thread.main {
           windows.fullscreenChangedNative(in id, current);
           return;
         }
-        setMacOSNativeWindowFullscreen(in window.window, value);
+        const nativeWindow = window.window;
+        setMacOSNativeWindowFullscreen(in nativeWindow, value);
       }
       none => {}
     }

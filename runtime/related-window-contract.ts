@@ -29,6 +29,10 @@ export interface RelatedWindowCreateOptions {
   title?: string;
   width?: number;
   height?: number;
+  minWidth?: number;
+  minHeight?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   /** Default true. False keeps the published native window hidden until show(). */
   visible?: boolean;
   /** Independent creation policies, each defaulting to true. */

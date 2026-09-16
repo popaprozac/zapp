@@ -8,6 +8,7 @@ import { BridgeDocument } from "../../bridge-document.zs";
 import {
   WindowManager,
   WindowOptions,
+  windowSizeLimits,
 } from "../../window.zs";
 import objc from "std/objc";
 import { thread } from "std/thread";
@@ -27,7 +28,7 @@ import {
   NativeWindowClosedOperation,
   createDesktopWindowDelegate,
 } from "./window-delegate.zs";
-import { macOSWindowFrame } from "./window-geometry.zs";
+import { macOSWindowFrame, applyMacOSSizeLimits } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
@@ -118,6 +119,7 @@ internal function createMacOSWindowRuntime(
     : copy options.title;
   window.title = move title;
   window.contentView = webView;
+  applyMacOSSizeLimits(in window, windowSizeLimits(in options));
   applyMacOSTitleBar(in window, in options.titleBar, in id);
   applyMacOSWindowPolicy(window, options.maximizable, options.fullscreenable);
   installWindowChrome(in webView, in contentController);

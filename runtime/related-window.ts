@@ -2,6 +2,7 @@ import { getBridge, type ZappBridge } from "./bridge";
 import { ensurePermission } from "./permissions";
 import { WindowError } from "./window-errors";
 import { checkedTitleBar } from "./window-titlebar";
+import { checkSizeOptions } from "./window-sizing";
 import { bindRelatedDocumentLifetime, type RelatedDocumentLifetime } from "./related-window-lifetime";
 import type { RelatedWindowCreateOptions } from "./related-window-contract";
 import { shareRelatedWindowStyles } from "./related-window-styles";
@@ -16,22 +17,18 @@ interface Prepared { windowId: string; documentToken: string; nativeId: number; 
 /** @internal No frontend owner, profile, URL, or navigation override crosses here. */
 function checkedOptions(options: RelatedWindowCreateOptions) {
   if (!options || typeof options !== "object" || Array.isArray(options)
-    || Object.keys(options).some(key => !["title", "width", "height", "visible", "resizable", "maximizable", "fullscreenable", "titleBar", "styles", "theme"].includes(key))) {
-    throw new TypeError("Related windows accept only title, width, height, visible, resizable, maximizable, fullscreenable, titleBar, styles, and theme.");
+    || Object.keys(options).some(key => !["title", "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight", "visible", "resizable", "maximizable", "fullscreenable", "titleBar", "styles", "theme"].includes(key))) {
+    throw new TypeError("Related windows accept only title, dimensions and size limits, visible, resizable, maximizable, fullscreenable, titleBar, styles, and theme.");
   }
   if (options.title !== undefined && typeof options.title !== "string") throw new TypeError("Related window title must be a string.");
-  for (const key of ["width", "height"] as const) {
-    const value = options[key];
-    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 0xffff_ffff)) {
-      throw new TypeError(`Related window ${key} must be a positive u32 integer.`);
-    }
-  }
+  checkSizeOptions(options);
   if (options.visible !== undefined && typeof options.visible !== "boolean") throw new TypeError("Related window visible must be a boolean.");
   for (const key of ["resizable", "maximizable", "fullscreenable"] as const) {
     if (options[key] !== undefined && typeof options[key] !== "boolean") throw new TypeError(`Related window ${key} must be a boolean.`);
   }
   if (options.styles !== undefined && options.styles !== "shared" && options.styles !== "independent") throw new TypeError('Related window styles must be "shared" or "independent".');
   return { native: { title: options.title, width: options.width, height: options.height, visible: options.visible,
+    minWidth: options.minWidth, minHeight: options.minHeight, maxWidth: options.maxWidth, maxHeight: options.maxHeight,
     resizable: options.resizable, maximizable: options.maximizable, fullscreenable: options.fullscreenable,
     ...(options.titleBar === undefined ? {} : { titleBar: checkedTitleBar(options.titleBar) }) },
     styles: options.styles ?? "shared", theme: normalizeRelatedWindowTheme(options.theme) };

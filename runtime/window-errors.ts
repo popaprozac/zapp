@@ -5,7 +5,7 @@ import {
   type BridgeErrorPayload,
 } from "./errors";
 
-export type WindowOperation = "create" | "close" | "navigate";
+export type WindowOperation = "create" | "close" | "navigate" | "getSize" | "setSize";
 
 export interface WindowErrorPayload {
   message: string;

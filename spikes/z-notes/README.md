@@ -6,6 +6,12 @@ runtime behavior is real, and Z's exact project import map now provides the
 intended public `zapp` module names. Package installation and version selection
 remain productization work.
 
+The window controls include **Compact**, **Roomy**, and **Read content size**.
+The main window has a 600 × 400 minimum content size. While maximized or
+fullscreen, Compact/Roomy records the latest ordinary size without exiting;
+restore the window to see it apply. See [window sizing](../../docs/window-sizing.md)
+for content units, limits, and animation acknowledgement semantics.
+
 ## The end-user application
 
 An application author currently owns the Z application modules under `zapp/`

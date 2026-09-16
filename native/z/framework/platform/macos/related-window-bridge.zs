@@ -1,5 +1,7 @@
 import json from "std/json";
 import { thread } from "std/thread";
+import { WindowSize } from "../../events.zs";
+import { WindowSizeLimits, checkedWindowSize } from "../../window-sizing.zs";
 import { BridgeMessage, BridgeMessageKind, BridgeResponse, bridgeSuccess,
   bridgePermissionFailure, bridgeCapabilityFailure } from "../../bridge.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
@@ -13,6 +15,10 @@ readonly struct RelatedOptions {
   title: String = "";
   width: u32 = 900;
   height: u32 = 640;
+  minWidth: Option<u32> = Option<u32>.none;
+  minHeight: Option<u32> = Option<u32>.none;
+  maxWidth: Option<u32> = Option<u32>.none;
+  maxHeight: Option<u32> = Option<u32>.none;
   visible: boolean = true;
   resizable: boolean = true;
   maximizable: boolean = true;
@@ -39,6 +45,7 @@ function validOptions(in source: String): boolean {
     object(fields) => {
       for (const field of fields) {
         if (field.key != "title" && field.key != "width" && field.key != "height" && field.key != "visible"
+          && field.key != "minWidth" && field.key != "minHeight" && field.key != "maxWidth" && field.key != "maxHeight"
           && field.key != "resizable" && field.key != "maximizable" && field.key != "fullscreenable" && field.key != "titleBar") return false;
       }
       select true;
@@ -75,12 +82,18 @@ internal function routeRelatedWindowBridgeMessage(
     none => return WindowBridgeRoute.response(creationFailure(message.id, "The owning document is no longer active."));
   };
   if (!capabilities.allowsPermission("window:create")) return WindowBridgeRoute.response(bridgeCapabilityFailure(message.id, "window:create"));
-  if (!validOptions(in message.arguments) || !validTitleBarFields(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window options: expected title, width, height, visible, resizable, maximizable, fullscreenable, or titleBar (style, titleVisible)."));
+  if (!validOptions(in message.arguments) || !validTitleBarFields(in message.arguments)) return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window options: expected title, width, height, minWidth, minHeight, maxWidth, maxHeight, visible, resizable, maximizable, fullscreenable, or titleBar (style, titleVisible)."));
   const options = match (attempt json.decode<RelatedOptions>(in message.arguments)) {
     success(value) => value;
     failure(_) => return WindowBridgeRoute.response(creationFailure(message.id, "Invalid related window dimensions or title."));
   };
   if (options.width == 0 || options.height == 0) return WindowBridgeRoute.response(creationFailure(message.id, "Related window dimensions must be positive."));
+  const limits = WindowSizeLimits({ minWidth: options.minWidth, minHeight: options.minHeight,
+    maxWidth: options.maxWidth, maxHeight: options.maxHeight });
+  const size = match (attempt checkedWindowSize(WindowSize({ width: options.width, height: options.height }), limits)) {
+    success(value) => value;
+    failure(error) => return WindowBridgeRoute.response(creationFailure(message.id, copy error.message));
+  };
   const titleBar = match (attempt checkedTitleBar(in options.titleBar)) {
     success(value) => value;
     failure(error) => return WindowBridgeRoute.response(creationFailure(message.id, move error));
@@ -97,11 +110,12 @@ internal function routeRelatedWindowBridgeMessage(
       failed(_) => {}
     }
   };
-  const reservation = match (windows.prepareRelatedWindow(in owner, copy options.title, options.width, options.height, reply)) {
+  const reservation = match (windows.prepareRelatedWindow(in owner, copy options.title, size.width, size.height, reply)) {
     some(value) => value;
     none => return WindowBridgeRoute.response(creationFailure(message.id, "Related window creation could not be prepared."));
   };
   windows.related.deferPublication(in reservation, options.visible, titleBar, options.resizable, options.maximizable, options.fullscreenable);
+  windows.related.configureSizeLimits(in reservation, limits);
   const address = match (windows.related.address(in reservation)) {
     some(value) => value;
     none => { windows.related.fail(in reservation); return WindowBridgeRoute.response(creationFailure(message.id, "Related window shell is unavailable.")); }

@@ -1,4 +1,5 @@
 import { WindowError } from "../../application-error.zs";
+import { WindowSize } from "../../events.zs";
 import {
   WindowBackend,
   WindowCreateOperation,
@@ -59,6 +60,16 @@ function closeMacOSWindow(in id: String): void on thread.main {
   current.windows.requestWindowClose(in id);
 }
 
+function getMacOSWindowSize(in id: String): WindowSize throws WindowError on thread.main {
+  const current = currentMacOSApplication();
+  return try current.windows.getWindowSize(in id);
+}
+
+function setMacOSWindowSize(in id: String, size: WindowSize): void throws WindowError on thread.main {
+  const current = currentMacOSApplication();
+  try current.windows.setWindowSize(in id, size);
+}
+
 function setMacOSWindowTitle(
   in id: String,
   in title: String
@@ -89,6 +100,8 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
     hide,
     close,
     setTitle,
+    getSize: getMacOSWindowSize,
+    setSize: setMacOSWindowSize,
     showContextMenu: showMacOSContextMenu,
   });
 }

@@ -12,6 +12,67 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
+test("size operations use acknowledged requests and validate both directions", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousId = (globalThis as any)[WINDOW_ID_KEY];
+  const calls: Array<[string, unknown]> = [];
+  let reply: unknown = { width: 900, height: 640 };
+  let acknowledge!: () => void;
+  (globalThis as any)[BRIDGE_KEY] = {
+    invoke(method: string, args: unknown) {
+      calls.push([method, args]);
+      return method === "__window:set-size" ? new Promise<void>(resolve => { acknowledge = resolve; }) : Promise.resolve(reply);
+    },
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "sized";
+  try {
+    const window = currentWindow();
+    const size = { width: 700, height: 500 };
+    let settled = false;
+    const request = window.setSize(size).then(() => { settled = true; });
+    size.width = 1;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(calls[0]).toEqual(["__window:set-size", { windowId: "sized", size: { width: 700, height: 500 } }]);
+    acknowledge(); await request;
+    expect(await window.getSize()).toEqual({ width: 900, height: 640 });
+    expect(calls[1]).toEqual(["__window:get-size", { windowId: "sized" }]);
+    for (const value of [0, -1, 1.5, NaN, Infinity, 0x1_0000_0000, "600", undefined, null]) {
+      await expect(window.setSize({ width: value, height: 400 } as any)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(calls).toHaveLength(2);
+    reply = { width: 0, height: 100 };
+    await expect(window.getSize()).rejects.toBeInstanceOf(WindowError);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousId;
+  }
+});
+
+test("creation validates independent optional size limits before native allocation", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const bootstrap = Symbol.for("zapp.bootstrapConfig");
+  const previousConfig = (globalThis as any)[bootstrap];
+  const previousHost = (globalThis as any).__zappBridge;
+  const calls: unknown[] = [];
+  (globalThis as any).__zappBridge = undefined;
+  (globalThis as any)[bootstrap] = { permissions: { platform: "macos", active: false, allow: [] } };
+  (globalThis as any)[BRIDGE_KEY] = { invoke: async (_method: string, args: unknown) => { calls.push(args); return { windowId: "size-created" }; } };
+  try {
+    await createWindow({ width: 100, minWidth: 300, maxHeight: 700 });
+    expect(calls[0]).toEqual({ width: 100, minWidth: 300, maxHeight: 700 });
+    for (const options of [{ minWidth: 0 }, { maxHeight: -1 }, { width: Infinity },
+      { minWidth: 900, maxWidth: 500 }, { minHeight: 700, maxHeight: 200 }, { minWidth: null }]) {
+      await expect(createWindow(options as any)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(calls).toHaveLength(1);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[bootstrap] = previousConfig;
+    (globalThis as any).__zappBridge = previousHost;
+  }
+});
+
 test("focused window package exposes its intended public values", () => {
   expect(Object.keys(windowAPI).sort()).toEqual([
     "RelatedWindowEvent",

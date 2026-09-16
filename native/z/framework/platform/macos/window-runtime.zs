@@ -5,11 +5,12 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowPresentationObserver } from "./window-presentation.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
+import { MacOSWindow } from "./window-resize.zs";
 
 internal class MacOSWindowRuntime on thread.main {
   readonly id: String;
   readonly nativeId: i32;
-  readonly window: WebKit.NSWindow;
+  readonly window: MacOSWindow;
   readonly webView: WebKit.WKWebView;
   readonly contentController: WebKit.WKUserContentController;
   readonly configuration: WebKit.WKWebViewConfiguration;

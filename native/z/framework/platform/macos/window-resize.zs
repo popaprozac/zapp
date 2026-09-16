@@ -57,6 +57,32 @@ function createDisplay(in window: MacOSWindow): QuartzCore.CADisplayLink on thre
   return link;
 }
 
+// Mutate pending state under its Z receiver loan, then dispatch native geometry
+// only after that loan ends. AppKit may synchronously reenter its window.
+internal function applyPendingWindowSize(window: MacOSWindow): void on thread.main {
+  const style = window.styleMask;
+  if (usize(style & WebKit.NSWindowStyleMaskFullScreen) != 0) return;
+  // AppKit reports a fixed-size window as zoomed even at its ordinary size.
+  // That must not prevent programmatic resizing of a non-resizable window.
+  if (usize(style & WebKit.NSWindowStyleMaskResizable) != 0 && window.zoomed) return;
+  match (window.takePendingContentSize()) {
+    some(size) => {
+      const current = window.frame;
+      const target = window.frameRectForContentRect(WebKit.NSMakeRect(0, 0, size.width, size.height));
+      // Preserve the outer top-left corner; only the content dimensions change.
+      window.resize(WebKit.NSMakeRect(current.origin.x,
+        current.origin.y + current.size.height - target.size.height,
+        target.size.width, target.size.height), true, true);
+    }
+    none => {}
+  }
+}
+
+internal function requestWindowSize(window: MacOSWindow, width: f64, height: f64): void on thread.main {
+  window.rememberContentSize(width, height);
+  applyPendingWindowSize(window);
+}
+
 // Internal AppKit geometry controller. Public Window APIs remain platform-neutral.
 internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   private gestures: Option<Weak<MacOSWindowGestures>>;
@@ -78,12 +104,18 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   private shuttingDown: boolean;
   private systemResize: boolean;
   private needsDisplay: boolean;
+  private pendingContentSize: boolean;
+  private pendingContentWidth: f64;
+  private pendingContentHeight: f64;
 
   constructor(frame: WebKit.CGRect, style: WebKit.NSWindowStyleMask) {
     super.initWithContentRect(frame,
       styleMask: style,
       backing: WebKit.NSBackingStoreBuffered, defer: false);
     this.displayLink = null;
+    this.pendingContentSize = false;
+    this.pendingContentWidth = 0;
+    this.pendingContentHeight = 0;
     this.startFrame = frame;
     this.targetFrame = frame;
     this.restoreFrame = frame;
@@ -115,6 +147,23 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   }
 
   internal function allowsFullscreen(): boolean { return this.allowFullscreen; }
+
+  // Last request wins. Native presentation state is authoritative even before
+  // its deferred event has reached the logical WindowManager.
+  internal function rememberContentSize(inout this, width: f64, height: f64): void {
+    if (this.shuttingDown) return;
+    this.pendingContentWidth = width;
+    this.pendingContentHeight = height;
+    this.pendingContentSize = true;
+  }
+
+  internal function takePendingContentSize(inout this): Option<WebKit.CGSize> {
+    if (!this.pendingContentSize || this.shuttingDown || this.systemResize || this.preparingZoom || this.applyingFrame
+      || (this.animating && this.zoomTransition)) return Option.none;
+    const size = WebKit.NSMakeSize(this.pendingContentWidth, this.pendingContentHeight);
+    this.pendingContentSize = false;
+    return Option.some(size);
+  }
 
   override function toggleFullScreen(inout this, in sender: objc.Object | null): void as "toggleFullScreen:" {
     // A creation policy forbids entry, never an exit back to an ordinary window.
@@ -315,6 +364,7 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
 
   override function close(inout this): void as "close" {
     this.shuttingDown = true;
+    this.pendingContentSize = false;
     this.animating = false;
     invalidateDisplay(this.displayLink);
     this.displayLink = null;

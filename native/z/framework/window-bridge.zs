@@ -1,5 +1,6 @@
 import json from "std/json";
 import { thread } from "std/thread";
+import { WindowSize } from "./events.zs";
 import { FrontendTitleBarOptions, validTitleBarFields, checkedTitleBar } from "./window-titlebar-bridge.zs";
 import {
   BridgeMessage,
@@ -25,6 +26,10 @@ readonly struct FrontendWindowOptions {
   url: String = "/";
   width: u32 = 900;
   height: u32 = 640;
+  minWidth: Option<u32> = Option<u32>.none;
+  minHeight: Option<u32> = Option<u32>.none;
+  maxWidth: Option<u32> = Option<u32>.none;
+  maxHeight: Option<u32> = Option<u32>.none;
   visible: boolean = true;
   resizable: boolean = true;
   maximizable: boolean = true;
@@ -38,6 +43,11 @@ readonly struct FrontendWindowCreated {
 
 readonly struct FrontendWindowAction {
   windowId: String;
+}
+
+readonly struct FrontendWindowSizeAction {
+  windowId: String;
+  size: WindowSize;
 }
 
 readonly struct FrontendWindowTitleAction {
@@ -148,6 +158,8 @@ function createWindow(
         url: copy options.url,
         width: options.width,
         height: options.height,
+        minWidth: options.minWidth, minHeight: options.minHeight,
+        maxWidth: options.maxWidth, maxHeight: options.maxHeight,
         visible: options.visible,
         resizable: options.resizable,
         maximizable: options.maximizable,
@@ -286,6 +298,28 @@ export function routeWindowBridgeMessage(
       capabilities,
       inout windows
     ));
+  }
+  if (message.method == "__window:get-size") {
+    const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "getSize", "invalid window identity"));
+    };
+    const response = match (attempt windows.getSize(in action.windowId)) {
+      success(size) => bridgeSuccess(message.id, json.encode(in size));
+      failure(error) => windowFailure(message.id, "getSize", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
+  if (message.method == "__window:set-size") {
+    const action = match (attempt json.decode<FrontendWindowSizeAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "setSize", "invalid window identity or content size"));
+    };
+    const response = match (attempt windows.setSize(in action.windowId, action.size)) {
+      success => bridgeSuccess(message.id, "null");
+      failure(error) => windowFailure(message.id, "setSize", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
   }
   if (message.method == "__zapp:windows-list") {
     return WindowBridgeRoute.response(listWindows(in message, in windows));
