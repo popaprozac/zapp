@@ -33,7 +33,10 @@ import {
   TitleBarOptions as FrameworkTitleBarOptions,
 } from "../../framework/window-titlebar.zs";
 
+import { Inspectable as FrameworkInspectable } from "../../framework/window-inspection.zs";
+
 export type TitleBarStyle = FrameworkTitleBarStyle;
+export type Inspectable = FrameworkInspectable;
 export type TitleBarOptions = FrameworkTitleBarOptions;
 export type Window = FrameworkWindow;
 export type WindowManager = FrameworkWindowManager;

@@ -428,6 +428,7 @@ async function runDev(root: string) {
       nativeDir,
       optimize: false,
       devUrl,
+      mode: "development",
       config,
       target,
       preparedZServices,

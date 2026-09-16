@@ -4,6 +4,7 @@ import math from "std/math";
 import objc from "std/objc";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
+import { Inspectable } from "../../window-inspection.zs";
 import { BridgeDocument, BridgeDocumentActivated } from "../../bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity } from "../../related-documents.zs";
 import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationCleanup,
@@ -300,6 +301,7 @@ internal class MacOSRelatedWindows on thread.main {
     const runtime = match (attempt createMacOSRelatedWindowRuntime(configuration, document,
       `related-${reservation.child.windowId}`, copy record.address, copy record.title,
       record.width, record.height, record.titleBar, record.resizable, record.maximizable, record.fullscreenable,
+      record.ownerView.inspectable,
       this.route, failed, closed, allowsCreation, createChild, this.windows)) {
       success(value) => value;
       failure(_) => { this.fail(in reservation); return null; }
@@ -337,6 +339,7 @@ internal class MacOSRelatedWindows on thread.main {
         let capabilities = Array<String>();
         for (const name of runtime.capabilitySelection.names) { capabilities.push(copy name); }
         const options = WindowOptions({ title: copy record.title, width: record.width, height: record.height, visible: record.visible,
+          inspectable: runtime.webView.inspectable ? Inspectable.enabled : Inspectable.disabled,
           titleBar: record.titleBar, resizable: record.resizable, maximizable: record.maximizable,
           fullscreenable: record.fullscreenable, url: copy record.address, capabilities: move capabilities });
         match (windows.adoptRelatedNative(record.logicalOwner, copy runtime.id, move options)) {

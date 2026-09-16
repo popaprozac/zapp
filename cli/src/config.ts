@@ -551,6 +551,8 @@ export interface WebviewInjectProfile {
 }
 
 export interface WebviewConfig {
+  /** Default inspection policy. Omitted: enabled in dev, disabled in production. */
+  inspectable?: boolean;
   /** Main WebView engine. The system engine remains the default. */
   engine?: PlatformValue<WebEngine>;
   /** URL schemes handled inside Zapp WebViews rather than by the OS. */
@@ -700,6 +702,7 @@ export interface ResolvedConfig {
   ios?: IOSConfig;
   webEngine?: PlatformValue<WebEngine>;
   webviewPreferences?: WebviewPreferences;
+  webviewInspectable?: boolean;
   webviewInject?: Record<string, WebviewInjectProfile>;
   native?: NativeConfig;
 }
@@ -1473,6 +1476,10 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     throw new Error("[zapp] config.application.name must be a non-empty string");
   }
   const normalizedName = name.trim();
+  if (config.webview?.inspectable !== undefined
+    && typeof config.webview.inspectable !== "boolean") {
+    throw new Error("[zapp] webview.inspectable must be a boolean");
+  }
   if (config.application.quitOnLastWindowClosed !== undefined
     && typeof config.application.quitOnLastWindowClosed !== "boolean") {
     throw new Error("[zapp] application.quitOnLastWindowClosed must be a boolean");
@@ -1499,6 +1506,7 @@ function normalizeConfig(config: ZappConfig): ResolvedConfig {
     webEngine: config.webview?.engine,
     protocols: config.webview?.protocols,
     webviewPreferences: config.webview?.preferences,
+    webviewInspectable: config.webview?.inspectable,
     webviewInject: config.webview?.inject,
     applicationWorkers: config.workers?.application,
     workerModules: config.workers?.modules,

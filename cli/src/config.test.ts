@@ -46,6 +46,24 @@ test("last-window policy is explicit, boolean, and retained in resolved configur
   }
 });
 
+test("inspection configuration preserves omission and rejects non-boolean overrides", async () => {
+  for (const value of [undefined, true, false, "false", 0, null]) {
+    const root = await mkdtemp(path.join(tmpdir(), "zapp-inspection-"));
+    try {
+      await writeFile(path.join(root, "zapp.config.ts"), `export default {
+        application: { name: "Inspection" }, webview: ${JSON.stringify({ inspectable: value })}
+      };`);
+      const context = createConfigContext(root, "dev", "macos");
+      if (value === undefined || typeof value === "boolean") {
+        const config = await loadConfig(root, context);
+        expect(config.webviewInspectable).toBe(value);
+      } else {
+        await expect(loadConfig(root, context)).rejects.toThrow(/webview.inspectable must be a boolean/);
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("defineConfig preserves object and contextual factory definitions", () => {
   const object = { application: { name: "notes" } };
   const factory = (context: ReturnType<typeof createConfigContext>) => ({

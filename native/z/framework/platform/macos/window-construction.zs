@@ -35,6 +35,9 @@ import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs
 import { applyMacOSWindowPolicy } from "./window-policy.zs";
 import { installWindowChrome } from "./window-chrome.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
+import { resolveInspectable } from "../../window-inspection.zs";
+import { configuredWebViewInspectable, configuredFrontendIsDevelopment, configureWebViewDeveloperExtras } from "./configured-webview.zs";
+import { MacOSWebView } from "./webview.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "./related-window-creations.zs";
 
@@ -77,10 +80,10 @@ internal function createMacOSWindowRuntime(
     options.width,
     options.height
   );
-  const webView = WebKit.WKWebView.alloc().initWithFrame(
-    frame,
-    configuration: configuration
-  );
+  const inspectable = resolveInspectable(options.inspectable, configuredWebViewInspectable());
+  configureWebViewDeveloperExtras(in configuration, inspectable);
+  const webView = new MacOSWebView(frame, configuration, configuredFrontendIsDevelopment());
+  webView.inspectable = inspectable;
   // Bind native sender identity before navigation can start. Registration owns
   // removal of the handler, breaking its retained WebView/controller references
   // when this runtime is released after native callbacks have unwound.

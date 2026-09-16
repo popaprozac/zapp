@@ -85,6 +85,7 @@ function rejectsTrustedWindowPolicy(in source: String): boolean {
     success(value) => {
       match (in value) {
         object(fields) => return fields.has("inject")
+          || fields.has("inspectable")
           || fields.has("capabilities")
           || fields.has("navigation");
         _ => return false;
@@ -111,13 +112,13 @@ function createWindow(
     return bridgeFailure(
       message.id,
       "INVALID_ARGUMENTS",
-      "INVALID_WINDOW_OPTIONS: inject, capabilities, and navigation are native application policy"
+      "INVALID_WINDOW_OPTIONS: inject, inspectable, capabilities, and navigation are native application policy"
     );
   }
 
   const ownerOptions = windows.options(in ownerWindowId);
-  const inheritedNavigation = match (ownerOptions) {
-    some(options) => copy options.navigation;
+  const inherited = match (ownerOptions) {
+    some(options) => options;
     none => return bridgeFailure(
       message.id,
       "INVALID_WINDOW",
@@ -153,7 +154,8 @@ function createWindow(
         fullscreenable: options.fullscreenable,
         titleBar,
         capabilities: capabilities.copyNames(),
-        navigation: move inheritedNavigation,
+        navigation: copy inherited.navigation,
+        inspectable: inherited.inspectable,
       }));
       select match (created) {
         success(window) => {

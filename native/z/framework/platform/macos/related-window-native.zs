@@ -17,6 +17,8 @@ import { WindowManager } from "../../window.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { createDesktopWindowDelegate, NativeWindowClosedOperation } from "./window-delegate.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
+import { MacOSWebView } from "./webview.zs";
+import { configuredFrontendIsDevelopment, configureWebViewDeveloperExtras } from "./configured-webview.zs";
 
 internal type RelatedNativeFailure = () => void on thread.main;
 internal type RelatedNativeAllowsCreation = (in view: WebKit.WKWebView, in action: WebKit.WKNavigationAction) => boolean on thread.main;
@@ -111,6 +113,7 @@ internal function createMacOSRelatedWindowRuntime(
   resizable: boolean,
   maximizable: boolean,
   fullscreenable: boolean,
+  inspectable: boolean,
   route: DesktopRouteMessageOperation,
   failed: RelatedNativeFailure,
   closed: NativeWindowClosedOperation,
@@ -123,7 +126,9 @@ internal function createMacOSRelatedWindowRuntime(
   const inject = Array<String>();
   try installWebViewScripts(controller, in id, in inject);
   const frame = macOSWindowFrame(width, height);
-  const view = WebKit.WKWebView.alloc().initWithFrame(frame, configuration: configuration);
+  configureWebViewDeveloperExtras(in configuration, inspectable);
+  const view = new MacOSWebView(frame, configuration, configuredFrontendIsDevelopment());
+  view.inspectable = inspectable;
   const handler = new DesktopMessageHandler({ document, expectedView: view,
     expectedController: controller, routeMessage: route });
   const registration = objc.register({

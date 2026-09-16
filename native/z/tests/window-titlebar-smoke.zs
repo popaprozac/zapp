@@ -1,6 +1,6 @@
 import { thread } from "std/thread";
 import { Set } from "std/collections";
-import { TitleBarOptions, TitleBarStyle, WindowOptions } from "../api/zapp/window.zs";
+import { TitleBarOptions, TitleBarStyle, WindowOptions, Inspectable } from "../api/zapp/window.zs";
 import { createWindowManager } from "../framework/window.zs";
 import { BridgeMessage, BridgeMessageKind } from "../framework/bridge.zs";
 import { routeWindowBridgeMessage } from "../framework/window-bridge.zs";
@@ -12,7 +12,8 @@ function main(): i32 on thread.main {
   if (defaults.titleBar.style != TitleBarStyle.default || !defaults.titleBar.titleVisible
     || !defaults.resizable || !defaults.maximizable || !defaults.fullscreenable) return 1;
   let windows = createWindowManager();
-  const owner = match (attempt windows.create(WindowOptions())) { success(value) => value; failure(_) => return 2; };
+  if (defaults.inspectable != Inspectable.auto) return 17;
+  const owner = match (attempt windows.create(WindowOptions({ inspectable: Inspectable.disabled }))) { success(value) => value; failure(_) => return 2; };
   let permissionNames = Set<String>(); permissionNames.add("window:create");
   const names = Array<String>("default");
   const methods = Set<String>();
@@ -35,6 +36,7 @@ function main(): i32 on thread.main {
   const all = windows.all();
   if (all.length != 6) return 5;
   const hidden = match (windows.options("win-4")) { some(value) => value; none => return 6; };
+  if (hidden.inspectable != Inspectable.disabled) return 18;
   if (hidden.titleBar.style != TitleBarStyle.hidden || !hidden.titleBar.titleVisible) return 7;
   const inset = match (windows.options("win-5")) { some(value) => value; none => return 8; };
   if (inset.titleBar.style != TitleBarStyle.hiddenInset || !inset.titleBar.titleVisible) return 9;
@@ -49,7 +51,8 @@ function main(): i32 on thread.main {
     '{"titleBar":{"titleVisible":0}}', '{"titleBar":{"titleVisible":null}}',
     '{"titleBar":{"titleVisibile":false}}', '{"titleBar":{"style":"hidden","controls":false}}',
     '{"titleBar":{"style":"hidden","style":"default"}}',
-    '{"maximizable":"false"}', '{"fullscreenable":0}', '{"resizable":null}'
+    '{"maximizable":"false"}', '{"fullscreenable":0}', '{"resizable":null}',
+    '{"inspectable":true}', '{"inspectable":"enabled"}', '{"inspectable":false}'
   );
   for (const source of invalid) {
     const message = BridgeMessage({ kind: BridgeMessageKind.invoke, id: 1, method: "__window:create", arguments: copy source });

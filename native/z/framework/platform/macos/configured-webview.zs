@@ -1,3 +1,13 @@
+import WebKit from "WebKit/WebKit.h";
+import { thread } from "std/thread";
+
+// Source-only checks and direct library builds use production policy. The CLI
+// generates a development implementation only for its explicit dev command.
+internal function configureWebViewDeveloperExtras(
+  in configuration: WebKit.WKWebViewConfiguration,
+  enabled: boolean
+): void on thread.main {}
+
 internal struct ConfiguredWebViewInjection {
   profile: String;
   source: String;
@@ -9,6 +19,10 @@ internal function configuredFrontendOrigin(): String {
 }
 
 internal function configuredFrontendIsDevelopment(): boolean {
+  return false;
+}
+
+internal function configuredWebViewInspectable(): boolean {
   return false;
 }
 

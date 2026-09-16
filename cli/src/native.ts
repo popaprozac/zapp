@@ -1094,6 +1094,8 @@ interface CompileOptions {
   output: string;            // Binary output path
   nativeDir: string;         // Framework source dir
   optimize: boolean;         // Size optimizations
+  /** Policy mode is independent of optimization and the frontend URL. */
+  mode?: import("./config").ZappConfigMode;
   /**
    * Vite dev-server URL (e.g. http://localhost:5173), set only for `zapp dev`.
    * The Nim build loads this as the initial URL in dev so the webview hits the
@@ -1450,6 +1452,7 @@ export async function compileNative(opts: CompileOptions): Promise<void> {
       optimize,
       target,
       config: opts.config,
+      mode: opts.mode ?? "production",
       devUrl: opts.devUrl,
       preparedServices: opts.preparedZServices,
     });

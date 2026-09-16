@@ -1,6 +1,7 @@
 import { Map } from "std/collections";
 import { WindowPresentationState } from "./window-presentation.zs";
 import { TitleBarOptions } from "./window-titlebar.zs";
+import { Inspectable } from "./window-inspection.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -20,6 +21,7 @@ export struct WindowOptions {
   maximizable: boolean = true;
   fullscreenable: boolean = true;
   titleBar: TitleBarOptions = TitleBarOptions();
+  inspectable: Inspectable = Inspectable.auto;
   inject: Array<String> = Array<String>();
   capabilities: Array<String> = Array<String>("default");
   navigation: String = "default";

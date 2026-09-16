@@ -11,6 +11,7 @@ import {
   renderZConfiguredDesktopSmoke,
   renderZConfiguredFilesystem,
   renderZConfiguredWebView,
+  renderZWebViewDeveloperExtras,
   renderZWebviewBootstrapConfig,
   renderZNativeManifest,
   rebaseZServiceManifest,
@@ -369,6 +370,29 @@ describe("Z frontend origin", () => {
 });
 
 describe("renderZConfiguredWebView", () => {
+  it("uses explicit build mode, not URL or optimization, and honors either override", () => {
+    for (const mode of ["development", "production"] as const) {
+      for (const inspectable of [undefined, true, false]) {
+        for (const origin of ["zapp://app/", "http://localhost:5173/", "https://example.test/"]) {
+          const output = renderZConfiguredWebView("", origin, [], { mode, inspectable });
+          expect(output).toContain(`configuredFrontendIsDevelopment(): boolean {\n  return ${mode === "development"};`);
+          expect(output).toContain(`configuredWebViewInspectable(): boolean {\n  return ${inspectable ?? mode === "development"};`);
+          if (mode === "production") {
+            expect(output).not.toContain('forKey:@"developerExtrasEnabled"');
+            expect(output).not.toContain("_setDeveloperExtrasEnabled:");
+            expect(output).not.toContain("raw objc");
+          }
+        }
+      }
+    }
+  });
+  it("guards the dev-only preference and falls back without an Objective-C exception", () => {
+    const dev = renderZWebViewDeveloperExtras("development");
+    expect(dev).toContain("respondsToSelector:");
+    expect(dev).toContain("@catch (NSException");
+    expect(dev).toContain('setValue:@(enabled) forKey:@"developerExtrasEnabled"');
+    expect(renderZWebViewDeveloperExtras("production")).not.toContain("_setDeveloperExtrasEnabled:");
+  });
   it("emits bootstrap, origin, and ordered injections as typed Z values", () => {
     const output = renderZConfiguredWebView(
       'globalThis.message = "ready";\n',
@@ -379,6 +403,7 @@ describe("renderZConfiguredWebView", () => {
         sourcePath: "src/preload.ts",
         source: 'globalThis.preloaded = "yes";',
       }],
+      { mode: "production" },
       [{
         name: "default",
         allowsSelf: true,
@@ -388,6 +413,7 @@ describe("renderZConfiguredWebView", () => {
     );
     expect(output).toContain('return "zapp://app/";');
     expect(output).toContain("configuredFrontendIsDevelopment");
+    expect(output).toContain("configuredWebViewInspectable");
     expect(output).toContain("return false;");
     expect(output).toContain('return "globalThis.message = \\"ready\\";\\n";');
     expect(output).toContain('profile: "base"');
@@ -562,6 +588,7 @@ describe("Z native host inputs", () => {
       "navigation-policy.zs",
       "related-window-creations.zs",
       "related-window-native.zs",
+      "webview.zs",
     ];
     const macOSModules = macOSModulePaths.map((module) => readFileSync(
       new URL(`../../native/z/framework/platform/macos/${module}`, import.meta.url),
@@ -594,7 +621,7 @@ describe("Z native host inputs", () => {
       "utf8",
     );
 
-    expect(macOSModules).toHaveLength(24);
+    expect(macOSModules).toHaveLength(25);
     expect(macOSModules.every((module) => module.split("\n").length < 700)).toBe(true);
     expect(macOSModules[1]).toContain("readonly windows: MacOSWindowRegistry on thread.main");
     expect(macOSModules[1]).not.toContain("function createWindow(");
@@ -705,9 +732,12 @@ describe("Z native host inputs", () => {
     expect(windowBridge).toContain('message.method == "close"');
     expect(windowBridge).toContain('message.method == "setTitle"');
     expect(windowBridge).toContain('fields.has("navigation")');
-    expect(windowBridge).toContain("copy options.navigation");
-    expect(windowBridge).toContain("navigation: move inheritedNavigation");
-    expect(macOSPlatform).toContain("new MacOSWindow(frame, style)");
+    expect(windowBridge).toContain('fields.has("inspectable")');
+    expect(windowBridge).toContain("navigation: copy inherited.navigation");
+    expect(windowBridge).toContain("inspectable: inherited.inspectable");
+    expect(macOSPlatform).toContain("record.ownerView.inspectable");
+    expect(macOSPlatform).toContain("filterMacOSWebViewMenu(in menu, this.development)");
+    expect(macOSPlatform).toContain("new MacOSWindow(frame, macOSTitleBarStyleMask(style, in options.titleBar))");
     expect(macOSPlatform).toContain("this.releasedWhenClosed = false");
     expect(macOSPlatform).toContain("super.orderOut(null);\n    super.close();");
     expect(macOSPlatform).toContain("objc.selector(MacOSWindow.onDisplay)");
