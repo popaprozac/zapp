@@ -1,5 +1,11 @@
 # Z Notes application spike
 
+The main window opts into [placement restoration](../../docs/window-state.md)
+with the native-only key `notes.main`. Move/resize it, close the app, and run it
+again to see the ordinary size, position, and maximized state restored. Inspectors
+remain explicitly placed beside their owner. Saved placement lives in the app's
+data directory, not the build output or configuration.
+
 This is the first Zapp project whose application-owned Z source is physically
 separate from the reusable framework. It is intentionally still a spike: the
 runtime behavior is real, and Z's exact project import map now provides the

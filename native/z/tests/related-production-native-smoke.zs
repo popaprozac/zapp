@@ -7,6 +7,7 @@ import console from "std/console";
 import json from "std/json";
 import { Set } from "std/collections";
 import { thread } from "std/thread";
+import { MacOSWindowStateObserver } from "../framework/platform/macos/window-state.zs";
 import { CapabilitySelection } from "../framework/application-capabilities.zs";
 import { BridgeDocument } from "../framework/bridge-document.zs";
 import { RelatedDocuments, RelatedDocumentIdentity, createRelatedDocuments } from "../framework/related-documents.zs";
@@ -382,7 +383,8 @@ function main(): i32 on thread.main {
   const closed: NativeWindowClosedOperation = move (nativeId: i32): void => {
     owner.close(); related.pruneInvalidated();
   };
-  const delegate = createDesktopWindowDelegate("owner", 1, window, view, weak windows, closed);
+  const noState = Option<MacOSWindowStateObserver>.none;
+  const delegate = createDesktopWindowDelegate("owner", 1, window, view, weak windows, closed, in noState);
   window.delegate = delegate;
   window.makeKeyAndOrderFront(null);
   const scenario = args.length == 4 ? args[3].copyBytes(2, args[3].byteLength) : "adopted";

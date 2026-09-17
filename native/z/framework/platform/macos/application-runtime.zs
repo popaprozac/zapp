@@ -14,6 +14,7 @@ import { createRelatedDocuments } from "../../related-documents.zs";
 import { RelatedWindowCreations } from "../../related-window-creations.zs";
 import { MacOSRelatedWindows } from "./related-window-creations.zs";
 import { MacOSWindowRegistry } from "./window-registry.zs";
+import { WindowStateStore } from "../../window-state.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
 import { Map } from "std/collections";
@@ -120,6 +121,7 @@ internal function currentMacOSApplication(): MacOSApplicationRuntime {
 internal function abortMacOSApplicationRuntime(): void on thread.main {
   const current = application.get();
   current.windows.closeAllNativeWindows();
+  current.windows.stateStore.stop();
 }
 
 internal function requestMacOSApplicationQuit(): void on thread.main {
@@ -294,7 +296,8 @@ internal function initializeMacOSApplicationRuntimeState(
   shell: ShellManager,
   files: FileManager,
   menu: ApplicationMenu,
-  routeMessage: DesktopRouteMessageOperation
+  routeMessage: DesktopRouteMessageOperation,
+  stateStore: WindowStateStore
 ): OnceLifetime<MacOSApplicationRuntime> on thread.main {
   const requests = createApplicationWorkerServiceRequests();
   const beginWorkerServiceRequest: BeginWorkerServiceRequest = move (
@@ -327,6 +330,7 @@ internal function initializeMacOSApplicationRuntimeState(
   const creations = new RelatedWindowCreations(documents);
   const windows = new MacOSWindowRegistry({
     name: move name,
+    stateStore,
     capabilities,
     windowManager,
     menu,

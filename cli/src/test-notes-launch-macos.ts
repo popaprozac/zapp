@@ -2,7 +2,7 @@
 // fixture owns failure/ABI probes; this gate exercises the developer commands.
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { runBoundedCommand, signalProcessTree, terminateProcessTree } from "./bounded-process";
@@ -34,6 +34,12 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
     await writeFile(hmrEntry, 'import "./style.css";\nexport const revision = "initial";\nif(import.meta.hot) import.meta.hot.accept();\n');
   }
   const identifier = `com.zapp.z-notes.launch-smoke.${randomUUID()}`;
+  const dataDirectory = path.join(homedir(), "Library/Application Support", identifier);
+  await mkdir(dataDirectory, { recursive: true });
+  const statePath = path.join(dataDirectory, "window-state.json");
+  const savedPlacement = { key: "notes.main", width: 760, height: 520, x: 120, y: 120, maximized: false };
+  await writeFile(statePath, JSON.stringify({ version: 1, windows: [savedPlacement] }));
+  const initialStateTime = (await lstat(statePath)).mtimeMs;
   const key = createHash("sha256").update(identifier).digest("hex");
   const socket = `/private/tmp/zapp-launch-${process.geteuid!()}/${key}`;
   const binary = path.join(notes, ".zapp/smoke/bin/Z Notes.app/Contents/MacOS",
@@ -133,6 +139,11 @@ for (const mode of selected ? [selected] : ["packaged", "dev"]) {
       assert.ok(output.includes('"styleHmrPhase":"pruned"'), "Vite CSS HMR and import pruning must reach the children");
     }
     assert.ok(!output.includes("deep link opened note"), "URL-looking arguments must not become implicit URL events");
+    const persisted = JSON.parse(await readFile(statePath, "utf8"));
+    assert.deepEqual(persisted, { version: 1, windows: [savedPlacement] },
+      "The native-created Notes window must restore its content geometry; related/dynamic windows must not acquire state keys");
+    assert.ok((await lstat(statePath)).mtimeMs > initialStateTime, "The final placement must be saved before process exit");
+    await assert.rejects(lstat(path.join(dataDirectory, "window-state.pending")), { code: "ENOENT" });
     if (mode === "dev") assert.ok(output.includes("Z Notes dev smoke released Vite port 5173"), output);
     await assert.rejects(lstat(socket), { code: "ENOENT" });
     console.log(`Z Notes ${mode}: one primary, one forwarded launch, worker/WebView checks and ordered shutdown passed`);

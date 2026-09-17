@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   RelatedWindowEvent,
   createRelatedWindow,
+  createWindow,
   RelatedWindowInvalidatedError,
   WindowEvent,
   type RelatedWindowHandle,
@@ -25,6 +26,10 @@ test("related handle preserves existing controls and typed subscription overload
     void createRelatedWindow({ url: "/other.html" });
     // @ts-expect-error Injection policy is not a first-tier option.
     void createRelatedWindow({ inject: ["base"] });
+    // @ts-expect-error Saved-state slots are selected only by native application code.
+    void createRelatedWindow({ stateKey: "notes.main" });
+    // @ts-expect-error The ordinary frontend window factory cannot select saved state either.
+    void createWindow({ stateKey: "notes.main" });
     const base: WindowHandle = related;
     base.focus();
     related.close();

@@ -103,6 +103,7 @@ function rejectsTrustedWindowPolicy(in source: String): boolean {
       match (in value) {
         object(fields) => return fields.has("inject")
           || fields.has("inspectable")
+          || fields.has("stateKey")
           || fields.has("capabilities")
           || fields.has("navigation");
         _ => return false;
@@ -129,7 +130,7 @@ function createWindow(
     return bridgeFailure(
       message.id,
       "INVALID_ARGUMENTS",
-      "INVALID_WINDOW_OPTIONS: inject, inspectable, capabilities, and navigation are native application policy"
+      "INVALID_WINDOW_OPTIONS: inject, inspectable, capabilities, navigation, and stateKey are native application policy"
     );
   }
 

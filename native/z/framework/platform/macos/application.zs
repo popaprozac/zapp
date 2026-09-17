@@ -30,6 +30,8 @@ import {
   installApplicationWorkerManager,
 } from "../../worker/manager-runtime.zs";
 import { initializeMacOSApplicationRuntime } from "./runtime.zs";
+import { WindowStateStore, WindowStateInbox,
+  writeWindowStates } from "../../window-state.zs";
 import {
   initializeMacOSApplicationHost,
   runMacOSApplicationLoop,
@@ -126,6 +128,16 @@ async function runMacOSPrimaryApplication(
   updates: TaskScope
 ): i32 throws ApplicationError on thread.main {
   const context = config.contextSnapshot();
+  const stateInbox = new WindowStateInbox();
+  const { sender: stateSender, receiver: stateReceiver } = Channel<boolean>.bounded(1);
+  const stateSyncReceiver = stateReceiver.sync();
+  const stateDirectory = copy context.paths.data;
+  const stateWriter = thread.spawn(move (): void => {
+    writeWindowStates(move stateDirectory, stateInbox, move stateSyncReceiver);
+  });
+  // Signal explicitly before every exit. Z joins child threads before local
+  // destructors, so shutdown must not depend on a destructor waking the writer.
+  const stateStore = new WindowStateStore(copy context.paths.data, stateInbox, stateSender.sync());
   let windows = config.windows;
   let dialogs = config.dialogs;
   let clipboard = config.clipboard;
@@ -150,7 +162,8 @@ async function runMacOSPrimaryApplication(
     notifications,
     shell,
     files,
-    menu
+    menu,
+    stateStore
   );
   const workerManagerLifetime = installApplicationWorkerManager(
     workerManager
@@ -251,6 +264,9 @@ async function runMacOSPrimaryApplication(
   dialogs.stop();
   menu.stop();
   windows.stop();
+  stateStore.stop();
+  // The native thread owner joins on function exit, after window teardown.
+  // Keep service shutdown independent of the writer's final disk operation.
   await updates.cancel();
   const stopped = attempt config.lifecycles.stop(in context);
   match (stopped) {

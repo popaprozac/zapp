@@ -21,6 +21,7 @@ import { deliverRelatedDocumentCreated } from "./related-window-delivery.zs";
 import { Map } from "std/collections";
 import { thread } from "std/thread";
 import { WindowManager, WindowOptions } from "../../window.zs";
+import { WindowStateStore } from "../../window-state.zs";
 import { stopMacOSRunLoop } from "./application-host.zs";
 import { DesktopRouteMessageOperation } from "./document-transport.zs";
 import { createMacOSWindowRuntime } from "./window-construction.zs";
@@ -35,6 +36,7 @@ import { NativeWindowClosedOperation } from "./window-delegate.zs";
 // application-runtime; no callback captures the application ARC owner.
 internal class MacOSWindowRegistry on thread.main {
   readonly name: String;
+  readonly stateStore: WindowStateStore;
   readonly capabilities: ApplicationCapabilities;
   readonly windowManager: WindowManager;
   readonly menu: ApplicationMenu;
@@ -112,7 +114,8 @@ internal class MacOSWindowRegistry on thread.main {
       didClose,
       this.contextMenus,
       this.menu,
-      this.related
+      this.related,
+      this.stateStore
     );
     this.nativeWindows.set(nativeId, runtime);
   }

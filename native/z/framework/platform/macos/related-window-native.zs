@@ -1,6 +1,7 @@
 import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
+import { MacOSWindowStateObserver } from "./window-state.zs";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
 import { DesktopRouteMessageOperation, requestBridgeDocumentBinding } from "./document-transport.zs";
@@ -151,8 +152,9 @@ internal function createMacOSRelatedWindowRuntime(
   const uiController = new RelatedUI({ view, window, createChild });
   const navigation = objc.adapt<WebKit.WKNavigationDelegate>(navigationController);
   const ui = objc.adapt<WebKit.WKUIDelegate>(uiController);
-  const delegate = createDesktopWindowDelegate(copy id, document.windowId, window, view, windows, closed);
-  const presentationObserver = observeWindowPresentation(copy id, window, view, windows);
+  const noState = Option<MacOSWindowStateObserver>.none;
+  const delegate = createDesktopWindowDelegate(copy id, document.windowId, window, view, windows, closed, in noState);
+  const presentationObserver = observeWindowPresentation(copy id, window, view, windows, in noState);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;
   window.delegate = delegate;

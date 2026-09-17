@@ -1,5 +1,7 @@
 # Window bounds and displays
 
+For automatic native-selected restoration, see [remembering window placement](window-state.md).
+
 Measure a window and its current display through the window handle:
 
 ```ts

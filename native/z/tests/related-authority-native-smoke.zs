@@ -14,6 +14,8 @@ import { RelatedDocumentIdentity, createRelatedDocuments } from "../framework/re
 import { RelatedWindowCreations, RelatedCreationReply, RelatedCreationResult } from "../framework/related-window-creations.zs";
 import { MacOSRelatedWindows } from "../framework/platform/macos/related-window-creations.zs";
 import { MacOSWindowRegistry } from "../framework/platform/macos/window-registry.zs";
+import { WindowStateStore, WindowStateInbox } from "../framework/window-state.zs";
+import { Channel } from "std/channel";
 import { MacOSWindowRuntime } from "../framework/platform/macos/window-runtime.zs";
 import { DesktopRouteMessageOperation } from "../framework/platform/macos/document-transport.zs";
 import { NativeWindowClosedOperation } from "../framework/platform/macos/window-delegate.zs";
@@ -284,7 +286,10 @@ function main(): i32 on thread.main {
     }
   };
   const related = new MacOSRelatedWindows(documents, creations, route, weak windows, closed);
+  const { sender: stateSender, receiver: stateReceiver } = Channel<boolean>.bounded(1);
+  const stateStore = new WindowStateStore("", new WindowStateInbox(), stateSender.sync());
   const registry = new MacOSWindowRegistry({ name: "Related authority", capabilities, windowManager: windows,
+    stateStore,
     menu: createApplicationMenu(), contextMenus: createContextMenuSessions(), routeMessage: route,
     documents, creations, related, didCloseNativeWindow: closed,
     nativeWindows: Map<i32, MacOSWindowRuntime>(), retiredNativeWindows: Array<MacOSWindowRuntime>(), nextNativeWindowId: 1 });

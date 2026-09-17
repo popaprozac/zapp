@@ -205,6 +205,13 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     return this.animating && !this.zoomTransition ? this.targetFrame : this.frame;
   }
 
+  internal function restorationFrame(): Option<WebKit.CGRect> {
+    if (this.systemResize || this.preparingZoom || this.applyingFrame
+      || usize(this.styleMask & WebKit.NSWindowStyleMaskFullScreen) != 0) return Option.none;
+    if (this.hasRestoreFrame && (this.zoomed || this.zoomTransition)) return Option.some(this.restoreFrame);
+    return Option.some(this.geometryBaseFrame());
+  }
+
   internal function takePendingGeometry(inout this): Option<WindowGeometryRequest> {
     if ((!this.pendingContentSize && !this.pendingPosition) || this.shuttingDown || this.systemResize || this.preparingZoom || this.applyingFrame
       || (this.animating && this.zoomTransition)) return Option.none;

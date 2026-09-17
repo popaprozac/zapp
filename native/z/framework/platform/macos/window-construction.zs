@@ -31,6 +31,8 @@ import {
 import { macOSWindowFrame, applyMacOSSizeLimits } from "./window-geometry.zs";
 import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { WindowStateStore } from "../../window-state.zs";
+import { restoreMacOSWindow } from "./window-state.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
 import { macOSTitleBarStyleMask, applyMacOSTitleBar } from "./window-titlebar.zs";
 import { applyMacOSWindowPolicy } from "./window-policy.zs";
@@ -54,7 +56,8 @@ internal function createMacOSWindowRuntime(
   didCloseNativeWindow: NativeWindowClosedOperation,
   contextMenus: ContextMenuSessions,
   menu: ApplicationMenu,
-  related: MacOSRelatedWindows
+  related: MacOSRelatedWindows,
+  stateStore: WindowStateStore
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = WebKit.WKUserContentController.alloc().init();
   const configuration = WebKit.WKWebViewConfiguration.alloc().init();
@@ -122,6 +125,8 @@ internal function createMacOSWindowRuntime(
   applyMacOSSizeLimits(in window, windowSizeLimits(in options));
   applyMacOSTitleBar(in window, in options.titleBar, in id);
   applyMacOSWindowPolicy(window, options.maximizable, options.fullscreenable);
+  window.center();
+  const stateObserver = restoreMacOSWindow(window, in options, stateStore);
   installWindowChrome(in webView, in contentController);
   const initialURL = resolveLogicalURL(in options.url);
   if (initialURL == null) {
@@ -150,10 +155,11 @@ internal function createMacOSWindowRuntime(
     window,
     webView,
     windowManager,
-    didCloseNativeWindow
+    didCloseNativeWindow,
+    in stateObserver
   );
   window.delegate = windowDelegate;
-  const presentationObserver = observeWindowPresentation(copy id, window, webView, windowManager);
+  const presentationObserver = observeWindowPresentation(copy id, window, webView, windowManager, in stateObserver);
   startConfiguredWindowSmokeSupport(
     in id,
     nativeId,
@@ -162,7 +168,7 @@ internal function createMacOSWindowRuntime(
   );
   const request = Foundation.NSURLRequest.requestWithURL(initialURL);
   webView.loadRequest(request);
-  window.center();
+  match (in stateObserver) { some(observer) => observer.capture(); none => {} }
   if (options.visible) window.makeKeyAndOrderFront(null);
 
   return new MacOSWindowRuntime({

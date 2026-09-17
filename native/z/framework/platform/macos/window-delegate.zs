@@ -2,6 +2,7 @@ import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowManager } from "../../window.zs";
+import { MacOSWindowStateObserver } from "./window-state.zs";
 import { macOSContentDimension } from "./window-geometry.zs";
 import { updateWindowChrome } from "./window-chrome.zs";
 import { MacOSWindow, queueWindowPresentation, queueWindowFullscreen } from "./window-resize.zs";
@@ -22,6 +23,7 @@ class DesktopWindowDelegate on thread.main
   readonly webView: WebKit.WKWebView;
   readonly windows: Weak<WindowManager>;
   readonly didCloseNativeWindow: NativeWindowClosedOperation;
+  readonly stateObserver: Option<MacOSWindowStateObserver>;
 
   function shouldClose(
     in window: WebKit.NSWindow
@@ -42,6 +44,7 @@ class DesktopWindowDelegate on thread.main
     // remain alive until the application run loop exits.
     const id = copy this.id;
     const nativeId = this.nativeId;
+    match (in this.stateObserver) { some(observer) => observer.capture(); none => {} }
     // Revoke document routing before a user closed listener can reenter.
     this.didCloseNativeWindow(nativeId);
     const current = attempt this.windows.upgrade();
@@ -137,6 +140,10 @@ class DesktopWindowDelegate on thread.main
     }
   }
 
+  function didMove(in notification: WebKit.NSNotification): void as "windowDidMove:" {
+    queueWindowPresentation(this.window);
+  }
+
   // User tracking and system-owned fullscreen geometry must not race the
   // display-driven controller. These callbacks do not change event delivery.
   function willMove(inout this, in notification: WebKit.NSNotification): void as "windowWillMove:" {
@@ -194,8 +201,10 @@ internal function createDesktopWindowDelegate(
   in window: MacOSWindow,
   in webView: WebKit.WKWebView,
   windows: Weak<WindowManager>,
-  didCloseNativeWindow: NativeWindowClosedOperation
+  didCloseNativeWindow: NativeWindowClosedOperation,
+  in stateObserver: Option<MacOSWindowStateObserver>
 ): objc.Adapter<WebKit.NSWindowDelegate> on thread.main {
+  const retainedState = match (in stateObserver) { some(value) => Option.some(value); none => Option<MacOSWindowStateObserver>.none; };
   const delegate = new DesktopWindowDelegate({
     id: move id,
     nativeId,
@@ -203,6 +212,7 @@ internal function createDesktopWindowDelegate(
     webView,
     windows,
     didCloseNativeWindow,
+    stateObserver: move retainedState,
   });
   return objc.adapt<WebKit.NSWindowDelegate>(delegate);
 }

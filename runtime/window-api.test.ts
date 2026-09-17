@@ -164,7 +164,8 @@ test("creation validates independent optional size limits before native allocati
     await createWindow({ width: 100, minWidth: 300, maxHeight: 700 });
     expect(calls[0]).toEqual({ width: 100, minWidth: 300, maxHeight: 700 });
     for (const options of [{ minWidth: 0 }, { maxHeight: -1 }, { width: Infinity },
-      { minWidth: 900, maxWidth: 500 }, { minHeight: 700, maxHeight: 200 }, { minWidth: null }]) {
+      { minWidth: 900, maxWidth: 500 }, { minHeight: 700, maxHeight: 200 }, { minWidth: null },
+      { stateKey: "notes.main" }, { stateKey: undefined }]) {
       await expect(createWindow(options as any)).rejects.toBeInstanceOf(TypeError);
     }
     expect(calls).toHaveLength(1);

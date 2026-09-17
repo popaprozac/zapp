@@ -1,4 +1,4 @@
-import { Map } from "std/collections";
+import { Map, Set } from "std/collections";
 import { WindowPresentationState } from "./window-presentation.zs";
 import { TitleBarOptions } from "./window-titlebar.zs";
 import { Inspectable } from "./window-inspection.zs";
@@ -33,6 +33,8 @@ export struct WindowOptions {
   inject: Array<String> = Array<String>();
   capabilities: Array<String> = Array<String>("default");
   navigation: String = "default";
+  // Native-only, stable application identity for placement restoration.
+  stateKey: Option<String> = Option<String>.none;
 }
 
 struct WindowRecord {
@@ -344,6 +346,7 @@ export readonly class Window on thread.main {
 
 class WindowManagerState on thread.main {
   windows: Map<String, WindowRecord>;
+  creatingStateKeys: Set<String>;
   nextId: u64;
   backend: WindowBackend;
   active: boolean;
@@ -371,13 +374,36 @@ class WindowManagerState on thread.main {
     options: WindowOptions
   ): Window throws WindowError {
     let checked = move options;
+    match (in checked.stateKey) {
+      some(key) => {
+        if (key.byteLength == 0 || key.byteLength > 256) {
+          throw WindowError({ id: "", message: "window stateKey must contain 1 to 256 UTF-8 bytes" });
+        }
+        if (this.creatingStateKeys.has(key)) throw WindowError({ id: "", message: "window stateKey is already being created" });
+        for (const entry of this.windows) {
+          match (in entry.value.options.stateKey) {
+            some(existing) => {
+              if (existing == key) throw WindowError({ id: copy entry.key,
+                message: "window stateKey is already used by a live window" });
+            }
+            none => {}
+          }
+        }
+      }
+      none => {}
+    }
     const size = try checkedWindowSize(WindowSize({ width: checked.width, height: checked.height }), windowSizeLimits(in checked));
     checked.width = size.width;
     checked.height = size.height;
     const id = `win-${this.nextId}`;
     this.nextId = this.nextId + 1;
     const window = new Window(copy id, owner);
-    if (this.active) try this.backend.create(in id, in checked);
+    if (this.active) {
+      match (in checked.stateKey) { some(key) => { this.creatingStateKeys.add(copy key); } none => {} }
+      const created = attempt this.backend.create(in id, in checked);
+      match (in checked.stateKey) { some(key) => { this.creatingStateKeys.delete(key); } none => {} }
+      match (created) { success => {} failure(error) => throw error; }
+    }
     this.windows.set(
       move id,
       WindowRecord({
@@ -823,6 +849,7 @@ class WindowManagerState on thread.main {
 function createWindowManagerState(): WindowManagerState on thread.main {
   return new WindowManagerState({
     windows: Map<String, WindowRecord>(),
+    creatingStateKeys: Set<String>(),
     nextId: 1,
     backend: inactiveWindowBackend(),
     active: false,

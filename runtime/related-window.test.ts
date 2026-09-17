@@ -208,7 +208,7 @@ test("malformed shell/bridge fails closed and rolls back", async () => {
 });
 
 test("unapproved options and invalid dimensions do not allocate native resources", async () => {
-  for (const options of [{ url: "/other" }, { inject: ["base"] }, { width: 0 }, { width: 1.5 }, { height: Infinity }, { title: 2 },
+  for (const options of [{ url: "/other" }, { inject: ["base"] }, { stateKey: "notes.main" }, { width: 0 }, { width: 1.5 }, { height: Infinity }, { title: 2 },
     { styles: "inherit" }, { visible: 0 }, { theme: null }, { theme: { attributes: ["onclick"] } },
     { theme: { attributes: ["id"] } }, { theme: { classes: ["two tokens"] } }, { theme: { variables: ["color"] } }]) {
     const f = fixture(); await expect(createRelatedWindow(options as any)).rejects.toBeInstanceOf(TypeError);

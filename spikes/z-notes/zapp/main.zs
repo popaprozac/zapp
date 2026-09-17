@@ -283,6 +283,7 @@ async function main(): i32 on thread.main {
   );
   const createdWindow = attempt app.windows.create(WindowOptions({
     title: "Z Notes",
+    stateKey: Option.some("notes.main"),
     url: "/notes",
     inject: Array<String>("base"),
     width: 720,

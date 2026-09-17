@@ -475,6 +475,7 @@ export async function createWindow(
   options: WindowCreateOptions = {},
 ): Promise<WindowHandle> {
   ensurePermission("window:create");
+  if ("stateKey" in options) throw new TypeError("Window stateKey is native application policy.");
   checkSizeOptions(options);
   for (const key of ["resizable", "maximizable", "fullscreenable"] as const) {
     if (options[key] !== undefined && typeof options[key] !== "boolean") throw new TypeError(`Window ${key} must be a boolean.`);
