@@ -12,6 +12,66 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
+test("bounds and display queries return detached immutable logical snapshots", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousId = (globalThis as any)[WINDOW_ID_KEY];
+  const calls: Array<[string, unknown]> = [];
+  const nativeBounds = { x: -120.5, y: -80.25, width: 900.5, height: 662.25 };
+  const nativeDisplay = { id: "opaque-display", bounds: { x: -1600, y: -100.5, width: 1600, height: 1000 },
+    workArea: { x: -1600, y: -76.5, width: 1600, height: 936 }, scaleFactor: 2, isPrimary: false };
+  let reply: unknown = nativeBounds;
+  (globalThis as any)[BRIDGE_KEY] = { invoke: async (method: string, args: unknown) => { calls.push([method, args]); return reply; } };
+  (globalThis as any)[WINDOW_ID_KEY] = "measured";
+  try {
+    const window = currentWindow();
+    const bounds = await window.getBounds();
+    expect(bounds).toEqual(nativeBounds); expect(Object.isFrozen(bounds)).toBe(true);
+    nativeBounds.x = 999;
+    expect(bounds.x).toBe(-120.5);
+    reply = nativeDisplay;
+    const display = await window.getDisplay();
+    expect(display).toEqual(nativeDisplay);
+    expect(Object.isFrozen(display)).toBe(true);
+    expect(Object.isFrozen(display!.bounds)).toBe(true);
+    expect(Object.isFrozen(display!.workArea)).toBe(true);
+    nativeDisplay.bounds.width = 3200; nativeDisplay.workArea.x = 10;
+    expect(display!.bounds.width).toBe(1600); expect(display!.workArea.x).toBe(-1600);
+    expect(calls).toEqual([["__window:get-bounds", { windowId: "measured" }], ["__window:get-display", { windowId: "measured" }]]);
+    reply = null; expect(await window.getDisplay()).toBeNull();
+    const closed = new WindowError({ operation: "getDisplay", windowId: "measured", message: "Closed" });
+    (globalThis as any)[BRIDGE_KEY].invoke = async () => { throw closed; };
+    await expect(window.getDisplay()).rejects.toBe(closed);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge; (globalThis as any)[WINDOW_ID_KEY] = previousId;
+  }
+});
+
+test("malformed snapshot replies fail rather than fabricating display measurements", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousId = (globalThis as any)[WINDOW_ID_KEY];
+  let reply: unknown;
+  (globalThis as any)[BRIDGE_KEY] = { invoke: async () => reply };
+  (globalThis as any)[WINDOW_ID_KEY] = "measured";
+  const bounds = { x: -120.5, y: 0, width: 1600, height: 1000 };
+  const display = { id: "display", bounds, workArea: bounds, scaleFactor: 1.5, isPrimary: false };
+  try {
+    const window = currentWindow();
+    for (reply of [null, undefined, {}, { ...bounds, x: "12" }, { ...bounds, y: Infinity },
+      { ...bounds, width: -1 }, { ...bounds, height: NaN }]) {
+      await expect(window.getBounds()).rejects.toMatchObject({ name: "WindowError", operation: "getBounds" });
+    }
+    for (reply of [undefined, {}, { ...display, id: "" }, { ...display, isPrimary: 1 },
+      { ...display, bounds: { ...bounds, width: 0 } }, { ...display, workArea: null },
+      { ...display, workArea: { ...bounds, x: Infinity } },
+      { ...display, scaleFactor: 0 }, { ...display, scaleFactor: Infinity }]) {
+      await expect(window.getDisplay()).rejects.toMatchObject({ name: "WindowError", operation: "getDisplay" });
+    }
+    reply = display; expect((await window.getDisplay())!.scaleFactor).toBe(1.5);
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge; (globalThis as any)[WINDOW_ID_KEY] = previousId;
+  }
+});
+
 test("position operations preserve signed fractional coordinates and await native handling", async () => {
   const previousBridge = (globalThis as any)[BRIDGE_KEY];
   const previousId = (globalThis as any)[WINDOW_ID_KEY];

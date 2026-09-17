@@ -60,5 +60,6 @@ function centerEditor(window: Window): void throws WindowError on thread.main {
 
 Native operations require `thread.main` and throw when the native window is
 unavailable, including before startup or after close. Initial position options,
-outer-bounds queries, explicit display selection, and geometry persistence
-remain separate future APIs. Content dimensions use [window sizing](window-sizing.md).
+explicit display selection, and geometry persistence remain separate future APIs.
+Measure the outer frame and current display with [bounds and display snapshots](window-displays.md).
+Content dimensions use [window sizing](window-sizing.md).

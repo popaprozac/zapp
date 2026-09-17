@@ -3,11 +3,14 @@ import { get } from "svelte/store";
 import { tick } from "svelte";
 import { createInspectorManager } from "./related-inspectors";
 import type { NotesModel } from "./notes-model";
+import { currentWindow } from "@zappdev/runtime/window";
+import { inspectorPosition } from "./inspector-placement";
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(`Svelte inspector: ${message}`);
 }
 export async function verifySvelteInspectors(model: NotesModel, pulse: () => Promise<unknown>) {
+  document.body.dataset.sveltePhase = "waiting-for-notes";
   const deadline = Date.now() + 15_000;
   async function until(check: () => boolean, description: string) {
     while (!check()) {
@@ -16,12 +19,18 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
     }
     await tick();
   }
-  await until(() => document.body.dataset.cancellation === "ok", "normal Notes smoke");
+  await until(() => document.body.dataset.cancellation === "ok"
+    && document.body.dataset.roundTrip === "ok" && document.body.dataset.dynamicWindow === "ready", "normal Notes smoke");
+  document.body.dataset.sveltePhase = "refreshing-notes";
   await model.refresh();
   const note = get(model.state).items[0];
   assert(note, "expected a persisted note");
   model.select(note.id);
   await tick();
+  document.body.dataset.sveltePhase = "checking-owner-layout";
+  // The launch harness may start behind another application. Layout assertions
+  // must not depend on requestAnimationFrame running in an occluded WebView.
+  currentWindow().focus();
   const mainHeader = document.querySelector<HTMLElement>(".workspace-header")!;
   const mainRootStyle = getComputedStyle(document.documentElement);
   const mainTop = parseFloat(mainRootStyle.getPropertyValue("--zapp-titlebar-height"));
@@ -41,7 +50,8 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
   search.dispatchEvent(new Event("input", { bubbles: true })); await tick();
   assert(document.querySelector("#notes li"), "clearing search restores the visible list");
   window.scrollTo(0, document.documentElement.scrollHeight);
-  await new Promise(requestAnimationFrame);
+  document.body.dataset.sveltePhase = "scrolling-owner";
+  await until(() => window.scrollY > 0, "owner scroll applied");
   assert(mainHeader.getBoundingClientRect().top === 0, "header remains under native controls while diagnostics scroll");
   window.scrollTo(0, 0);
   let subscribers = 0;
@@ -55,9 +65,21 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
   } } };
   const manager = createInspectorManager(tracked);
   try {
-    const first = await manager.open(); const second = await manager.open();
+    document.body.dataset.sveltePhase = "opening-first";
+    const first = await manager.open();
+    document.body.dataset.sveltePhase = "opening-second";
+    const second = await manager.open();
     assert(first && second, get(manager.state).error || "two windows must open");
+    document.body.dataset.sveltePhase = "measuring-placement";
+    const owner = currentWindow();
+    const [ownerBounds, childBounds, display] = await Promise.all([owner.getBounds(), first.getBounds(), owner.getDisplay()]);
+    assert(display, "visible owner has a display snapshot");
+    const placement = inspectorPosition(ownerBounds, childBounds, display.workArea);
+    assert(Math.abs(childBounds.x - placement.x) < 1 && Math.abs(childBounds.y - placement.y) < 1,
+      "inspector is placed beside its owner and clamped to the usable display before presentation");
+    assert(display.scaleFactor > 0 && display.bounds.width > 0 && display.id.length > 0, "native display measurements cross the typed bridge");
     await until(() => subscribers === 2, "two component roots");
+    document.body.dataset.sveltePhase = "verifying-components";
     document.body.dataset.inspectorChrome = "pending";
     await pulse();
     await until(() => document.body.dataset.inspectorChrome === "ok", "native inspector creation policies");
@@ -129,5 +151,6 @@ export async function verifySvelteInspectors(model: NotesModel, pulse: () => Pro
       await verifyPublicStyling(pulse);
     }
     document.body.dataset.svelteInspector = "ok";
+    document.body.dataset.sveltePhase = "complete";
   } finally { manager.dispose(); }
 }

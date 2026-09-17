@@ -7,7 +7,8 @@ import { WindowError } from "../framework/application-error.zs";
 import { MacOSWindow, requestWindowSize, requestWindowPosition, requestWindowCenter,
   applyPendingWindowGeometry } from "../framework/platform/macos/window-resize.zs";
 import { macOSWindowPosition, macOSWindowSize, macOSPrimaryScreen, positionFromMacOSFrame,
-  positionedMacOSFrame, centeredMacOSFrame } from "../framework/platform/macos/window-geometry.zs";
+  positionedMacOSFrame, centeredMacOSFrame, boundsFromMacOSFrame, macOSWindowBounds,
+  macOSWindowDisplay } from "../framework/platform/macos/window-geometry.zs";
 
 struct Lifetime on thread.main {
   window: MacOSWindow;
@@ -34,6 +35,10 @@ function verify(): i32 throws WindowError on thread.main {
   const original = WebKit.NSMakeRect(-300.5, 1350.25, 400, 300);
   const logical = positionFromMacOSFrame(original, primaryFrame);
   if (logical.x != -400.5 || logical.y != -450.25) return 1;
+  const logicalBounds = boundsFromMacOSFrame(original, primaryFrame);
+  if (logicalBounds.x != logical.x || logicalBounds.y != logical.y || logicalBounds.width != 400 || logicalBounds.height != 300) return 17;
+  const desktop = boundsFromMacOSFrame(primaryFrame, primaryFrame);
+  if (desktop.x != 0 || desktop.y != 0 || desktop.width != 1600 || desktop.height != 1000) return 18;
   const roundTrip = positionedMacOSFrame(original, logical, primaryFrame);
   if (roundTrip.origin.x != original.origin.x || roundTrip.origin.y != original.origin.y) return 2;
   const centered = centeredMacOSFrame(original, WebKit.NSMakeRect(-1200, -300, 1000, 800));
@@ -50,6 +55,21 @@ function verify(): i32 throws WindowError on thread.main {
   try requestWindowPosition(window, WindowPosition({ x: 180.5, y: 130.25 }));
   const measured = try macOSWindowPosition(in window);
   if (!near(measured.x, 180.5) || !near(measured.y, 130.25) || window.visible) return 5;
+  const bounds = try macOSWindowBounds(in window);
+  const contentSize = try macOSWindowSize(in window);
+  if (bounds.x != measured.x || bounds.y != measured.y || bounds.width != window.frame.size.width
+    || bounds.height != window.frame.size.height || bounds.height <= f64(contentSize.height)) return 19;
+  const display = match (try macOSWindowDisplay(in window)) { some(value) => value; none => return 20; };
+  const ownedScreen = window.screen;
+  if (ownedScreen == null) return 21;
+  const expectedDisplay = boundsFromMacOSFrame(ownedScreen.frame, primary.frame);
+  const expectedWork = boundsFromMacOSFrame(ownedScreen.visibleFrame, primary.frame);
+  if (display.id.byteLength == 0 || display.scaleFactor != ownedScreen.backingScaleFactor
+    || display.bounds.x != expectedDisplay.x || display.bounds.y != expectedDisplay.y
+    || display.bounds.width != expectedDisplay.width || display.bounds.height != expectedDisplay.height
+    || display.workArea.x != expectedWork.x || display.workArea.y != expectedWork.y
+    || display.workArea.width != expectedWork.width || display.workArea.height != expectedWork.height
+    || display.isPrimary != (ownedScreen == primary)) return 22;
   try requestWindowCenter(window);
   const screen = window.screen;
   const workArea = screen == null ? primary.visibleFrame : screen.visibleFrame;
@@ -104,6 +124,14 @@ function verify(): i32 throws WindowError on thread.main {
   applyPendingWindowGeometry(window);
   match (window.takePendingGeometry()) { some(_) => return 15; none => {} }
   if (window.visible) return 16;
+  // A separate borderless window can be truly offscreen without AppKit's titlebar constraints.
+  const offscreen = WebKit.NSWindow.alloc().initWithContentRect(WebKit.NSMakeRect(-1000000, -1000000, 100, 100),
+    WebKit.NSWindowStyleMaskBorderless, WebKit.NSBackingStoreBuffered, false);
+  offscreen.releasedWhenClosed = false;
+  match (try macOSWindowDisplay(in offscreen)) { some(_) => { offscreen.close(); return 24; } none => {} }
+  offscreen.close();
+  // Earlier snapshots remain independent of window movement and closing.
+  if (bounds.x != measured.x || display.bounds.width != expectedDisplay.width) return 25;
   console.log("global coordinates, geometric centering, fixed-window moves, combined deferred geometry, native zoom, reentrancy and close cleanup passed");
   return 0;
 }

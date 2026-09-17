@@ -1,10 +1,11 @@
 import { mount, unmount } from "svelte";
 import { writable } from "svelte/store";
-import { createRelatedWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
+import { createRelatedWindow, currentWindow, RelatedWindowEvent } from "@zappdev/runtime/window";
 import type { RelatedWindowHandle, WindowEventSubscription } from "@zappdev/runtime/window";
 import NoteInspector from "./NoteInspector.svelte";
 import "./note-inspector.css";
 import type { NotesModel } from "./notes-model";
+import { inspectorPosition } from "./inspector-placement";
 
 // Application code, not a framework adapter: one owner mounts components into
 // related documents and releases them on terminal invalidation.
@@ -53,6 +54,13 @@ export function createInspectorManager(model: NotesModel) {
       subscription = handle.subscribe(RelatedWindowEvent.INVALIDATED, cleanup);
       live.set(handle, cleanup);
       state.update(value => ({ ...value, count: live.size }));
+      const owner = currentWindow();
+      const [ownerBounds, inspectorBounds, display] = await Promise.all([
+        owner.getBounds(), handle.getBounds(), owner.getDisplay(),
+      ]);
+      if (disposed) { handle.close(); return; }
+      if (display) await handle.setPosition(inspectorPosition(ownerBounds, inspectorBounds, display.workArea));
+      else await handle.center();
       handle.show();
       return handle;
     } catch (error) {

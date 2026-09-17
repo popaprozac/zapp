@@ -1,6 +1,8 @@
 import { WindowManager, WindowOptions, WindowBackend, WindowCreateOperation,
   WindowOperation, WindowTitleOperation, WindowGetPositionOperation, WindowSetPositionOperation,
   WindowCenterOperation, createWindowManager } from "../framework/window.zs";
+import { WindowGetBoundsOperation, WindowGetDisplayOperation } from "../framework/window.zs";
+import { Bounds, Display } from "../api/zapp/window.zs";
 import { WindowPosition, checkedWindowPosition } from "../framework/window-positioning.zs";
 import { WindowError } from "../framework/application-error.zs";
 import json from "std/json";
@@ -15,6 +17,7 @@ class Probe on thread.main {
   position: WindowPosition;
   calls: i32;
   closeOnMove: boolean;
+  hasDisplay: boolean;
 }
 
 function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thread.main {
@@ -23,6 +26,13 @@ function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thr
   const title: WindowTitleOperation = (in id, in title): void => {};
   const state: (in id: String, value: boolean) => void on thread.main = (in id, value): void => {};
   const getPosition: WindowGetPositionOperation = move (in id): WindowPosition => probe.position;
+  const getBounds: WindowGetBoundsOperation = move (in id): Bounds => Bounds({
+    x: probe.position.x, y: probe.position.y, width: 900.5, height: 660.25 });
+  const getDisplay: WindowGetDisplayOperation = move (in id): Option<Display> => {
+    if (!probe.hasDisplay) return Option<Display>.none;
+    return Option.some(Display({ id: "opaque-display", bounds: Bounds({ x: -1600.5, y: -200.25, width: 1600, height: 1000 }),
+      workArea: Bounds({ x: -1600.5, y: -176.25, width: 1600, height: 936.5 }), scaleFactor: 2, isPrimary: false }));
+  };
   const setPosition: WindowSetPositionOperation = move (in id, position): void => {
     probe.position = position; probe.calls = probe.calls + 1;
     if (probe.closeOnMove) {
@@ -33,7 +43,7 @@ function backend(owner: Weak<WindowManager>, probe: Probe): WindowBackend on thr
     probe.position = WindowPosition({ x: 100.5, y: 200.25 }); probe.calls = probe.calls + 1;
   };
   return WindowBackend({ create, show: noop, hide: noop, focus: noop, minimize: noop, unminimize: noop,
-    setMaximized: state, setFullscreen: state, close: noop, setTitle: title, getPosition, setPosition, center });
+    setMaximized: state, setFullscreen: state, close: noop, setTitle: title, getPosition, setPosition, center, getBounds, getDisplay });
 }
 
 function selection(): CapabilitySelection {
@@ -54,6 +64,14 @@ function route(inout windows: WindowManager, method: String, arguments: String):
           success(value) => value; failure(_) => return false;
         };
         if (position.x != -80.25 || position.y != 40.5) return false;
+      }
+      if (message.method == "__window:get-bounds") {
+        const bounds = match (attempt json.decode<Bounds>(in reply.payload)) { success(value) => value; failure(_) => return false; };
+        if (bounds.x != -80.25 || bounds.y != 40.5 || bounds.width != 900.5 || bounds.height != 660.25) return false;
+      }
+      if (message.method == "__window:get-display") {
+        const display = match (attempt json.decode<Display>(in reply.payload)) { success(value) => value; failure(_) => return false; };
+        if (display.id != "opaque-display" || display.bounds.x != -1600.5 || display.workArea.height != 936.5 || display.scaleFactor != 2 || display.isPrimary) return false;
       }
       select true;
     }
@@ -77,7 +95,9 @@ function verify(): i32 throws WindowError on thread.main {
   match (attempt window.getPosition()) { success(_) => return 3; failure(_) => {} }
   match (attempt window.setPosition(position)) { success => return 4; failure(_) => {} }
   match (attempt window.center()) { success => return 5; failure(_) => {} }
-  const probe = new Probe({ position: WindowPosition({ x: 0, y: 0 }), calls: 0, closeOnMove: false });
+  match (attempt window.getBounds()) { success(_) => return 23; failure(_) => {} }
+  match (attempt window.getDisplay()) { success(_) => return 24; failure(_) => {} }
+  const probe = new Probe({ position: WindowPosition({ x: 0, y: 0 }), calls: 0, closeOnMove: false, hasDisplay: true });
   try windows.start(backend(weak windows, probe), true);
   try window.setPosition(position);
   const measured = try window.getPosition();
@@ -88,6 +108,20 @@ function verify(): i32 throws WindowError on thread.main {
   const bridged = try window.getPosition();
   if (bridged.x != -80.25 || bridged.y != 40.5) return 8;
   const identity = `{"windowId":"${id}"}`;
+  if (!route(inout windows, "__window:get-bounds", copy identity)) return 25;
+  if (!route(inout windows, "__window:get-display", copy identity)) return 26;
+  const snapshot = try window.getBounds();
+  const displaySnapshot = try window.getDisplay();
+  probe.hasDisplay = false;
+  match (try window.getDisplay()) { some(_) => return 27; none => {} }
+  const displayMessage = BridgeMessage({ kind: BridgeMessageKind.invoke, id: 2, method: "__window:get-display", arguments: copy identity });
+  const permissions = ApplicationPermissions();
+  match (routeWindowBridgeMessage(in displayMessage, in permissions, "win-1", selection(), inout windows)) {
+    response(reply) => { if (!reply.ok || reply.payload != "null") return 28; }
+    _ => return 29;
+  }
+  if (route(inout windows, "__window:get-display", '{"windowId":"missing"}')) return 30;
+  if (route(inout windows, "__window:get-bounds", '{"windowId":"missing"}')) return 31;
   if (!route(inout windows, "__window:get-position", copy identity)) return 9;
   if (!route(inout windows, "__window:center", identity)) return 10;
   const centered = try window.getPosition();
@@ -106,6 +140,10 @@ function verify(): i32 throws WindowError on thread.main {
   match (attempt window.getPosition()) { success(_) => return 18; failure(_) => {} }
   match (attempt window.setPosition(position)) { success => return 19; failure(_) => {} }
   match (attempt window.center()) { success => return 20; failure(_) => {} }
+  match (attempt window.getBounds()) { success(_) => return 32; failure(_) => {} }
+  match (attempt window.getDisplay()) { success(_) => return 33; failure(_) => {} }
+  if (snapshot.x != -80.25 || snapshot.y != 40.5) return 34;
+  match (in displaySnapshot) { some(display) => { if (display.id != "opaque-display") return 35; } none => return 36; }
   if (probe.calls != 4) return 21;
   windows.stop();
   return 0;

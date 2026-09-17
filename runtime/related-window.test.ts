@@ -131,6 +131,23 @@ test("related positioning stays bound to the child document and expires with it"
   await expect(handle.center()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
 });
 
+test("related snapshots use the child's bridge and reject after document retirement", async () => {
+  const f = fixture();
+  const handle = await createRelatedWindow();
+  f.childBridge.invoke = async (method: string) => {
+    f.calls.push(`child:${method}`);
+    return (method === "__window:get-display" ? null : { x: -80.5, y: 130.25, width: 440, height: 640 }) as any;
+  };
+  expect(await handle.getBounds()).toEqual({ x: -80.5, y: 130.25, width: 440, height: 640 });
+  expect(await handle.getDisplay()).toBeNull();
+  expect(f.calls.slice(-2)).toEqual(["child:__window:get-bounds", "child:__window:get-display"]);
+  f.invalidate();
+  const before = f.calls.length;
+  await expect(handle.getBounds()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  await expect(handle.getDisplay()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  expect(f.calls).toHaveLength(before);
+});
+
 test("related window policies are checked and carried independently to native preparation", async () => {
   const f = fixture(), invoke = f.owner.invoke;
   let sent: any;

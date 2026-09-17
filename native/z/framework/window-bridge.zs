@@ -315,6 +315,33 @@ export function routeWindowBridgeMessage(
     };
     return WindowBridgeRoute.response(move response);
   }
+  if (message.method == "__window:get-bounds") {
+    const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "getBounds", "invalid window identity"));
+    };
+    const response = match (attempt windows.getBounds(in action.windowId)) {
+      success(bounds) => encodeBridgeResponse(message.id, true, in bounds);
+      failure(error) => windowFailure(message.id, "getBounds", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
+  if (message.method == "__window:get-display") {
+    const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "getDisplay", "invalid window identity"));
+    };
+    const response = match (attempt windows.getDisplay(in action.windowId)) {
+      success(found) => {
+        select match (in found) {
+          some(display) => encodeBridgeResponse(message.id, true, in display);
+          none => bridgeSuccess(message.id, "null");
+        };
+      }
+      failure(error) => windowFailure(message.id, "getDisplay", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
   if (message.method == "__window:get-position") {
     const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
       success(value) => value;

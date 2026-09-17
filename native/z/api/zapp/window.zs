@@ -35,6 +35,10 @@ import {
 
 import { Inspectable as FrameworkInspectable } from "../../framework/window-inspection.zs";
 import { WindowPosition as FrameworkWindowPosition } from "../../framework/window-positioning.zs";
+import { Bounds as FrameworkBounds, Display as FrameworkDisplay } from "../../framework/window-display.zs";
+
+export type Bounds = FrameworkBounds;
+export type Display = FrameworkDisplay;
 
 export type WindowPosition = FrameworkWindowPosition;
 

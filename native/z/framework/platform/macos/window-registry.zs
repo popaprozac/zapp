@@ -1,6 +1,7 @@
 import WebKit from "WebKit/WebKit.h";
 import { WindowSize } from "../../events.zs";
-import { macOSWindowSize, macOSWindowPosition } from "./window-geometry.zs";
+import { macOSWindowSize, macOSWindowPosition, macOSWindowBounds, macOSWindowDisplay } from "./window-geometry.zs";
+import { Bounds, Display } from "../../window-display.zs";
 import { requestWindowSize, requestWindowPosition, requestWindowCenter } from "./window-resize.zs";
 import { WindowPosition } from "../../window-positioning.zs";
 import { showMacOSNativeWindow, focusMacOSNativeWindow,
@@ -214,6 +215,24 @@ internal class MacOSWindowRegistry on thread.main {
     };
     const window = runtime.window;
     return try macOSWindowPosition(in window);
+  }
+
+  function getWindowBounds(in id: String): Bounds throws WindowError on thread.main {
+    const runtime = match (this.nativeWindow(in id)) {
+      some(value) => value;
+      none => throw WindowError({ id: copy id, message: "native window is no longer available" });
+    };
+    const window = runtime.window;
+    return try macOSWindowBounds(in window);
+  }
+
+  function getWindowDisplay(in id: String): Option<Display> throws WindowError on thread.main {
+    const runtime = match (this.nativeWindow(in id)) {
+      some(value) => value;
+      none => throw WindowError({ id: copy id, message: "native window is no longer available" });
+    };
+    const window = runtime.window;
+    return try macOSWindowDisplay(in window);
   }
 
   function setWindowPosition(in id: String, position: WindowPosition): void throws WindowError on thread.main {

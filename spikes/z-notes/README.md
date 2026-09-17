@@ -273,7 +273,11 @@ without closing siblings.
 The inspector uses an ordinary CSS import. Related windows share the owner's
 head-owned DOM styles by default, including CSS HMR; the factory owns their
 cleanup. This avoids relying on Svelte's development injected-CSS registry.
-The inspector creates a hidden window, mounts its component, then calls `show()`.
+The inspector creates a hidden window, mounts its component, and measures its
+outer bounds plus the owner's bounds and display work area. It prefers placement
+to the owner's right, tries the left when needed, and clamps to the usable display
+before calling `show()`. This is Notes application policy, not automatic framework
+positioning. See [bounds and display snapshots](../../docs/window-displays.md).
 The [Svelte guide](SVELTE.md) explains the integration and tests. Use
 `styles: "independent"` for separate styling, and explicit `theme` selections for
 root theme state. No arbitrary attributes or JavaScript are copied.

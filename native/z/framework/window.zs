@@ -5,6 +5,7 @@ import { Inspectable } from "./window-inspection.zs";
 import { WindowSize } from "./events.zs";
 import { WindowSizeLimits, checkedWindowSize } from "./window-sizing.zs";
 import { WindowPosition, checkedWindowPosition } from "./window-positioning.zs";
+import { Bounds, Display } from "./window-display.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -64,11 +65,21 @@ internal type WindowBooleanOperation = (
 internal type WindowGetSizeOperation = (in id: String) => WindowSize throws WindowError on thread.main;
 internal type WindowSetSizeOperation = (in id: String, size: WindowSize) => void throws WindowError on thread.main;
 internal type WindowGetPositionOperation = (in id: String) => WindowPosition throws WindowError on thread.main;
+internal type WindowGetBoundsOperation = (in id: String) => Bounds throws WindowError on thread.main;
+internal type WindowGetDisplayOperation = (in id: String) => Option<Display> throws WindowError on thread.main;
 internal type WindowSetPositionOperation = (in id: String, position: WindowPosition) => void throws WindowError on thread.main;
 internal type WindowCenterOperation = (in id: String) => void throws WindowError on thread.main;
 
 function unavailableWindowPosition(in id: String): WindowPosition throws WindowError on thread.main {
   throw WindowError({ id: copy id, message: "native window position is unavailable" });
+}
+
+function unavailableWindowBounds(in id: String): Bounds throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window bounds are unavailable" });
+}
+
+function unavailableWindowDisplay(in id: String): Option<Display> throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window display is unavailable" });
 }
 
 function unavailableWindowMove(in id: String, position: WindowPosition): void throws WindowError on thread.main {
@@ -106,6 +117,8 @@ internal struct WindowBackend {
   getSize: WindowGetSizeOperation = unavailableWindowSize;
   setSize: WindowSetSizeOperation = unavailableWindowResize;
   getPosition: WindowGetPositionOperation = unavailableWindowPosition;
+  getBounds: WindowGetBoundsOperation = unavailableWindowBounds;
+  getDisplay: WindowGetDisplayOperation = unavailableWindowDisplay;
   setPosition: WindowSetPositionOperation = unavailableWindowMove;
   center: WindowCenterOperation = unavailableWindowCenter;
   showContextMenu: WindowContextMenuOperation = unavailableContextMenu;
@@ -157,6 +170,22 @@ export readonly class Window on thread.main {
   readonly id: String;
   readonly events: WindowEvents;
   internal readonly manager: Weak<WindowManager>;
+
+  function getBounds(): Bounds throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    return try owner.getBounds(in this.id);
+  }
+
+  function getDisplay(): Option<Display> throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    return try owner.getDisplay(in this.id);
+  }
 
   function getPosition(): WindowPosition throws WindowError on thread.main {
     const owner = match (attempt this.manager.upgrade()) {
@@ -860,6 +889,20 @@ export readonly class WindowManager on thread.main {
       throw WindowError({ id: copy id, message: "native window is not available" });
     }
     return try this.state.backend.getPosition(in id);
+  }
+
+  internal function getBounds(in id: String): Bounds throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    return try this.state.backend.getBounds(in id);
+  }
+
+  internal function getDisplay(in id: String): Option<Display> throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    return try this.state.backend.getDisplay(in id);
   }
 
   internal function setPosition(in id: String, position: WindowPosition): void throws WindowError on thread.main {

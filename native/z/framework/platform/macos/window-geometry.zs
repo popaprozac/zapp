@@ -5,6 +5,7 @@ import { WindowSize } from "../../events.zs";
 import { WindowError } from "../../application-error.zs";
 import { WindowSizeLimits } from "../../window-sizing.zs";
 import { WindowPosition } from "../../window-positioning.zs";
+import { Bounds, Display } from "../../window-display.zs";
 
 internal readonly struct WindowGeometryRequest {
   resize: boolean;
@@ -26,6 +27,37 @@ internal function macOSPrimaryScreen(): WebKit.NSScreen | null on thread.main {
 internal function positionFromMacOSFrame(frame: WebKit.CGRect, primary: WebKit.CGRect): WindowPosition {
   return WindowPosition({ x: frame.origin.x - primary.origin.x,
     y: primary.origin.y + primary.size.height - frame.origin.y - frame.size.height });
+}
+
+internal function boundsFromMacOSFrame(frame: WebKit.CGRect, primary: WebKit.CGRect): Bounds {
+  const position = positionFromMacOSFrame(frame, primary);
+  return Bounds({ x: position.x, y: position.y, width: frame.size.width, height: frame.size.height });
+}
+
+internal function macOSWindowBounds(in window: WebKit.NSWindow): Bounds throws WindowError on thread.main {
+  const primary = macOSPrimaryScreen();
+  if (primary == null) throw WindowError({ id: "", message: "no primary display is available" });
+  return boundsFromMacOSFrame(window.frame, primary.frame);
+}
+
+internal function macOSWindowDisplay(in window: WebKit.NSWindow): Option<Display> throws WindowError on thread.main {
+  // AppKit selects the screen containing most of the frame, or nil offscreen.
+  // Unlike center(), this measurement must not invent a primary-screen fallback.
+  const screen = window.screen;
+  if (screen == null) return Option<Display>.none;
+  const primary = macOSPrimaryScreen();
+  if (primary == null) throw WindowError({ id: "", message: "no primary display is available" });
+  const key = WebKit.NSString.stringWithUTF8String("NSScreenNumber");
+  if (key == null) throw WindowError({ id: "", message: "native display identity key is unavailable" });
+  const number = screen.deviceDescription.objectForKey(key);
+  if (!(number instanceof WebKit.NSNumber)) {
+    throw WindowError({ id: "", message: "native display identity is unavailable" });
+  }
+  const nativeId = number.unsignedIntValue;
+  return Option.some(Display({ id: `${nativeId}`,
+    bounds: boundsFromMacOSFrame(screen.frame, primary.frame),
+    workArea: boundsFromMacOSFrame(screen.visibleFrame, primary.frame),
+    scaleFactor: screen.backingScaleFactor, isPrimary: screen == primary }));
 }
 
 internal function positionedMacOSFrame(frame: WebKit.CGRect, position: WindowPosition, primary: WebKit.CGRect): WebKit.CGRect {

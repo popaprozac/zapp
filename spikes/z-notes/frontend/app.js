@@ -774,6 +774,7 @@ refreshNotes().then(async () => {
   if (import.meta.env.VITE_ZAPP_SVELTE_SMOKE === "1") {
     if (currentWindowId === "win-1") {
       try {
+        document.body.dataset.sveltePhase = "loading-probe";
         const { verifySvelteInspectors } = await import("./svelte-smoke");
         await verifySvelteInspectors(notesModel, () => health.status());
       } catch (error) {

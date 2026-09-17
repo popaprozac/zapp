@@ -43,12 +43,18 @@ failures and returns a failed response with a fixed valid fallback, never
 success with malformed JSON or a silently truncated coordinate. Fractional
 bridge round-trips and serialization failure are native regression tests.
 Z Notes exposes Center Notes, explicit movement, and measured-position controls.
-Exact inspector adjacency needs outer bounds, not content width, and remains
-a later slice.
+Outer bounds and current-display snapshots now support explicit Notes inspector
+placement. See [bounds and display snapshots](../window-displays.md). The pure
+bridge tests cover nested finite-float JSON, no-display versus unavailable-window
+results, detached values, and closed handles. AppKit tests cover frame versus
+content size, visible/full display coordinates, backing scale, and a truly
+offscreen window without a primary fallback. The Notes smoke checks placement
+through the production bridge before exercising shared component state.
 
 Contributor commands:
 
 ```sh
 bun native/z/testing/window-focus.ts --positioning --native
 bun native/z/testing/window-focus.ts --positioning
+VITE_ZAPP_SVELTE_SMOKE=1 bun cli/src/test-notes-launch-macos.ts
 ```

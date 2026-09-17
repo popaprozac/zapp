@@ -61,6 +61,30 @@ export interface WindowPosition {
   readonly y: number;
 }
 
+/** Rectangle in logical desktop units: primary top-left origin, x right, y down. */
+export interface Bounds {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Immutable snapshot. IDs are opaque and need not survive reconnects or restarts. */
+export interface Display {
+  readonly id: string;
+  readonly bounds: Bounds;
+  readonly workArea: Bounds;
+  readonly scaleFactor: number;
+  readonly isPrimary: boolean;
+}
+
+function boundsSnapshot(value: unknown): Bounds | undefined {
+  if (!isRecord(value) || !Number.isFinite(value.x) || !Number.isFinite(value.y)
+    || typeof value.width !== "number" || !Number.isFinite(value.width) || value.width < 0
+    || typeof value.height !== "number" || !Number.isFinite(value.height) || value.height < 0) return;
+  return Object.freeze({ x: value.x as number, y: value.y as number, width: value.width, height: value.height });
+}
+
 export interface WindowFocusedEvent {
   readonly windowId: string;
 }
@@ -130,6 +154,10 @@ export interface WindowHandle {
   setSize(size: WindowSize): Promise<void>;
   /** Measure the actual outer-frame position, not a pending placement request. */
   getPosition(): Promise<WindowPosition>;
+  /** Measure the actual outer frame, excluding shadows; getSize() measures content. */
+  getBounds(): Promise<Bounds>;
+  /** Display containing most of the window, or null offscreen. Closed windows reject. */
+  getDisplay(): Promise<Display | null>;
   /** Finite, signed logical coordinates. Deferred while maximized/fullscreen; does not focus. */
   setPosition(position: WindowPosition): Promise<void>;
   /** Center geometrically in the current display's work area; deferred until ordinary presentation. */
@@ -306,6 +334,26 @@ class FocusedWindowHandle implements WindowHandle {
       throw new TypeError("Window position requires finite x and y in logical units.");
     }
     await this.bridge().invoke("__window:set-position", { windowId: this.id, position: { x: position.x, y: position.y } });
+  }
+
+  async getBounds(): Promise<Bounds> {
+    const value = boundsSnapshot(await this.bridge().invoke("__window:get-bounds", { windowId: this.id }));
+    if (!value) throw new WindowError({ operation: "getBounds", windowId: this.id, message: "Native window returned invalid bounds." });
+    return value;
+  }
+
+  async getDisplay(): Promise<Display | null> {
+    const value = await this.bridge().invoke("__window:get-display", { windowId: this.id });
+    if (value === null) return null;
+    const bounds = isRecord(value) ? boundsSnapshot(value.bounds) : undefined;
+    const workArea = isRecord(value) ? boundsSnapshot(value.workArea) : undefined;
+    if (!isRecord(value) || typeof value.id !== "string" || !value.id || !bounds || !workArea
+      || bounds.width <= 0 || bounds.height <= 0
+      || typeof value.scaleFactor !== "number" || !Number.isFinite(value.scaleFactor) || value.scaleFactor <= 0
+      || typeof value.isPrimary !== "boolean") {
+      throw new WindowError({ operation: "getDisplay", windowId: this.id, message: "Native window returned an invalid display snapshot." });
+    }
+    return Object.freeze({ id: value.id, bounds, workArea, scaleFactor: value.scaleFactor, isPrimary: value.isPrimary });
   }
 
   async center(): Promise<void> {
