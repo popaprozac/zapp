@@ -4,6 +4,9 @@ import WebKit from "WebKit/WebKit.h";
 import objc from "std/objc";
 import { thread } from "std/thread";
 import { MacOSWindowGestures } from "./window-drag.zs";
+import { WindowPosition, checkedWindowPosition } from "../../window-positioning.zs";
+import { WindowError } from "../../application-error.zs";
+import { WindowGeometryRequest, macOSPrimaryScreen, positionedMacOSFrame, centeredMacOSFrame } from "./window-geometry.zs";
 
 internal const windowPresentationNotification: String = "ZappWindowPresentationChanged";
 internal const windowFullscreenNotification: String = "ZappWindowFullscreenCompleted";
@@ -59,20 +62,32 @@ function createDisplay(in window: MacOSWindow): QuartzCore.CADisplayLink on thre
 
 // Mutate pending state under its Z receiver loan, then dispatch native geometry
 // only after that loan ends. AppKit may synchronously reenter its window.
-internal function applyPendingWindowSize(window: MacOSWindow): void on thread.main {
+internal function applyPendingWindowGeometry(window: MacOSWindow): void on thread.main {
   const style = window.styleMask;
   if (usize(style & WebKit.NSWindowStyleMaskFullScreen) != 0) return;
   // AppKit reports a fixed-size window as zoomed even at its ordinary size.
   // That must not prevent programmatic resizing of a non-resizable window.
   if (usize(style & WebKit.NSWindowStyleMaskResizable) != 0 && window.zoomed) return;
-  match (window.takePendingContentSize()) {
-    some(size) => {
-      const current = window.frame;
-      const target = window.frameRectForContentRect(WebKit.NSMakeRect(0, 0, size.width, size.height));
-      // Preserve the outer top-left corner; only the content dimensions change.
-      window.resize(WebKit.NSMakeRect(current.origin.x,
-        current.origin.y + current.size.height - target.size.height,
-        target.size.width, target.size.height), true, true);
+  const primary = macOSPrimaryScreen();
+  if (primary == null) return;
+  match (window.takePendingGeometry()) {
+    some(request) => {
+      // Retarget an ordinary animation without discarding its intended size.
+      const current = window.geometryBaseFrame();
+      let target = current;
+      if (request.resize) {
+        const sized = window.frameRectForContentRect(WebKit.NSMakeRect(0, 0, request.width, request.height));
+        target = WebKit.NSMakeRect(current.origin.x,
+          current.origin.y + current.size.height - sized.size.height, sized.size.width, sized.size.height);
+      }
+      if (request.center) {
+        const screen = window.screen;
+        const workArea = screen == null ? primary.visibleFrame : screen.visibleFrame;
+        target = centeredMacOSFrame(target, workArea);
+      } else if (request.reposition) {
+        target = positionedMacOSFrame(target, WindowPosition({ x: request.x, y: request.y }), primary.frame);
+      }
+      window.resize(target, true, true);
     }
     none => {}
   }
@@ -80,7 +95,20 @@ internal function applyPendingWindowSize(window: MacOSWindow): void on thread.ma
 
 internal function requestWindowSize(window: MacOSWindow, width: f64, height: f64): void on thread.main {
   window.rememberContentSize(width, height);
-  applyPendingWindowSize(window);
+  applyPendingWindowGeometry(window);
+}
+
+internal function requestWindowPosition(window: MacOSWindow, position: WindowPosition): void throws WindowError on thread.main {
+  const checked = try checkedWindowPosition(position);
+  if (macOSPrimaryScreen() == null) throw WindowError({ id: "", message: "no primary display is available" });
+  window.rememberPosition(checked.x, checked.y, false);
+  applyPendingWindowGeometry(window);
+}
+
+internal function requestWindowCenter(window: MacOSWindow): void throws WindowError on thread.main {
+  if (macOSPrimaryScreen() == null) throw WindowError({ id: "", message: "no primary display is available" });
+  window.rememberPosition(0, 0, true);
+  applyPendingWindowGeometry(window);
 }
 
 // Internal AppKit geometry controller. Public Window APIs remain platform-neutral.
@@ -107,6 +135,10 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   private pendingContentSize: boolean;
   private pendingContentWidth: f64;
   private pendingContentHeight: f64;
+  private pendingPosition: boolean;
+  private pendingCenter: boolean;
+  private pendingX: f64;
+  private pendingY: f64;
 
   constructor(frame: WebKit.CGRect, style: WebKit.NSWindowStyleMask) {
     super.initWithContentRect(frame,
@@ -116,6 +148,10 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.pendingContentSize = false;
     this.pendingContentWidth = 0;
     this.pendingContentHeight = 0;
+    this.pendingPosition = false;
+    this.pendingCenter = false;
+    this.pendingX = 0;
+    this.pendingY = 0;
     this.startFrame = frame;
     this.targetFrame = frame;
     this.restoreFrame = frame;
@@ -157,12 +193,29 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
     this.pendingContentSize = true;
   }
 
-  internal function takePendingContentSize(inout this): Option<WebKit.CGSize> {
-    if (!this.pendingContentSize || this.shuttingDown || this.systemResize || this.preparingZoom || this.applyingFrame
+  internal function rememberPosition(inout this, x: f64, y: f64, center: boolean): void {
+    if (this.shuttingDown) return;
+    this.pendingPosition = true;
+    this.pendingCenter = center;
+    this.pendingX = x;
+    this.pendingY = y;
+  }
+
+  internal function geometryBaseFrame(): WebKit.CGRect {
+    return this.animating && !this.zoomTransition ? this.targetFrame : this.frame;
+  }
+
+  internal function takePendingGeometry(inout this): Option<WindowGeometryRequest> {
+    if ((!this.pendingContentSize && !this.pendingPosition) || this.shuttingDown || this.systemResize || this.preparingZoom || this.applyingFrame
       || (this.animating && this.zoomTransition)) return Option.none;
-    const size = WebKit.NSMakeSize(this.pendingContentWidth, this.pendingContentHeight);
+    const request = WindowGeometryRequest({ resize: this.pendingContentSize,
+      width: this.pendingContentWidth, height: this.pendingContentHeight,
+      reposition: this.pendingPosition, center: this.pendingCenter,
+      x: this.pendingX, y: this.pendingY });
     this.pendingContentSize = false;
-    return Option.some(size);
+    this.pendingPosition = false;
+    this.pendingCenter = false;
+    return Option.some(request);
   }
 
   override function toggleFullScreen(inout this, in sender: objc.Object | null): void as "toggleFullScreen:" {
@@ -365,6 +418,8 @@ internal class MacOSWindow extends WebKit.NSWindow on thread.main {
   override function close(inout this): void as "close" {
     this.shuttingDown = true;
     this.pendingContentSize = false;
+    this.pendingPosition = false;
+    this.pendingCenter = false;
     this.animating = false;
     invalidateDisplay(this.displayLink);
     this.displayLink = null;

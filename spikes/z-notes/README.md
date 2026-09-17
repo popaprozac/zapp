@@ -12,6 +12,12 @@ fullscreen, Compact/Roomy records the latest ordinary size without exiting;
 restore the window to see it apply. See [window sizing](../../docs/window-sizing.md)
 for content units, limits, and animation acknowledgement semantics.
 
+**Center Notes**, **Move to (120, 100)**, and **Read position** exercise native
+window positioning. Requests preserve hidden/minimized state; while maximized
+or fullscreen, the latest placement waits for restore and composes with the
+requested size. Read position reports the actual outer top-left, including
+negative/fractional coordinates. See [window positioning](../../docs/window-positioning.md).
+
 ## The end-user application
 
 An application author currently owns the Z application modules under `zapp/`

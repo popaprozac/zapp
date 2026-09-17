@@ -1,5 +1,6 @@
 import WebKit from "WebKit/WebKit.h";
 import json from "std/json";
+import console from "std/console";
 import { TextBuffer } from "std/text";
 import { thread } from "std/thread";
 import { BridgeResponse } from "../../bridge.zs";
@@ -48,6 +49,11 @@ readonly struct WebViewWindowNavigationPayload {
   cancelled: boolean;
 }
 
+internal function reportEncodingFailure(in error: json.JsonEncodeError): void on thread.main {
+  console.log(`[zapp] JSON encoding failed at ${error.path}: ${error.message}`);
+  setMacOSApplicationResult(45);
+}
+
 internal function javascriptJSON(in source: String): String {
   let output = TextBuffer();
   let segmentStart: usize = 0;
@@ -74,14 +80,14 @@ internal function javascriptJSON(in source: String): String {
   return output.finish();
 }
 
-function responseScript(in response: BridgeResponse, in document: RelatedDocumentIdentity): String {
+function responseScript(in response: BridgeResponse, in document: RelatedDocumentIdentity): String throws json.JsonEncodeError {
   const envelope = WebViewResponseEnvelope({
     document: `${document.token}`,
     id: `${response.id}`,
     ok: response.ok,
     payload: copy response.payload,
   });
-  const encoded = json.encode(in envelope);
+  const encoded = try json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._onDocumentInvokeResult==='function'&&b._onDocumentInvokeResult(r.document,Number(r.id),r.ok,r.payload)})()`;
 }
@@ -90,13 +96,13 @@ function windowEventScript(
   in windowId: String,
   in eventName: String,
   in dataJson: String
-): String {
+): String throws json.JsonEncodeError {
   const envelope = WebViewWindowEventEnvelope({
     windowId: copy windowId,
     eventName: copy eventName,
     dataJson: copy dataJson,
   });
-  const encoded = json.encode(in envelope);
+  const encoded = try json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchWindowEvent!=='function')return;b.dispatchWindowEvent(e.windowId,e.eventName,e.dataJson||undefined)})()`;
 }
@@ -105,13 +111,13 @@ function applicationWorkerMessageScript(
   in workerId: String,
   in channel: String,
   in payload: String
-): String {
+): String throws json.JsonEncodeError {
   const envelope = WebViewApplicationWorkerMessageEnvelope({
     workerId: copy workerId,
     channel: copy channel,
     payload: copy payload,
   });
-  const encoded = json.encode(in envelope);
+  const encoded = try json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchApplicationWorkerMessage!=='function')return;b.dispatchApplicationWorkerMessage(e.workerId,e.channel,e.payload)})()`;
 }
@@ -119,12 +125,12 @@ function applicationWorkerMessageScript(
 function menuCommandScript(
   in ownerToken: String,
   in commandId: String
-): String {
+): String throws json.JsonEncodeError {
   const envelope = WebViewMenuCommandEnvelope({
     ownerToken: copy ownerToken,
     commandId: copy commandId,
   });
-  const encoded = json.encode(in envelope);
+  const encoded = try json.encode(in envelope);
   const source = javascriptJSON(in encoded);
   return `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];if(!b||typeof b.dispatchMenuCommand!=='function')return;b.dispatchMenuCommand(e.ownerToken,e.commandId)})()`;
 }
@@ -134,7 +140,10 @@ internal function deliverWebViewMenuCommand(
   in ownerToken: String,
   in commandId: String
 ): void on thread.main {
-  const script = menuCommandScript(in ownerToken, in commandId);
+  const script = match (attempt menuCommandScript(in ownerToken, in commandId)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}
@@ -158,7 +167,10 @@ internal function deliverWebViewWindowEvent(
   in windowId: String,
   in eventName: String
 ): void on thread.main {
-  const script = windowEventScript(in windowId, in eventName, "");
+  const script = match (attempt windowEventScript(in windowId, in eventName, "")) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}
@@ -172,8 +184,14 @@ internal function deliverWebViewWindowResize(
   height: u32
 ): void on thread.main {
   const payload = WebViewWindowSizePayload({ width, height });
-  const dataJson = json.encode(in payload);
-  const event = windowEventScript(in windowId, "resize", in dataJson);
+  const dataJson = match (attempt json.encode(in payload)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
+  const event = match (attempt windowEventScript(in windowId, "resize", in dataJson)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   const chrome = windowChromeScript(in webView);
   const script = `${chrome};${event}`;
   webView.evaluateJavaScript(
@@ -196,12 +214,18 @@ internal function deliverWebViewWindowNavigationRequested(
     allowedByProfile,
     cancelled,
   });
-  const dataJson = json.encode(in payload);
-  const script = windowEventScript(
+  const dataJson = match (attempt json.encode(in payload)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
+  const script = match (attempt windowEventScript(
     in windowId,
     "navigation-requested",
     in dataJson
-  );
+  )) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}
@@ -214,11 +238,14 @@ internal function deliverWebViewApplicationWorkerMessage(
   in channel: String,
   in payload: String
 ): void on thread.main {
-  const script = applicationWorkerMessageScript(
+  const script = match (attempt applicationWorkerMessageScript(
     in workerId,
     in channel,
     in payload
-  );
+  )) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   webView.evaluateJavaScript(
     move script,
     completionHandler: move (value, error): void => {}
@@ -235,7 +262,10 @@ internal function deliverWebViewResponse(
   activeWindowCount: usize
 ): void on thread.main {
   if (!endpoint.isCurrent(in document)) return;
-  const script = responseScript(in response, in document);
+  const script = match (attempt responseScript(in response, in document)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   const payload = copy response.payload;
   const requestId = response.id;
   const development = configuredFrontendIsDevelopment();

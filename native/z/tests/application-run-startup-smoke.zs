@@ -35,7 +35,9 @@ async function main(): i32 on thread.main {
   match (opened) { success(_) => {} failure(_) => return 12; }
   const handler: (in event: ApplicationSecondInstanceLaunchedEvent) => void on thread.main =
     move (in event: ApplicationSecondInstanceLaunchedEvent): void => {
-      const encoded = json.encode(in event);
+      const encoded = match (attempt json.encode(in event)) {
+        success(text) => text; failure(_) => { console.log("launch encoding failed"); app.quit(); return; }
+      };
       console.log(`launch ${encoded}`);
       app.quit();
     };

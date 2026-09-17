@@ -142,10 +142,14 @@
         <button id="compact-window" type="button">Compact (720 × 460)</button>
         <button id="roomy-window" type="button">Roomy (1100 × 760)</button>
         <button id="measure-window" type="button">Read content size</button>
+        <button id="center-window" type="button">Center Notes</button>
+        <button id="move-window" type="button">Move to (120, 100)</button>
+        <button id="measure-position" type="button">Read position</button>
         <button id="close-window" type="button">Close window</button>
       </div>
       <h2>Window events delivered from AppKit through Z</h2>
       <pre id="window-size">Minimum content size: 600 × 400 logical units. Resize requests while maximized/fullscreen apply after restore.</pre>
+      <pre id="window-position">Positions use the outer top-left in logical desktop coordinates. Move/center requests while maximized/fullscreen apply after restore.</pre>
       <p>Focus, resize, minimize, or restore either window to verify window-scoped delivery.</p>
       <pre id="window-events">Waiting for native window events…</pre>
       <h2>Compiled navigation policy</h2>

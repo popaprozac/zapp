@@ -6,6 +6,7 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgePermissionFailure,
   bridgeSuccess,
@@ -48,11 +49,7 @@ function clipboardFailure(
     message: copy error.message,
     operation: clipboardOperationName(error.operation),
   });
-  return BridgeResponse({
-    id,
-    ok: false,
-    payload: json.encode(in payload),
-  });
+  return encodeBridgeResponse(id, false, in payload);
 }
 
 function readClipboardText(

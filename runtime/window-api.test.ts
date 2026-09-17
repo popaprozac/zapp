@@ -12,6 +12,48 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
+test("position operations preserve signed fractional coordinates and await native handling", async () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY];
+  const previousId = (globalThis as any)[WINDOW_ID_KEY];
+  const calls: Array<[string, unknown]> = [];
+  let reply: unknown = { x: -120.5, y: 80.25 };
+  let acknowledge!: () => void;
+  (globalThis as any)[BRIDGE_KEY] = {
+    invoke(method: string, args: unknown) {
+      calls.push([method, args]);
+      return method === "__window:set-position" || method === "__window:center"
+        ? new Promise<void>(resolve => { acknowledge = resolve; }) : Promise.resolve(reply);
+    },
+  };
+  (globalThis as any)[WINDOW_ID_KEY] = "placed";
+  try {
+    const window = currentWindow(), position = { x: -120.5, y: 80.25 };
+    let settled = false;
+    const moving = window.setPosition(position).then(() => { settled = true; });
+    position.x = 0;
+    await Promise.resolve(); expect(settled).toBe(false);
+    expect(calls[0]).toEqual(["__window:set-position", { windowId: "placed", position: { x: -120.5, y: 80.25 } }]);
+    acknowledge(); await moving;
+    expect(await window.getPosition()).toEqual({ x: -120.5, y: 80.25 });
+    settled = false;
+    const centering = window.center().then(() => { settled = true; });
+    await Promise.resolve(); expect(settled).toBe(false);
+    expect(calls[2]).toEqual(["__window:center", { windowId: "placed" }]);
+    acknowledge(); await centering;
+    for (const value of [NaN, Infinity, -Infinity, "12", undefined, null]) {
+      await expect(window.setPosition({ x: value, y: 0 } as any)).rejects.toBeInstanceOf(TypeError);
+      await expect(window.setPosition({ x: 0, y: value } as any)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(calls).toHaveLength(3);
+    for (reply of [null, {}, { x: "12", y: 0 }, { x: 1, y: Infinity }]) {
+      await expect(window.getPosition()).rejects.toBeInstanceOf(WindowError);
+    }
+  } finally {
+    (globalThis as any)[BRIDGE_KEY] = previousBridge;
+    (globalThis as any)[WINDOW_ID_KEY] = previousId;
+  }
+});
+
 test("size operations use acknowledged requests and validate both directions", async () => {
   const previousBridge = (globalThis as any)[BRIDGE_KEY];
   const previousId = (globalThis as any)[WINDOW_ID_KEY];

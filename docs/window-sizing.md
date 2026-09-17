@@ -88,5 +88,6 @@ after close. Creation options, rather than `setSize()`, configure initial size.
 Frontend invalid arguments reject with `TypeError`; native window failures
 reject with `WindowError`.
 
-Positioning, display selection, dynamic limit updates, and geometry persistence
-are not part of this API yet.
+Use [window positioning](window-positioning.md) to move or center a window.
+Display selection, dynamic limit updates, and geometry persistence remain
+separate future APIs.

@@ -34,6 +34,9 @@ import {
 } from "../../framework/window-titlebar.zs";
 
 import { Inspectable as FrameworkInspectable } from "../../framework/window-inspection.zs";
+import { WindowPosition as FrameworkWindowPosition } from "../../framework/window-positioning.zs";
+
+export type WindowPosition = FrameworkWindowPosition;
 
 export type TitleBarStyle = FrameworkTitleBarStyle;
 export type Inspectable = FrameworkInspectable;

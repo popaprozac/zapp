@@ -6,6 +6,7 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgePermissionFailure,
   bridgeSuccess,
@@ -81,11 +82,7 @@ function shellFailure(
     operation: shellOperationName(error.operation),
     target: copy error.target,
   });
-  return BridgeResponse({
-    id,
-    ok: false,
-    payload: json.encode(in payload),
-  });
+  return encodeBridgeResponse(id, false, in payload);
 }
 
 function shellPolicyFailure(

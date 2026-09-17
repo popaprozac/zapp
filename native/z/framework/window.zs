@@ -4,6 +4,7 @@ import { TitleBarOptions } from "./window-titlebar.zs";
 import { Inspectable } from "./window-inspection.zs";
 import { WindowSize } from "./events.zs";
 import { WindowSizeLimits, checkedWindowSize } from "./window-sizing.zs";
+import { WindowPosition, checkedWindowPosition } from "./window-positioning.zs";
 import { thread } from "std/thread";
 import { WindowError } from "./application-error.zs";
 import { Menu, MenuError } from "./menu.zs";
@@ -62,6 +63,21 @@ internal type WindowBooleanOperation = (
 
 internal type WindowGetSizeOperation = (in id: String) => WindowSize throws WindowError on thread.main;
 internal type WindowSetSizeOperation = (in id: String, size: WindowSize) => void throws WindowError on thread.main;
+internal type WindowGetPositionOperation = (in id: String) => WindowPosition throws WindowError on thread.main;
+internal type WindowSetPositionOperation = (in id: String, position: WindowPosition) => void throws WindowError on thread.main;
+internal type WindowCenterOperation = (in id: String) => void throws WindowError on thread.main;
+
+function unavailableWindowPosition(in id: String): WindowPosition throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window position is unavailable" });
+}
+
+function unavailableWindowMove(in id: String, position: WindowPosition): void throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window positioning is unavailable" });
+}
+
+function unavailableWindowCenter(in id: String): void throws WindowError on thread.main {
+  throw WindowError({ id: copy id, message: "native window centering is unavailable" });
+}
 
 function unavailableWindowSize(in id: String): WindowSize throws WindowError on thread.main {
   throw WindowError({ id: copy id, message: "native window size is unavailable" });
@@ -89,6 +105,9 @@ internal struct WindowBackend {
   setTitle: WindowTitleOperation;
   getSize: WindowGetSizeOperation = unavailableWindowSize;
   setSize: WindowSetSizeOperation = unavailableWindowResize;
+  getPosition: WindowGetPositionOperation = unavailableWindowPosition;
+  setPosition: WindowSetPositionOperation = unavailableWindowMove;
+  center: WindowCenterOperation = unavailableWindowCenter;
   showContextMenu: WindowContextMenuOperation = unavailableContextMenu;
 }
 
@@ -138,6 +157,30 @@ export readonly class Window on thread.main {
   readonly id: String;
   readonly events: WindowEvents;
   internal readonly manager: Weak<WindowManager>;
+
+  function getPosition(): WindowPosition throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    return try owner.getPosition(in this.id);
+  }
+
+  function setPosition(position: WindowPosition): void throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    try owner.setPosition(in this.id, position);
+  }
+
+  function center(): void throws WindowError on thread.main {
+    const owner = match (attempt this.manager.upgrade()) {
+      success(value) => value;
+      failure(_) => throw WindowError({ id: copy this.id, message: "window is no longer available" });
+    };
+    try owner.center(in this.id);
+  }
 
   function getSize(): WindowSize throws WindowError on thread.main {
     const owner = match (attempt this.manager.upgrade()) {
@@ -810,6 +853,28 @@ export readonly class WindowManager on thread.main {
       throw WindowError({ id: copy id, message: "native window is not available" });
     }
     return try this.state.backend.getSize(in id);
+  }
+
+  internal function getPosition(in id: String): WindowPosition throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    return try this.state.backend.getPosition(in id);
+  }
+
+  internal function setPosition(in id: String, position: WindowPosition): void throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    const checked = try checkedWindowPosition(position);
+    try this.state.backend.setPosition(in id, checked);
+  }
+
+  internal function center(in id: String): void throws WindowError on thread.main {
+    if (!this.state.active || !this.state.windows.has(id)) {
+      throw WindowError({ id: copy id, message: "native window is not available" });
+    }
+    try this.state.backend.center(in id);
   }
 
   internal function setSize(in id: String, size: WindowSize): void throws WindowError on thread.main {

@@ -1,11 +1,13 @@
 import json from "std/json";
 import { thread } from "std/thread";
 import { WindowSize } from "./events.zs";
+import { WindowPosition } from "./window-positioning.zs";
 import { FrontendTitleBarOptions, validTitleBarFields, checkedTitleBar } from "./window-titlebar-bridge.zs";
 import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgeFailure,
   bridgePermissionFailure,
@@ -50,6 +52,11 @@ readonly struct FrontendWindowSizeAction {
   size: WindowSize;
 }
 
+readonly struct FrontendWindowPositionAction {
+  windowId: String;
+  position: WindowPosition;
+}
+
 readonly struct FrontendWindowTitleAction {
   windowId: String;
   title: String;
@@ -86,7 +93,7 @@ function windowFailure(
     message: move message,
     operation: move operation,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 function rejectsTrustedWindowPolicy(in source: String): boolean {
@@ -174,8 +181,7 @@ function createWindow(
           const result = FrontendWindowCreated({
             windowId: copy window.id,
           });
-          const payload: String = json.encode(in result);
-          select bridgeSuccess(message.id, move payload);
+          select encodeBridgeResponse(message.id, true, in result);
         }
         failure(error) => windowFailure(
           message.id,
@@ -197,8 +203,7 @@ function listWindows(
     ids.push(copy window.id);
   }
   const result = FrontendWindowList({ ids });
-  const payload: String = json.encode(in result);
-  return bridgeSuccess(message.id, move payload);
+  return encodeBridgeResponse(message.id, true, in result);
 }
 
 function routeWindowAction(
@@ -305,8 +310,41 @@ export function routeWindowBridgeMessage(
       failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "getSize", "invalid window identity"));
     };
     const response = match (attempt windows.getSize(in action.windowId)) {
-      success(size) => bridgeSuccess(message.id, json.encode(in size));
+      success(size) => encodeBridgeResponse(message.id, true, in size);
       failure(error) => windowFailure(message.id, "getSize", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
+  if (message.method == "__window:get-position") {
+    const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "getPosition", "invalid window identity"));
+    };
+    const response = match (attempt windows.getPosition(in action.windowId)) {
+      success(position) => encodeBridgeResponse(message.id, true, in position);
+      failure(error) => windowFailure(message.id, "getPosition", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
+  if (message.method == "__window:set-position") {
+    const action = match (attempt json.decode<FrontendWindowPositionAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "setPosition", "invalid window identity or position"));
+    };
+    const response = match (attempt windows.setPosition(in action.windowId, action.position)) {
+      success => bridgeSuccess(message.id, "null");
+      failure(error) => windowFailure(message.id, "setPosition", copy error.message);
+    };
+    return WindowBridgeRoute.response(move response);
+  }
+  if (message.method == "__window:center") {
+    const action = match (attempt json.decode<FrontendWindowAction>(in message.arguments)) {
+      success(value) => value;
+      failure(_) => return WindowBridgeRoute.response(windowFailure(message.id, "center", "invalid window identity"));
+    };
+    const response = match (attempt windows.center(in action.windowId)) {
+      success => bridgeSuccess(message.id, "null");
+      failure(error) => windowFailure(message.id, "center", copy error.message);
     };
     return WindowBridgeRoute.response(move response);
   }

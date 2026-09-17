@@ -98,7 +98,10 @@ function presentFrontendContextMenu(
     success => {}
   }
   const result = FrontendContextMenuResult({ commandId: copy selection.commandId });
-  return json.encode(in result);
+  return match (attempt json.encode(in result)) {
+    success(payload) => payload;
+    failure(error) => throw MenuError({ message: `cannot encode context menu result: ${error.message}` });
+  };
 }
 
 internal function routeContextMenuBridgeMessage(

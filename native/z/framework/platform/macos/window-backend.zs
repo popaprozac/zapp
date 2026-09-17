@@ -1,5 +1,6 @@
 import { WindowError } from "../../application-error.zs";
 import { WindowSize } from "../../events.zs";
+import { WindowPosition } from "../../window-positioning.zs";
 import {
   WindowBackend,
   WindowCreateOperation,
@@ -65,6 +66,21 @@ function getMacOSWindowSize(in id: String): WindowSize throws WindowError on thr
   return try current.windows.getWindowSize(in id);
 }
 
+function getMacOSWindowPosition(in id: String): WindowPosition throws WindowError on thread.main {
+  const current = currentMacOSApplication();
+  return try current.windows.getWindowPosition(in id);
+}
+
+function setMacOSWindowPosition(in id: String, position: WindowPosition): void throws WindowError on thread.main {
+  const current = currentMacOSApplication();
+  try current.windows.setWindowPosition(in id, position);
+}
+
+function centerMacOSWindow(in id: String): void throws WindowError on thread.main {
+  const current = currentMacOSApplication();
+  try current.windows.centerWindow(in id);
+}
+
 function setMacOSWindowSize(in id: String, size: WindowSize): void throws WindowError on thread.main {
   const current = currentMacOSApplication();
   try current.windows.setWindowSize(in id, size);
@@ -102,6 +118,9 @@ internal function macOSWindowBackend(): WindowBackend on thread.main {
     setTitle,
     getSize: getMacOSWindowSize,
     setSize: setMacOSWindowSize,
+    getPosition: getMacOSWindowPosition,
+    setPosition: setMacOSWindowPosition,
+    center: centerMacOSWindow,
     showContextMenu: showMacOSContextMenu,
   });
 }

@@ -177,7 +177,9 @@ class State on thread.main {
         const address = match (coordinator.address(in reservation)) { some(value) => value; none => { this.failed = true; return; } };
         const value = PreparedChild({ address, windowId: `related-${reservation.child.windowId}`,
           documentToken: `${reservation.child.token}`, ownerToken: `${identity.token}` });
-        const encoded = json.encode(in value);
+        const encoded = match (attempt json.encode(in value)) {
+          success(text) => text; failure(_) => { this.failed = true; return; }
+        };
         reply(this.view, in identity, request.id, move encoded);
         return;
       }

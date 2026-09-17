@@ -4,6 +4,7 @@ import { thread } from "std/thread";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
 import { windowChromeScript } from "./window-chrome.zs";
+import { reportEncodingFailure } from "./response-delivery.zs";
 
 internal type DesktopRouteMessageOperation = (
   message: String,
@@ -24,7 +25,10 @@ function confirmDocumentShell(
 ): void on thread.main {
   if (!document.requiresShell() || !document.bindingMatches(in token, in realm)) return;
   const binding = DocumentBinding({ realm: copy realm, token: copy token, shell: true });
-  const encoded = json.encode(in binding);
+  const encoded = match (attempt json.encode(in binding)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   const probe = `(()=>{const r=${encoded};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._documentShellReady==='function'&&b._documentShellReady(r.realm,r.token)})()`;
   webView.evaluateJavaScript(move probe, completionHandler: move (value, error): void => {
     if (error != null || !(value instanceof WebKit.NSNumber)) return;
@@ -89,7 +93,10 @@ internal function routeDocumentMessage(
     match (document.offer(in body)) {
       some(identity) => {
         const binding = DocumentBinding({ realm: copy body, token: `${identity.token}`, shell: document.requiresShell() });
-        const source = json.encode(in binding);
+        const source = match (attempt json.encode(in binding)) {
+          success(value) => value;
+          failure(error) => { reportEncodingFailure(in error); return; }
+        };
         const chrome = windowChromeScript(in webView);
         const script = `${chrome};(()=>{const r=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._bindDocument==='function'&&b._bindDocument(r.realm,r.token,r.shell)})()`;
         webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});

@@ -186,7 +186,10 @@ class State on thread.main {
           const address = match (registry.related.address(in reservation)) { some(value) => value; none => { this.failed = true; return; } };
           const value = Prepared({ address, windowId: `related-${reservation.child.windowId}`,
             documentToken: `${reservation.child.token}`, ownerToken: `${identity.token}`, nativeId: reservation.child.windowId });
-          this.reply(in identity, request.id, json.encode(in value));
+          const encoded = match (attempt json.encode(in value)) {
+            success(text) => text; failure(_) => { this.failed = true; return; }
+          };
+          this.reply(in identity, request.id, move encoded);
         }
         none => this.reply(in identity, request.id, "false");
       }

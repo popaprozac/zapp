@@ -132,6 +132,18 @@ export function bridgeSuccess(
   return BridgeResponse({ id, ok: true, payload: move payload });
 }
 
+// Keep transport encoding failures non-recursive: the fallback is fixed,
+// valid JSON and never invokes the codec that just failed.
+internal function encodeBridgeResponse<T>(id: u64, ok: boolean, in value: T): BridgeResponse {
+  return match (attempt json.encode(in value)) {
+    success(payload) => BridgeResponse({ id, ok, payload: move payload });
+    failure(_) => BridgeResponse({
+      id, ok: false,
+      payload: '{"code":"INTERNAL_ERROR","message":"Failed to encode native response."}',
+    });
+  };
+}
+
 export function bridgeFailure(
   id: u64,
   code: String,
@@ -141,7 +153,7 @@ export function bridgeFailure(
     code: move code,
     message: move message,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 export function bridgePermissionFailure(
@@ -154,7 +166,7 @@ export function bridgePermissionFailure(
     message: move message,
     permission: move permission,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 export function bridgeCapabilityFailure(
@@ -167,7 +179,7 @@ export function bridgeCapabilityFailure(
     message: move message,
     permission: move permission,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 export function bridgeWorkerCapabilityFailure(
@@ -184,7 +196,7 @@ export function bridgeWorkerCapabilityFailure(
     workerId: move workerId,
     method: move method,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 export function bridgeTypedServiceFailure(
@@ -200,7 +212,7 @@ export function bridgeTypedServiceFailure(
     errorType: move errorType,
     details: move details,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in payload) });
+  return encodeBridgeResponse(id, false, in payload);
 }
 
 function dispatch(in message: BridgeMessage): Option<BridgeResponse> {

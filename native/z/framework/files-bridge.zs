@@ -6,6 +6,7 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgeFailure,
   bridgePermissionFailure,
@@ -47,11 +48,7 @@ function fileFailure(id: u64, in error: FileError): BridgeResponse {
     operation: fileOperationName(error.operation),
     path: copy error.path,
   });
-  return BridgeResponse({
-    id,
-    ok: false,
-    payload: json.encode(in payload),
-  });
+  return encodeBridgeResponse(id, false, in payload);
 }
 
 function textPayload(in source: String): String {

@@ -4,7 +4,7 @@ import objc from "std/objc";
 import { thread } from "std/thread";
 import { WindowError } from "../framework/application-error.zs";
 import { WindowSizeLimits } from "../framework/window-sizing.zs";
-import { MacOSWindow, requestWindowSize, applyPendingWindowSize } from "../framework/platform/macos/window-resize.zs";
+import { MacOSWindow, requestWindowSize, applyPendingWindowGeometry } from "../framework/platform/macos/window-resize.zs";
 import { macOSWindowSize, applyMacOSSizeLimits } from "../framework/platform/macos/window-geometry.zs";
 
 struct Lifetime on thread.main {
@@ -47,7 +47,7 @@ function verify(): i32 throws WindowError on thread.main {
   const deferred = try macOSWindowSize(in window);
   if (deferred.width != 600 || deferred.height != 400) return 4;
   window.setSystemResize(false);
-  applyPendingWindowSize(window);
+  applyPendingWindowGeometry(window);
   const restored = try macOSWindowSize(in window);
   if (restored.width != 700 || restored.height != 500) return 5;
   // Overlay content uses the same content-size contract, not outer frame height.
@@ -66,7 +66,7 @@ function verify(): i32 throws WindowError on thread.main {
   if (zoomable.frame.size.width != maximized.size.width || zoomable.frame.size.height != maximized.size.height) return 8;
   zoomable.zoom(null);
   if (zoomable.zoomed) return 9;
-  applyPendingWindowSize(zoomable);
+  applyPendingWindowGeometry(zoomable);
   const ordinary = try macOSWindowSize(in zoomable);
   if (ordinary.width != 460 || ordinary.height != 330) return 10;
   const observer = new ResizeRequest({ window, requested: false });
@@ -78,7 +78,7 @@ function verify(): i32 throws WindowError on thread.main {
   if (!observer.requested || applying.width != 600 || applying.height != 400) return 11;
   // Production's deferred presentation notification performs this after the
   // native geometry entry unwinds, never recursively inside that entry.
-  applyPendingWindowSize(window);
+  applyPendingWindowGeometry(window);
   const reentrant = try macOSWindowSize(in window);
   if (reentrant.width != 550 || reentrant.height != 350) return 12;
   console.log("fixed and inset content size, constraints, native zoom deferral, reentrant requests, latest request, top-left preservation passed");

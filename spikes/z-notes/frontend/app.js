@@ -632,6 +632,23 @@ for (const [id, width, height] of [["compact-window", 720, 460], ["roomy-window"
     }
   });
 }
+for (const [id, operation, message] of [
+  ["center-window", () => windowHandle.center(), "Requested geometric centering on the current display."],
+  ["move-window", () => windowHandle.setPosition({ x: 120, y: 100 }), "Requested outer position (120, 100)."],
+]) {
+  document.querySelector(`#${id}`).addEventListener("click", async () => {
+    try {
+      await operation();
+      document.querySelector("#window-position").textContent = `${message} Applies after restore if maximized/fullscreen.`;
+    } catch (error) { document.querySelector("#window-position").textContent = String(error); }
+  });
+}
+document.querySelector("#measure-position").addEventListener("click", async () => {
+  try {
+    const { x, y } = await windowHandle.getPosition();
+    document.querySelector("#window-position").textContent = `Native outer top-left: (${x}, ${y}) logical units.`;
+  } catch (error) { document.querySelector("#window-position").textContent = String(error); }
+});
 document.querySelector("#measure-window").addEventListener("click", async () => {
   try {
     const { width, height } = await windowHandle.getSize();

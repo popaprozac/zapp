@@ -12,6 +12,7 @@ const presentationOnly = process.argv.includes("--presentation");
 const titlebarOnly = process.argv.includes("--titlebar");
 const gesturesOnly = process.argv.includes("--gestures");
 const sizingOnly = process.argv.includes("--sizing");
+const positioningOnly = process.argv.includes("--positioning");
 const directory = await mkdtemp(join(tmpdir(), "zapp-window-focus-"));
 async function run(command: string[], timeoutMs: number): Promise<string> {
   const result = await runBoundedCommand(command, { cwd: root, timeoutMs });
@@ -22,7 +23,8 @@ async function run(command: string[], timeoutMs: number): Promise<string> {
 try {
   if (native && process.platform !== "darwin") throw new Error("native focus probe requires macOS");
   if (gesturesOnly && !native) throw new Error("gesture lifetime probe requires --native");
-  const fixtures = sizingOnly ? [native ? "window-sizing-native-smoke" : "window-sizing-smoke"]
+  const fixtures = positioningOnly ? [native ? "window-positioning-native-smoke" : "window-positioning-smoke"]
+    : sizingOnly ? [native ? "window-sizing-native-smoke" : "window-sizing-smoke"]
     : gesturesOnly ? ["window-gesture-lifetime-native-smoke"]
     : titlebarOnly ? [native ? "window-titlebar-native-smoke" : "window-titlebar-smoke"]
     : native ? ["window-focus-native-smoke", "window-presentation-native-smoke"]

@@ -6,6 +6,7 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgeFailure,
   bridgePermissionFailure,
@@ -65,11 +66,7 @@ function notificationFailure(
     message: copy error.message,
     operation: notificationOperationName(error.operation),
   });
-  return BridgeResponse({
-    id,
-    ok: false,
-    payload: json.encode(in payload),
-  });
+  return encodeBridgeResponse(id, false, in payload);
 }
 
 function notificationPermissionSuccess(

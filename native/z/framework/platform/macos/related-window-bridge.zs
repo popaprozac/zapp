@@ -2,7 +2,7 @@ import json from "std/json";
 import { thread } from "std/thread";
 import { WindowSize } from "../../events.zs";
 import { WindowSizeLimits, checkedWindowSize } from "../../window-sizing.zs";
-import { BridgeMessage, BridgeMessageKind, BridgeResponse, bridgeSuccess,
+import { BridgeMessage, BridgeMessageKind, BridgeResponse, bridgeSuccess, encodeBridgeResponse,
   bridgePermissionFailure, bridgeCapabilityFailure } from "../../bridge.zs";
 import { ApplicationPermissions } from "../../application-permissions.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
@@ -36,7 +36,7 @@ readonly struct CreationError { code: String; operation: String; message: String
 
 function creationFailure(id: u64, message: String): BridgeResponse {
   const error = CreationError({ code: "WINDOW_ERROR", operation: "create", message });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 function validOptions(in source: String): boolean {
@@ -122,5 +122,5 @@ internal function routeRelatedWindowBridgeMessage(
   };
   const result = RelatedPrepared({ address, windowId: `related-${reservation.child.windowId}`,
     nativeId: reservation.child.windowId, documentToken: `${reservation.child.token}` });
-  return WindowBridgeRoute.response(bridgeSuccess(message.id, json.encode(in result)));
+  return WindowBridgeRoute.response(encodeBridgeResponse(message.id, true, in result));
 }

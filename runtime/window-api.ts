@@ -55,6 +55,12 @@ export interface WindowSize {
   readonly height: number;
 }
 
+/** Outer-frame top-left in logical desktop units, relative to the primary display's top-left. */
+export interface WindowPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface WindowFocusedEvent {
   readonly windowId: string;
 }
@@ -122,6 +128,12 @@ export interface WindowHandle {
   getSize(): Promise<WindowSize>;
   /** Request content size; native limits clamp it. Resolves on handling, not animation completion. */
   setSize(size: WindowSize): Promise<void>;
+  /** Measure the actual outer-frame position, not a pending placement request. */
+  getPosition(): Promise<WindowPosition>;
+  /** Finite, signed logical coordinates. Deferred while maximized/fullscreen; does not focus. */
+  setPosition(position: WindowPosition): Promise<void>;
+  /** Center geometrically in the current display's work area; deferred until ordinary presentation. */
+  center(): Promise<void>;
   /** Present a native menu in this WebView; resolves on selection or dismissal. */
   showContextMenu(items: readonly MenuItem[], options: ContextMenuOptions): Promise<void>;
 
@@ -279,6 +291,25 @@ class FocusedWindowHandle implements WindowHandle {
       throw new TypeError("Window size requires positive u32 width and height in logical units.");
     }
     await this.bridge().invoke("__window:set-size", { windowId: this.id, size: { width: size.width, height: size.height } });
+  }
+
+  async getPosition(): Promise<WindowPosition> {
+    const value = await this.bridge().invoke("__window:get-position", { windowId: this.id });
+    if (!isRecord(value) || !Number.isFinite(value.x) || !Number.isFinite(value.y)) {
+      throw new WindowError({ operation: "getPosition", windowId: this.id, message: "Native window returned invalid coordinates." });
+    }
+    return { x: value.x as number, y: value.y as number };
+  }
+
+  async setPosition(position: WindowPosition): Promise<void> {
+    if (!isRecord(position) || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+      throw new TypeError("Window position requires finite x and y in logical units.");
+    }
+    await this.bridge().invoke("__window:set-position", { windowId: this.id, position: { x: position.x, y: position.y } });
+  }
+
+  async center(): Promise<void> {
+    await this.bridge().invoke("__window:center", { windowId: this.id });
   }
 
   subscribe(

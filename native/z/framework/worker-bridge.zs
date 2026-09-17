@@ -5,6 +5,7 @@ import {
   BridgeMessage,
   BridgeMessageKind,
   BridgeResponse,
+  encodeBridgeResponse,
   bridgeCapabilityFailure,
   bridgeFailure,
   bridgeSuccess,
@@ -39,7 +40,7 @@ function workerFailure(
     operation: "send",
     workerId: move workerId,
   });
-  return BridgeResponse({ id, ok: false, payload: json.encode(in error) });
+  return encodeBridgeResponse(id, false, in error);
 }
 
 export enum ApplicationWorkerBridgeRoute {

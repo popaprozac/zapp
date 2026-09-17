@@ -3,7 +3,7 @@ import json from "std/json";
 import { thread } from "std/thread";
 import { BridgeDocument } from "../../bridge-document.zs";
 import { RelatedDocumentIdentity } from "../../related-documents.zs";
-import { javascriptJSON } from "./response-delivery.zs";
+import { javascriptJSON, reportEncodingFailure } from "./response-delivery.zs";
 
 readonly struct RelatedInvalidationEnvelope {
   ownerToken: String;
@@ -19,7 +19,10 @@ internal function deliverRelatedDocumentCreated(
   if (!owner.isCurrent(in ownerIdentity)) return;
   const event = RelatedInvalidationEnvelope({ ownerToken: `${ownerIdentity.token}`,
     windowId: `related-${child.windowId}`, documentToken: `${child.token}`, reason: "" });
-  const encoded = json.encode(in event);
+  const encoded = match (attempt json.encode(in event)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   const source = javascriptJSON(in encoded);
   const script = `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._onRelatedDocumentCreated==='function'&&b._onRelatedDocumentCreated(e.ownerToken,e.windowId,e.documentToken)})()`;
   webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});
@@ -38,7 +41,10 @@ internal function deliverRelatedDocumentInvalidated(
   const event = RelatedInvalidationEnvelope({ ownerToken: `${ownerIdentity.token}`,
     windowId: `related-${child.windowId}`, documentToken: `${child.token}`,
     reason: "The related document was closed or retired." });
-  const encoded = json.encode(in event);
+  const encoded = match (attempt json.encode(in event)) {
+    success(value) => value;
+    failure(error) => { reportEncodingFailure(in error); return; }
+  };
   const source = javascriptJSON(in encoded);
   const script = `(()=>{const e=${source};const b=globalThis[Symbol.for('zapp.bridge')];return !!b&&typeof b._onRelatedDocumentInvalidated==='function'&&b._onRelatedDocumentInvalidated(e.ownerToken,e.windowId,e.documentToken,e.reason)})()`;
   webView.evaluateJavaScript(move script, completionHandler: move (value, error): void => {});

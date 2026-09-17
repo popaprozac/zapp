@@ -60,7 +60,10 @@ internal function encodeApplicationLaunch(
     version: 1,
     launch: move launch,
   });
-  const source = json.encode(in envelope);
+  const source = match (attempt json.encode(in envelope)) {
+    success(value) => value;
+    failure(_) => throw ApplicationLaunchError({ message: "cannot encode secondary launch payload" });
+  };
   if (source.byteLength > 65536) {
     throw ApplicationLaunchError({ message: "secondary launch exceeds the 64 KiB transport limit" });
   }

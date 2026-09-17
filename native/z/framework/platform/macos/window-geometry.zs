@@ -4,6 +4,47 @@ import { thread } from "std/thread";
 import { WindowSize } from "../../events.zs";
 import { WindowError } from "../../application-error.zs";
 import { WindowSizeLimits } from "../../window-sizing.zs";
+import { WindowPosition } from "../../window-positioning.zs";
+
+internal readonly struct WindowGeometryRequest {
+  resize: boolean;
+  width: f64;
+  height: f64;
+  reposition: boolean;
+  center: boolean;
+  x: f64;
+  y: f64;
+}
+
+// mainScreen follows the key window, not the coordinate system's primary screen.
+internal function macOSPrimaryScreen(): WebKit.NSScreen | null on thread.main {
+  const first = WebKit.NSScreen.screens.firstObject;
+  if (first instanceof WebKit.NSScreen) return first;
+  return null;
+}
+
+internal function positionFromMacOSFrame(frame: WebKit.CGRect, primary: WebKit.CGRect): WindowPosition {
+  return WindowPosition({ x: frame.origin.x - primary.origin.x,
+    y: primary.origin.y + primary.size.height - frame.origin.y - frame.size.height });
+}
+
+internal function positionedMacOSFrame(frame: WebKit.CGRect, position: WindowPosition, primary: WebKit.CGRect): WebKit.CGRect {
+  return WebKit.NSMakeRect(primary.origin.x + position.x,
+    primary.origin.y + primary.size.height - position.y - frame.size.height,
+    frame.size.width, frame.size.height);
+}
+
+internal function centeredMacOSFrame(frame: WebKit.CGRect, workArea: WebKit.CGRect): WebKit.CGRect {
+  return WebKit.NSMakeRect(workArea.origin.x + (workArea.size.width - frame.size.width) / 2,
+    workArea.origin.y + (workArea.size.height - frame.size.height) / 2,
+    frame.size.width, frame.size.height);
+}
+
+internal function macOSWindowPosition(in window: WebKit.NSWindow): WindowPosition throws WindowError on thread.main {
+  const primary = macOSPrimaryScreen();
+  if (primary == null) throw WindowError({ id: "", message: "no primary display is available" });
+  return positionFromMacOSFrame(window.frame, primary.frame);
+}
 
 internal function applyMacOSSizeLimits(in window: WebKit.NSWindow, limits: WindowSizeLimits): void on thread.main {
   const minimum = window.contentMinSize;

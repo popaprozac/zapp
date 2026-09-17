@@ -114,6 +114,23 @@ test("related size limits and queries preserve the child document bridge and lif
   expect(f.calls).toHaveLength(before);
 });
 
+test("related positioning stays bound to the child document and expires with it", async () => {
+  const f = fixture();
+  const handle = await createRelatedWindow();
+  f.childBridge.invoke = async (method: string) => {
+    f.calls.push(`child:${method}`);
+    return { x: -80.5, y: 130.25 } as any;
+  };
+  await handle.setPosition({ x: -80.5, y: 130.25 });
+  expect(await handle.getPosition()).toEqual({ x: -80.5, y: 130.25 });
+  await handle.center();
+  expect(f.calls.slice(-3)).toEqual(["child:__window:set-position", "child:__window:get-position", "child:__window:center"]);
+  f.invalidate();
+  await expect(handle.getPosition()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  await expect(handle.setPosition({ x: 0, y: 0 })).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+  await expect(handle.center()).rejects.toBeInstanceOf(RelatedWindowInvalidatedError);
+});
+
 test("related window policies are checked and carried independently to native preparation", async () => {
   const f = fixture(), invoke = f.owner.invoke;
   let sent: any;
