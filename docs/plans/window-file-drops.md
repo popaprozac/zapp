@@ -59,7 +59,19 @@ inherited by NSView, not concrete declarations on WKWebView. Z needs their
 signatures for checked overrides and protocol-qualified sender values. It must
 not turn an optional requirement into a promised superclass implementation.
 
-Before wiring the drop receiver, establish safe superclass delegation for the
-ordinary WebKit drag path. Do not bypass the compiler with an Objective-C shim,
-silently return a generic default for all drag kinds, or disable ordinary HTML
-dragging to get file drops working.
+Z provides checked delegation with
+`objc.optionalCall(super.draggingEntered(sender))`. It looks for an implementation
+on the lexical superclass chain before evaluating arguments and returns
+`Option<NSDragOperation>`; void callbacks conditionally execute. The header still
+supplies the checked ABI. This is not an unchecked selector send or a promise
+that every optional callback exists.
+
+Use that operation when wiring the ordinary WebKit drag path, choosing each
+callback's documented fallback. For example, absent `draggingUpdated:` preserves
+the previous drag operation rather than rejecting it. Do not bypass the compiler
+with an Objective-C shim, silently return a generic default for all drag kinds,
+or disable ordinary HTML dragging to get file drops working.
+
+The upstream compiler boundary is covered by fixture execution and a real
+WebKit compilation probe. Zapp integration remains: native acceptance and path
+grants, document-bound event delivery, hover feedback, and the Z Notes demo.
