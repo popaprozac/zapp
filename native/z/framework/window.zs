@@ -25,6 +25,8 @@ export struct WindowOptions {
   maxWidth: Option<u32> = Option<u32>.none;
   maxHeight: Option<u32> = Option<u32>.none;
   visible: boolean = true;
+  // Native-only opt-in. Renderer-authored creation cannot grant path access.
+  fileDrop: boolean = false;
   resizable: boolean = true;
   maximizable: boolean = true;
   fullscreenable: boolean = true;

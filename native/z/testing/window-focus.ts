@@ -14,6 +14,7 @@ const gesturesOnly = process.argv.includes("--gestures");
 const sizingOnly = process.argv.includes("--sizing");
 const positioningOnly = process.argv.includes("--positioning");
 const restorationOnly = process.argv.includes("--restoration");
+const fileDropsOnly = process.argv.includes("--file-drops");
 const directory = await mkdtemp(join(tmpdir(), "zapp-window-focus-"));
 async function run(command: string[], timeoutMs: number): Promise<string> {
   const result = await runBoundedCommand(command, { cwd: root, timeoutMs });
@@ -24,7 +25,8 @@ async function run(command: string[], timeoutMs: number): Promise<string> {
 try {
   if (native && process.platform !== "darwin") throw new Error("native focus probe requires macOS");
   if (gesturesOnly && !native) throw new Error("gesture lifetime probe requires --native");
-  const fixtures = restorationOnly ? [native ? "window-state-native-smoke" : "window-state-smoke"]
+  const fixtures = fileDropsOnly ? [native ? "window-file-drops-native-smoke" : "window-file-drops-smoke"]
+    : restorationOnly ? [native ? "window-state-native-smoke" : "window-state-smoke"]
     : positioningOnly ? [native ? "window-positioning-native-smoke" : "window-positioning-smoke"]
     : sizingOnly ? [native ? "window-sizing-native-smoke" : "window-sizing-smoke"]
     : gesturesOnly ? ["window-gesture-lifetime-native-smoke"]
@@ -52,7 +54,8 @@ try {
         await run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", optimization,
           ...(native ? ["-fobjc-arc", "-fblocks", "-framework", "AppKit", "-framework", "WebKit", "-framework", "QuartzCore", "-mmacosx-version-min=14.0"] : []),
           "-fsanitize=undefined", "-fno-sanitize-recover=all", file, "-o", executable], 30_000);
-        const output = await run([executable, ...(restorationOnly ? [join(directory, `${mode}${optimization}-state`)] : [])], native ? 15_000 : 5_000);
+        const output = await run([executable, ...(fileDropsOnly && native ? [directory] : []),
+          ...(restorationOnly ? [join(directory, `${mode}${optimization}-state`)] : [])], native ? 15_000 : 5_000);
         console.log(`${fixture} ${mode} ${optimization}: passed (UBSan) ${output.trim()}`);
       }
     }

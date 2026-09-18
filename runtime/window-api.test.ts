@@ -12,6 +12,27 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
+test("file-drop subscriptions validate, snapshot and isolate the target window", () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY], previousId = (globalThis as any)[WINDOW_ID_KEY];
+  let receive!: (event: unknown) => void, stopped = 0;
+  const events: any[] = [];
+  (globalThis as any)[BRIDGE_KEY] = { on(name: string, callback: typeof receive) {
+    expect(name).toBe("window:files-dropped"); receive = callback; return () => stopped++;
+  } };
+  (globalThis as any)[WINDOW_ID_KEY] = "drop-target";
+  try {
+    const subscription = currentWindow().subscribe(WindowEvent.FILES_DROPPED, event => events.push(event));
+    const source = { windowId: "drop-target", paths: ["/selected/note.txt"], position: { x: 20.5, y: 42 } };
+    receive({ ...source, windowId: "owner" }); receive({ ...source, paths: [] });
+    receive({ ...source, paths: [1] }); receive({ ...source, position: { x: Infinity, y: 1 } });
+    expect(events).toHaveLength(0);
+    receive(source); source.paths[0] = "/replaced"; source.position.x = 0;
+    expect(events[0]).toEqual({ windowId: "drop-target", paths: ["/selected/note.txt"], position: { x: 20.5, y: 42 } });
+    expect(Object.isFrozen(events[0].paths)).toBe(true); expect(Object.isFrozen(events[0].position)).toBe(true);
+    subscription.unsubscribe(); subscription.unsubscribe(); expect(stopped).toBe(1);
+  } finally { (globalThis as any)[BRIDGE_KEY] = previousBridge; (globalThis as any)[WINDOW_ID_KEY] = previousId; }
+});
+
 test("bounds and display queries return detached immutable logical snapshots", async () => {
   const previousBridge = (globalThis as any)[BRIDGE_KEY];
   const previousId = (globalThis as any)[WINDOW_ID_KEY];
@@ -165,7 +186,7 @@ test("creation validates independent optional size limits before native allocati
     expect(calls[0]).toEqual({ width: 100, minWidth: 300, maxHeight: 700 });
     for (const options of [{ minWidth: 0 }, { maxHeight: -1 }, { width: Infinity },
       { minWidth: 900, maxWidth: 500 }, { minHeight: 700, maxHeight: 200 }, { minWidth: null },
-      { stateKey: "notes.main" }, { stateKey: undefined }]) {
+      { stateKey: "notes.main" }, { stateKey: undefined }, { fileDrop: true }, { fileDrop: false }]) {
       await expect(createWindow(options as any)).rejects.toBeInstanceOf(TypeError);
     }
     expect(calls).toHaveLength(1);
@@ -197,6 +218,7 @@ test("focused window package exposes its intended public values", () => {
     UNMAXIMIZED: 8,
     FULLSCREEN_ENTERED: 9,
     FULLSCREEN_EXITED: 10,
+    FILES_DROPPED: 11,
   });
   expect("Window" in windowAPI).toBe(false);
 });

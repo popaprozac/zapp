@@ -6,6 +6,7 @@ import { thread } from "std/thread";
 import { WindowPresentationObserver } from "./window-presentation.zs";
 import { MacOSWindowGestures } from "./window-drag.zs";
 import { MacOSWindow } from "./window-resize.zs";
+import { MacOSFileDrops } from "./file-drops.zs";
 
 internal class MacOSWindowRuntime on thread.main {
   readonly id: String;
@@ -22,6 +23,7 @@ internal class MacOSWindowRuntime on thread.main {
   readonly windowDelegate: objc.Adapter<WebKit.NSWindowDelegate>;
   readonly presentationObserver: WindowPresentationObserver;
   readonly gestures: MacOSWindowGestures;
+  readonly fileDrops: Option<MacOSFileDrops>;
   readonly registration: objc.Registration;
   readonly document: BridgeDocument;
   readonly capabilitySelection: CapabilitySelection;

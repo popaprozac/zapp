@@ -360,6 +360,25 @@ windowHandle.subscribe(WindowEvent.FULLSCREEN_EXITED, () => {
 });
 renderWindowEvents();
 
+// The native drop grants these exact paths for this session. File operations
+// still go through the same permission-checked manager as dialog-selected paths.
+windowHandle.subscribe(WindowEvent.FILES_DROPPED, async ({ paths }) => {
+  status.textContent = `Importing ${paths.length} dropped text file(s)…`;
+  try {
+    let imported = 0;
+    for (const path of paths) {
+      const text = await application.files.readText(path);
+      const title = path.split("/").at(-1) || "Dropped note";
+      await notes.create({ title, subtitle: text, state: "active" });
+      imported++;
+    }
+    await refreshNotes();
+    status.textContent = `Imported ${imported} dropped text file(s)`;
+  } catch (error) {
+    status.textContent = `Could not import dropped file: ${error.message}`;
+  }
+});
+
 let observedProfileDenial = false;
 let observedNativeVeto = false;
 let observedSubframeIsolation = false;

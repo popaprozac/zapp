@@ -10,7 +10,7 @@ import { ApplicationPermissions } from "../framework/application-permissions.zs"
 function main(): i32 on thread.main {
   const defaults = WindowOptions();
   if (defaults.titleBar.style != TitleBarStyle.default || !defaults.titleBar.titleVisible
-    || !defaults.resizable || !defaults.maximizable || !defaults.fullscreenable) return 1;
+    || !defaults.resizable || !defaults.maximizable || !defaults.fullscreenable || defaults.fileDrop) return 1;
   let windows = createWindowManager();
   if (defaults.inspectable != Inspectable.auto) return 17;
   const owner = match (attempt windows.create(WindowOptions({ inspectable: Inspectable.disabled }))) { success(value) => value; failure(_) => return 2; };
@@ -52,7 +52,8 @@ function main(): i32 on thread.main {
     '{"titleBar":{"titleVisibile":false}}', '{"titleBar":{"style":"hidden","controls":false}}',
     '{"titleBar":{"style":"hidden","style":"default"}}',
     '{"maximizable":"false"}', '{"fullscreenable":0}', '{"resizable":null}',
-    '{"inspectable":true}', '{"inspectable":"enabled"}', '{"inspectable":false}'
+    '{"inspectable":true}', '{"inspectable":"enabled"}', '{"inspectable":false}',
+    '{"fileDrop":true}', '{"fileDrop":false}', '{"fileDrop":null}'
   );
   for (const source of invalid) {
     const message = BridgeMessage({ kind: BridgeMessageKind.invoke, id: 1, method: "__window:create", arguments: copy source });

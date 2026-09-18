@@ -111,6 +111,15 @@ export interface WindowResizedEvent {
   readonly size: WindowSize;
 }
 
+/** Top-left WebView viewport coordinates in CSS pixels. */
+export interface WindowDropPosition { readonly x: number; readonly y: number; }
+/** Accepted native file paths; operation permissions are still checked separately. */
+export interface WindowFilesDroppedEvent {
+  readonly windowId: string;
+  readonly paths: readonly string[];
+  readonly position: WindowDropPosition;
+}
+
 /**
  * Read-only observation of a native navigation decision. Web content cannot
  * grant or cancel navigation; trusted Z subscribers own that authority.
@@ -135,6 +144,7 @@ export const WindowEvent = {
   UNMAXIMIZED: 8,
   FULLSCREEN_ENTERED: 9,
   FULLSCREEN_EXITED: 10,
+  FILES_DROPPED: 11,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
@@ -205,6 +215,10 @@ export interface WindowHandle {
     event: typeof WindowEvent.NAVIGATION_REQUESTED,
     handler: (event: WindowNavigationRequestedEvent) => void,
   ): WindowEventSubscription;
+  subscribe(
+    event: typeof WindowEvent.FILES_DROPPED,
+    handler: (event: WindowFilesDroppedEvent) => void,
+  ): WindowEventSubscription;
 
   show(): void;
   /** Reveal/restore and request focus; observe FOCUS for native confirmation. */
@@ -225,6 +239,7 @@ export interface WindowHandle {
 }
 
 type FocusedEventHandler =
+  | ((event: WindowFilesDroppedEvent) => void)
   | ((event: WindowFocusedEvent) => void)
   | ((event: WindowBlurredEvent) => void)
   | ((event: WindowMinimizedEvent) => void)
@@ -241,6 +256,7 @@ type UnknownRecord = Record<string, unknown>;
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
 const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
+  [WindowEvent.FILES_DROPPED]: "window:files-dropped",
   [WindowEvent.FOCUS]: "window:focus",
   [WindowEvent.BLUR]: "window:blur",
   [WindowEvent.MINIMIZED]: "window:minimized",
@@ -400,9 +416,24 @@ class FocusedWindowHandle implements WindowHandle {
     event: typeof WindowEvent.NAVIGATION_REQUESTED,
     handler: (event: WindowNavigationRequestedEvent) => void,
   ): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILES_DROPPED,
+    handler: (event: WindowFilesDroppedEvent) => void): WindowEventSubscription;
   subscribe(event: WindowEvent, handler: FocusedEventHandler): WindowEventSubscription {
     const cleanup = this.bridge().on(WINDOW_EVENT_NAMES[event], (value) => {
       if (!isRecord(value) || value.windowId !== this.id) return;
+
+      if (event === WindowEvent.FILES_DROPPED) {
+        if (!Array.isArray(value.paths) || value.paths.length === 0
+          || !value.paths.every(path => typeof path === "string" && path.length > 0)
+          || !isRecord(value.position) || typeof value.position.x !== "number"
+          || typeof value.position.y !== "number" || !Number.isFinite(value.position.x)
+          || !Number.isFinite(value.position.y)) return;
+        (handler as (event: WindowFilesDroppedEvent) => void)(Object.freeze({
+          windowId: this.id, paths: Object.freeze([...value.paths]),
+          position: Object.freeze({ x: value.position.x, y: value.position.y }),
+        }));
+        return;
+      }
 
       if (event === WindowEvent.RESIZE) {
         if (!isRecord(value.size)) return;
@@ -476,6 +507,7 @@ export async function createWindow(
 ): Promise<WindowHandle> {
   ensurePermission("window:create");
   if ("stateKey" in options) throw new TypeError("Window stateKey is native application policy.");
+  if ("fileDrop" in options) throw new TypeError("Window fileDrop is native application policy.");
   checkSizeOptions(options);
   for (const key of ["resizable", "maximizable", "fullscreenable"] as const) {
     if (options[key] !== undefined && typeof options[key] !== "boolean") throw new TypeError(`Window ${key} must be a boolean.`);

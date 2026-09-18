@@ -41,6 +41,8 @@ import { observeWindowPresentation } from "./window-presentation.zs";
 import { resolveInspectable } from "../../window-inspection.zs";
 import { configuredWebViewInspectable, configuredFrontendIsDevelopment, configureWebViewDeveloperExtras } from "./configured-webview.zs";
 import { MacOSWebView } from "./webview.zs";
+import { MacOSFileDrops, installMacOSFileDragTypes } from "./file-drops.zs";
+import { FilesystemAuthority } from "../../filesystem-authority.zs";
 import { startConfiguredWindowSmokeSupport } from "./configured-smoke.zs";
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "./related-window-creations.zs";
 
@@ -57,7 +59,8 @@ internal function createMacOSWindowRuntime(
   contextMenus: ContextMenuSessions,
   menu: ApplicationMenu,
   related: MacOSRelatedWindows,
-  stateStore: WindowStateStore
+  stateStore: WindowStateStore,
+  filesystem: FilesystemAuthority
 ): MacOSWindowRuntime throws WindowError on thread.main {
   const contentController = WebKit.WKUserContentController.alloc().init();
   const configuration = WebKit.WKWebViewConfiguration.alloc().init();
@@ -88,6 +91,9 @@ internal function createMacOSWindowRuntime(
   configureWebViewDeveloperExtras(in configuration, inspectable);
   const webView = new MacOSWebView(frame, configuration, configuredFrontendIsDevelopment());
   webView.inspectable = inspectable;
+  const fileDrops = new MacOSFileDrops(webView, copy id, options.fileDrop, document, filesystem, windowManager);
+  webView.observeFileDrops(weak fileDrops);
+  installMacOSFileDragTypes(in webView);
   // Bind native sender identity before navigation can start. Registration owns
   // removal of the handler, breaking its retained WebView/controller references
   // when this runtime is released after native callbacks have unwound.
@@ -184,6 +190,7 @@ internal function createMacOSWindowRuntime(
     windowDelegate,
     presentationObserver,
     gestures,
+    fileDrops: Option.some(fileDrops),
     registration,
     document,
     capabilitySelection,

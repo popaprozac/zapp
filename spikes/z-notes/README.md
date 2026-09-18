@@ -1,5 +1,13 @@
 # Z Notes application spike
 
+The main Notes window opts into native [file drops](../../docs/file-drops.md).
+Drop one or more UTF-8 text files from Finder to create notes: the filename
+becomes the title and the text becomes the subtitle. Directories, promised files,
+and unavailable paths are rejected. This uses the normal permission-checked
+`application.files.readText` and generated `notes.create` calls, not a special
+file-reading bridge. Hover feedback and related-window opt-in are separate
+follow-ups; inspectors currently reject external file drops.
+
 The main window opts into [placement restoration](../../docs/window-state.md)
 with the native-only key `notes.main`. Move/resize it, close the app, and run it
 again to see the ordinary size, position, and maximized state restored. Inspectors

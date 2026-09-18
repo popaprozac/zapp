@@ -17,6 +17,9 @@ import {
   WindowNavigationRequestedEvent,
   WindowResizedEvent,
   WindowSize,
+  WindowDropPosition,
+  WindowFileDropRequestedEvent,
+  WindowFilesDroppedEvent,
 } from "./events.zs";
 
 export type WindowEventSubscription = EventSubscription;
@@ -36,6 +39,8 @@ export readonly class WindowEvents on thread.main {
   readonly navigationRequested: Event<WindowNavigationRequestedEvent>;
   readonly closeRequested: Event<WindowCloseRequestedEvent>;
   readonly closed: Event<WindowClosedEvent>;
+  readonly fileDropRequested: Event<WindowFileDropRequestedEvent>;
+  readonly filesDropped: Event<WindowFilesDroppedEvent>;
 
   internal constructor() {
     this.all = new Event<WindowEvent>();
@@ -51,6 +56,8 @@ export readonly class WindowEvents on thread.main {
     this.navigationRequested = new Event<WindowNavigationRequestedEvent>();
     this.closeRequested = new Event<WindowCloseRequestedEvent>();
     this.closed = new Event<WindowClosedEvent>();
+    this.fileDropRequested = new Event<WindowFileDropRequestedEvent>();
+    this.filesDropped = new Event<WindowFilesDroppedEvent>();
   }
 
   internal function publishFocused(in windowId: String): void {
@@ -185,7 +192,30 @@ export readonly class WindowEvents on thread.main {
     this.finish();
   }
 
+  internal function publishFileDropRequested(in windowId: String, in paths: Array<String>,
+    position: WindowDropPosition): boolean {
+    const event = new WindowFileDropRequestedEvent(copy windowId, copy paths, position);
+    let requested = this.fileDropRequested;
+    requested.publish(in event);
+    const aggregate = WindowEvent.fileDropRequested(event);
+    let all = this.all;
+    all.publish(in aggregate);
+    return !event.wasCancelled();
+  }
+
+  internal function publishFilesDropped(in event: WindowFilesDroppedEvent): void {
+    let dropped = this.filesDropped;
+    dropped.publish(in event);
+    const aggregate = WindowEvent.filesDropped(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
   internal function finish(): void {
+    let requested = this.fileDropRequested;
+    let dropped = this.filesDropped;
+    requested.finish();
+    dropped.finish();
     let all = this.all;
     let focused = this.focused;
     let blurred = this.blurred;

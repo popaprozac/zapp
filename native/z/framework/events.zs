@@ -123,6 +123,34 @@ export readonly struct WindowClosedEvent {
   windowId: String;
 }
 
+export readonly struct WindowDropPosition {
+  x: f64;
+  y: f64;
+}
+
+export readonly struct WindowFilesDroppedEvent {
+  windowId: String;
+  paths: Array<String>;
+  position: WindowDropPosition;
+}
+
+export readonly class WindowFileDropRequestedEvent on thread.main {
+  readonly windowId: String;
+  readonly paths: readonly Array<String>;
+  readonly position: WindowDropPosition;
+  internal readonly decision: WindowCloseDecision;
+
+  internal constructor(windowId: String, paths: Array<String>, position: WindowDropPosition) {
+    this.windowId = move windowId;
+    this.paths = paths.freeze();
+    this.position = position;
+    this.decision = new WindowCloseDecision();
+  }
+
+  function cancel(): void { let decision = this.decision; decision.cancel(); }
+  internal function wasCancelled(): boolean { return this.decision.wasCancelled(); }
+}
+
 export readonly class WindowCloseRequestedEvent on thread.main {
   readonly windowId: String;
   internal readonly decision: WindowCloseDecision;
@@ -186,6 +214,8 @@ export enum WindowEvent {
   resized WindowResizedEvent,
   navigationRequested WindowNavigationRequestedEvent,
   closeRequested WindowCloseRequestedEvent,
+  fileDropRequested WindowFileDropRequestedEvent,
+  filesDropped WindowFilesDroppedEvent,
   closed WindowClosedEvent,
 }
 

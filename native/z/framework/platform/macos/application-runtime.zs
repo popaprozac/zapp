@@ -329,6 +329,7 @@ internal function initializeMacOSApplicationRuntimeState(
   const documents = createRelatedDocuments();
   const creations = new RelatedWindowCreations(documents);
   const windows = new MacOSWindowRegistry({
+    filesystem: files.authority,
     name: move name,
     stateStore,
     capabilities,

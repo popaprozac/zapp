@@ -157,6 +157,10 @@ class FilesystemAuthorityState on thread.main {
     });
   }
 
+  function commitFileGrants(inout this, in grants: Array<FilesystemSessionGrant>): void {
+    for (const grant of grants) { this.grants.push(copy grant); }
+  }
+
   function start(
     inout this,
     backend: FilesystemAuthorityBackend
@@ -198,6 +202,22 @@ internal readonly class FilesystemAuthority on thread.main {
     in path: String
   ): void throws FilesystemAuthorityError on thread.main {
     try this.state.grant(in path, false);
+  }
+
+  // Stage the complete batch without changing authority. The caller can still
+  // reject it after synchronous callbacks invalidate the receiving document.
+  internal function prepareFileGrants(in paths: Array<String>): Array<FilesystemSessionGrant>
+    throws FilesystemAuthorityError on thread.main {
+    let prepared = Array<FilesystemSessionGrant>();
+    for (const path of paths) {
+      const resolved = try this.state.resolve(in path);
+      prepared.push(FilesystemSessionGrant({ root: move resolved, descendants: false }));
+    }
+    return move prepared;
+  }
+
+  internal function commitFileGrants(inout this, in grants: Array<FilesystemSessionGrant>): void on thread.main {
+    this.state.commitFileGrants(in grants);
   }
 
   internal function grantDirectory(

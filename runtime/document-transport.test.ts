@@ -35,6 +35,23 @@ function realm() {
   return { bridge, posts, nonce, timers, context, document, domListeners };
 }
 
+test("file drops are delivered only to the currently bound active document", () => {
+  const page = realm();
+  const received: unknown[] = [];
+  page.bridge.on("window:files-dropped", (event: unknown) => received.push(event));
+  const payload = { windowId: "related-2", paths: ["/selected/note.txt"], position: { x: 1, y: 2 } };
+  expect(page.bridge._onDocumentWindowEvent("7", "files-dropped", payload)).toBe(false);
+  page.bridge._bindDocument(page.nonce, "7");
+  expect(page.bridge._onDocumentWindowEvent("6", "files-dropped", payload)).toBe(false);
+  expect(page.bridge._onDocumentWindowEvent("7", "files-dropped", payload)).toBe(true);
+  expect(received).toEqual([payload]);
+  page.bridge._bindDocument(page.nonce, "8");
+  expect(page.bridge._onDocumentWindowEvent("7", "files-dropped", payload)).toBe(false);
+  page.bridge._dispose(new Error("closed"));
+  expect(page.bridge._onDocumentWindowEvent("8", "files-dropped", payload)).toBe(false);
+  expect(received).toEqual([payload]);
+});
+
 test("creation notices are generation-bound one-shot signals, not terminal retirement", () => {
   const page = realm();
   page.bridge._bindDocument(page.nonce, "90");

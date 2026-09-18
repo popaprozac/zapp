@@ -1,6 +1,9 @@
 # Incoming window file drops
 
-Status: whole-window API direction approved; implementation is not yet available.
+Status: native acceptance, atomic path grants, document-bound delivery, and the
+Notes text-file demo are implemented. Hover event naming and related-window
+inheritance remain under deliberation; related windows reject external drops.
+See [the developer guide](../file-drops.md) for the available surface.
 
 ## Application surface
 
@@ -33,9 +36,10 @@ actual target document, not route the drop as if it occurred in the owner.
 - A native synchronous `fileDropRequested` event can reject with `event.cancel()`.
   The final `filesDropped` event is observational; JavaScript cannot asynchronously
   veto an OS drop that has already completed.
-- Enter, move, and leave notifications support highlighting without exposing
-  absolute paths or creating grants before a drop. Hover delivery is coalesced;
-  it does not repeatedly serialize paths or read file contents.
+- Planned enter, move, and leave notifications will support highlighting without exposing
+  absolute paths or creating grants before a drop. Hover delivery will be coalesced;
+  it must not repeatedly serialize paths or read file contents. Naming is pending;
+  this notification surface is not implemented yet.
 - Accepted existing local files receive exact, session-only application path
   grants, consistent with dialog grants. Dropping a path grants no operation
   permission: `fs:read`, `fs:write`, trash, and other operations remain subject
@@ -49,8 +53,8 @@ actual target document, not route the drop as if it occurred in the owner.
   Ordinary text dragging and internal HTML drag-and-drop stay native.
 
 The first tier allows multiple existing local files. Directories, file promises,
-drag-out, and DOM drop zones are deferred. Z Notes will demonstrate dropping a
-text file to create a note, with visual drag feedback.
+drag-out, and DOM drop zones are deferred. Z Notes demonstrates dropping a
+text file to create a note; visual drag feedback remains a follow-up.
 
 ## Native integration boundary
 
@@ -73,5 +77,6 @@ with an Objective-C shim, silently return a generic default for all drag kinds,
 or disable ordinary HTML dragging to get file drops working.
 
 The upstream compiler boundary is covered by fixture execution and a real
-WebKit compilation probe. Zapp integration remains: native acceptance and path
-grants, document-bound event delivery, hover feedback, and the Z Notes demo.
+WebKit compilation probe. The transaction runs under both compilers and UBSan;
+private-pasteboard tests exercise native item validation. Hover feedback and
+related-window inheritance are the remaining integration steps.

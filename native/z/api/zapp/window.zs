@@ -26,6 +26,9 @@ import {
   WindowNavigationRequestedEvent as FrameworkWindowNavigationRequestedEvent,
   WindowResizedEvent as FrameworkWindowResizedEvent,
   WindowSize as FrameworkWindowSize,
+  WindowDropPosition as FrameworkWindowDropPosition,
+  WindowFileDropRequestedEvent as FrameworkWindowFileDropRequestedEvent,
+  WindowFilesDroppedEvent as FrameworkWindowFilesDroppedEvent,
 } from "../../framework/events.zs";
 
 import {
@@ -63,6 +66,9 @@ export type WindowFullscreenExitedEvent = FrameworkWindowFullscreenExitedEvent;
 export type WindowBlurredEvent = FrameworkWindowBlurredEvent;
 export type WindowResizedEvent = FrameworkWindowResizedEvent;
 export type WindowSize = FrameworkWindowSize;
+export type WindowDropPosition = FrameworkWindowDropPosition;
+export type WindowFileDropRequestedEvent = FrameworkWindowFileDropRequestedEvent;
+export type WindowFilesDroppedEvent = FrameworkWindowFilesDroppedEvent;
 export type WindowCloseRequestedEvent = FrameworkWindowCloseRequestedEvent;
 export type WindowClosedEvent = FrameworkWindowClosedEvent;
 export type WindowNavigationRequestedEvent = FrameworkWindowNavigationRequestedEvent;

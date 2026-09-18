@@ -26,6 +26,8 @@ import { WindowError } from "../framework/application-error.zs";
 import { WindowCloseRequestedEvent } from "../framework/events.zs";
 import { WindowEventSubscription } from "../framework/window-events.zs";
 import { ApplicationPermissions } from "../framework/application-permissions.zs";
+import { ApplicationPaths } from "../api/zapp/service.zs";
+import { createFilesystemAuthority } from "../framework/filesystem-authority.zs";
 import { decodeBridgeMessage } from "../framework/bridge.zs";
 import { routeRelatedWindowBridgeMessage } from "../framework/platform/macos/related-window-bridge.zs";
 import { routeWindowBridgeMessage } from "../framework/window-bridge.zs";
@@ -288,7 +290,9 @@ function main(): i32 on thread.main {
   const related = new MacOSRelatedWindows(documents, creations, route, weak windows, closed);
   const { sender: stateSender, receiver: stateReceiver } = Channel<boolean>.bounded(1);
   const stateStore = new WindowStateStore("", new WindowStateInbox(), stateSender.sync());
+  const paths = ApplicationPaths({ executable: "", resources: "", data: "", config: "", cache: "" });
   const registry = new MacOSWindowRegistry({ name: "Related authority", capabilities, windowManager: windows,
+    filesystem: createFilesystemAuthority(in paths),
     stateStore,
     menu: createApplicationMenu(), contextMenus: createContextMenuSessions(), routeMessage: route,
     documents, creations, related, didCloseNativeWindow: closed,

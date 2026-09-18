@@ -31,11 +31,13 @@ import { deliverWebViewApplicationWorkerMessage, deliverWebViewApplicationQuitRe
 import { webViewInjectionProfileExists } from "./webview-injections.zs";
 import { configuredNavigationProfileExists } from "./configured-webview.zs";
 import { NativeWindowClosedOperation } from "./window-delegate.zs";
+import { FilesystemAuthority } from "../../filesystem-authority.zs";
 
 // Platform-owned window state. Application/worker lifetime remains in
 // application-runtime; no callback captures the application ARC owner.
 internal class MacOSWindowRegistry on thread.main {
   readonly name: String;
+  readonly filesystem: FilesystemAuthority;
   readonly stateStore: WindowStateStore;
   readonly capabilities: ApplicationCapabilities;
   readonly windowManager: WindowManager;
@@ -115,7 +117,8 @@ internal class MacOSWindowRegistry on thread.main {
       this.contextMenus,
       this.menu,
       this.related,
-      this.stateStore
+      this.stateStore,
+      this.filesystem
     );
     this.nativeWindows.set(nativeId, runtime);
   }

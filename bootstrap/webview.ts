@@ -231,6 +231,13 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
       return true;
     },
 
+    _onDocumentWindowEvent(token: string, eventName: string, payload: unknown): boolean {
+      if (disposed || !documentBound || !documentActive || token !== documentToken) return false;
+      if (eventName !== "files-dropped") return false;
+      bridge._onEvent("window:" + eventName, JSON.stringify(payload));
+      return true;
+    },
+
     // Internal factory hook. Identity comes from the authenticated native
     // preparation reply, not arbitrary child content. One observer owns the
     // related lifetime; its public subscribe() supports independent listeners.

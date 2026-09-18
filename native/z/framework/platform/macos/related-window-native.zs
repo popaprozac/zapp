@@ -19,6 +19,7 @@ import { MacOSWindowRuntime } from "./window-runtime.zs";
 import { createDesktopWindowDelegate, NativeWindowClosedOperation } from "./window-delegate.zs";
 import { observeWindowPresentation } from "./window-presentation.zs";
 import { MacOSWebView } from "./webview.zs";
+import { installMacOSFileDragTypes } from "./file-drops.zs";
 import { configuredFrontendIsDevelopment, configureWebViewDeveloperExtras } from "./configured-webview.zs";
 
 internal type RelatedNativeFailure = () => void on thread.main;
@@ -130,6 +131,7 @@ internal function createMacOSRelatedWindowRuntime(
   configureWebViewDeveloperExtras(in configuration, inspectable);
   const view = new MacOSWebView(frame, configuration, configuredFrontendIsDevelopment());
   view.inspectable = inspectable;
+  installMacOSFileDragTypes(in view);
   const handler = new DesktopMessageHandler({ document, expectedView: view,
     expectedController: controller, routeMessage: route });
   const registration = objc.register({
@@ -163,5 +165,5 @@ internal function createMacOSRelatedWindowRuntime(
   return new MacOSWindowRuntime({ id, nativeId: document.windowId, window, webView: view,
     contentController: controller, configuration, document, schemeHandler: Option.none,
     navigationDelegate: navigation, uiDelegate: ui, windowDelegate: delegate,
-    presentationObserver, gestures, registration, capabilitySelection: document.capabilities });
+    presentationObserver, gestures, fileDrops: Option.none, registration, capabilitySelection: document.capabilities });
 }
