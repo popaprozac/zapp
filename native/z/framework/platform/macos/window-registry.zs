@@ -159,6 +159,7 @@ internal class MacOSWindowRegistry on thread.main {
       some(value) => {
         let window = value;
         this.contextMenus.invalidateWindow(in window.id);
+        match (in window.fileDrops) { some(drops) => { const current = drops; current.exit(); } none => {} }
         window.document.close();
         this.related.pruneInvalidated();
         let menu = this.menu;

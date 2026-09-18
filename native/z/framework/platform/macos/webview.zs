@@ -72,7 +72,7 @@ internal class MacOSWebView extends WebKit.WKWebView on thread.main {
     objc.optionalCall(super.draggingExited(sender));
   }
 
-  override function prepareForDragOperation(in sender: WebKit.NSDraggingInfo): boolean as "prepareForDragOperation:" {
+  override function prepareForDragOperation(inout this, in sender: WebKit.NSDraggingInfo): boolean as "prepareForDragOperation:" {
     if (this.externalFiles || isExternalFileDrag(in sender)) {
       return match (this.fileDrops()) { some(drops) => drops.prepare(in sender); none => false; };
     }
@@ -89,7 +89,10 @@ internal class MacOSWebView extends WebKit.WKWebView on thread.main {
   }
 
   override function concludeDragOperation(inout this, in sender: objc.Object | null): void as "concludeDragOperation:" {
-    if (this.externalFiles) { return; }
+    if (this.externalFiles) {
+      match (this.fileDrops()) { some(drops) => drops.exit(); none => {} }
+      return;
+    }
     objc.optionalCall(super.concludeDragOperation(sender));
   }
 

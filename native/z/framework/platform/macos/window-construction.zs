@@ -150,7 +150,8 @@ internal function createMacOSWindowRuntime(
     contextMenus,
     menu,
     document,
-    related
+    related,
+    Option.some(weak fileDrops)
   );
   webView.navigationDelegate = navigationDelegate;
   const uiDelegate = createRelatedWindowUIDelegate(related);

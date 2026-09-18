@@ -15,6 +15,7 @@ import { RelatedWindowCreations, RelatedWindowReservation, RelatedCreationReply,
 import { MacOSRelatedWindows, createRelatedWindowUIDelegate } from "../framework/platform/macos/related-window-creations.zs";
 import { DesktopMessageHandler } from "../framework/platform/macos/message-handler.zs";
 import { createDesktopNavigationDelegate } from "../framework/platform/macos/navigation.zs";
+import { MacOSFileDrops } from "../framework/platform/macos/file-drops.zs";
 import { createContextMenuSessions } from "../framework/context-menu.zs";
 import { createApplicationMenu } from "../framework/application-menu.zs";
 import { DesktopRouteMessageOperation } from "../framework/platform/macos/document-transport.zs";
@@ -375,8 +376,9 @@ function main(): i32 on thread.main {
   const registration = objc.register({ add: controller.addScriptMessageHandler(handler, "zapp"), remove: controller.removeScriptMessageHandlerForName("zapp") });
   const contextMenus = createContextMenuSessions();
   const menu = createApplicationMenu();
+  const noFileDrops = Option<Weak<MacOSFileDrops>>.none;
   const navigation = createDesktopNavigationDelegate("owner", "default", in window, in view,
-    weak windows, contextMenus, menu, owner, related);
+    weak windows, contextMenus, menu, owner, related, noFileDrops);
   const ui = createRelatedWindowUIDelegate(related);
   view.navigationDelegate = navigation;
   view.UIDelegate = ui;

@@ -11,7 +11,7 @@ const window = try app.windows.create(WindowOptions({
 
 `fileDrop` defaults to `false`. It is native application policy, not an option
 that frontend `createWindow()` can turn on. Related windows currently reject
-external file drops; their inheritance policy and hover events remain pending.
+external file drops; their inheritance policy remains pending.
 
 ## Frontend
 
@@ -37,6 +37,45 @@ subscription.unsubscribe();
 `x` and `y` relative to the top-left WebView viewport in CSS pixels, accounting
 for page zoom. The event is observational: asynchronous JavaScript cannot veto
 an OS drop that has already completed.
+
+## Drag feedback
+
+Show a drop target using the same window subscriptions:
+
+```ts
+const window = currentWindow();
+const subscriptions = [
+  window.subscribe(WindowEvent.FILE_DRAG_ENTERED, ({ position }) => {
+    showDropTarget(position);
+  }),
+  window.subscribe(WindowEvent.FILE_DRAG_MOVED, ({ position }) => {
+    updateDropTarget(position);
+  }),
+  window.subscribe(WindowEvent.FILE_DRAG_ENDED, () => {
+    hideDropTarget();
+  }),
+];
+
+// Component/feature cleanup:
+subscriptions.forEach(subscription => subscription.unsubscribe());
+```
+
+Native code uses `window.events.fileDragEntered`, `fileDragMoved`, and
+`fileDragEnded`; they also appear in `window.events.all`. Entered and moved
+carry `windowId` and viewport `position`. Ended carries only `windowId`.
+These are observations, not cancellable requests. They expose no paths and
+create no file grants. A hover does not promise acceptance: unsupported items
+can still be rejected when the native backend validates the drop.
+
+Movement is coalesced to the latest position natively before JSON serialization
+and bridge delivery. It is not a stream of every OS mouse update and has no
+fixed-rate guarantee. Ending a session discards pending movement. Leaving,
+dropping, rejection, or cancellation ends the highlight; a subsequent entry
+starts a new session. Document replacement, page hiding, and bridge disposal
+also clear frontend feedback locally, without waiting for native delivery.
+Keep cleanup in component teardown too; a destroyed document cannot receive
+callbacks. Related windows do not receive this feedback while their drops are
+disabled.
 
 ## Native cancellation and observation
 
@@ -68,7 +107,9 @@ text and internal HTML dragging remain delegated to WebKit.
 
 Run `bun run spike:z-notes` or `bun run spike:z-notes:dev`, then drop a small
 UTF-8 `.txt` file from Finder onto the main Notes window. The filename becomes
-the note title, and its text becomes the subtitle.
+the note title, and its text becomes the subtitle. The main window highlights
+while hovering; move out without dropping to see the highlight clear. A rejected
+directory drop clears it too, without creating a note or navigating the page.
 
 Framework acceptance is atomic for the path batch; the demo creates one note at
 a time, so a later read or service failure can leave earlier imported notes.

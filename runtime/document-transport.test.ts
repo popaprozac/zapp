@@ -9,6 +9,7 @@ function realm() {
   const posts: string[] = [];
   const timers = new Map<number, () => void>();
   const domListeners = new Set<() => void>();
+  const windowListeners = new Map<string, Set<() => void>>();
   const document = {
     head: null as object | null,
     body: null as object | null,
@@ -18,13 +19,17 @@ function realm() {
   let nextTimer = 0;
   const context = createContext({
     console, crypto, document,
+    addWindowListener(name: string, listener: () => void) {
+      if (!windowListeners.has(name)) windowListeners.set(name, new Set());
+      windowListeners.get(name)!.add(listener);
+    },
     setTimeout(callback: () => void) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id: number) { timers.delete(id); },
     postNative(message: string) { posts.push(message); },
   });
   runInContext(`
     globalThis.window = globalThis;
-    window.addEventListener = () => {};
+    window.addEventListener = addWindowListener;
     window.webkit = { messageHandlers: { zapp: { postMessage: postNative } } };
     globalThis[Symbol.for('zapp.bootstrapConfig')] = { permissions: { platform: 'ios' } };
     globalThis[Symbol.for('zapp.documentTransport')] = 1;
@@ -32,8 +37,80 @@ function realm() {
   runInContext(source, context, { timeout: 1000 });
   const bridge = runInContext("globalThis[Symbol.for('zapp.bridge')]", context);
   const nonce = posts[0]!.slice("@hello\n".length);
-  return { bridge, posts, nonce, timers, context, document, domListeners };
+  return { bridge, posts, nonce, timers, context, document, domListeners, windowListeners };
 }
+
+test("file hover ends once and cannot be revived by late movement", () => {
+  const page = realm();
+  const received: Array<[string, unknown]> = [];
+  for (const name of ["file-drag-entered", "file-drag-moved", "file-drag-ended", "files-dropped"]) {
+    page.bridge.on("window:" + name, (event: unknown) => received.push([name, event]));
+  }
+  page.bridge._bindDocument(page.nonce, "7");
+  const payload = { windowId: "win-1", position: { x: 12, y: 24 }, paths: ["not hover data"] };
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-moved", payload)).toBe(false);
+  expect(page.bridge._onDocumentWindowEvent("6", "file-drag-entered", payload)).toBe(false);
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-entered", payload)).toBe(true);
+  expect(received[0][1]).toEqual({ windowId: "win-1", position: { x: 12, y: 24 } });
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-moved", { ...payload, position: { x: NaN, y: 0 } })).toBe(false);
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-moved", payload)).toBe(true);
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-ended", { windowId: "win-1" })).toBe(true);
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-ended", { windowId: "win-1" })).toBe(false);
+  expect(page.bridge._onDocumentWindowEvent("7", "file-drag-moved", payload)).toBe(false);
+  expect(received.map(([name]) => name)).toEqual(["file-drag-entered", "file-drag-moved", "file-drag-ended"]);
+  page.bridge._onDocumentWindowEvent("7", "file-drag-entered", payload);
+  page.bridge._onDocumentWindowEvent("7", "files-dropped", payload);
+  expect(received.slice(-2).map(([name]) => name)).toEqual(["file-drag-ended", "files-dropped"]);
+});
+
+test("document replacement, page hiding and disposal clear hover without native delivery", () => {
+  for (const terminal of ["replace", "pagehide", "dispose"]) {
+    const page = realm();
+    let ended = 0;
+    page.bridge.on("window:file-drag-ended", () => ended++);
+    page.bridge._bindDocument(page.nonce, "7");
+    const payload = { windowId: "win-1", position: { x: 12, y: 24 } };
+    page.bridge._onDocumentWindowEvent("7", "file-drag-entered", payload);
+    if (terminal === "replace") page.bridge._bindDocument(page.nonce, "8");
+    else if (terminal === "dispose") page.bridge._dispose(new Error("closed"));
+    else for (const callback of page.windowListeners.get("pagehide") ?? []) callback();
+    expect(ended).toBe(1);
+    expect(page.bridge._onDocumentWindowEvent("7", "file-drag-moved", payload)).toBe(false);
+    expect(page.bridge._onDocumentWindowEvent("7", "file-drag-entered", payload)).toBe(false);
+    page.bridge._dispose(new Error("closed"));
+    expect(ended).toBe(1);
+  }
+});
+
+test("hover teardown latches disposal before callbacks and preserves its first reason", async () => {
+  const page = realm();
+  page.bridge._bindDocument(page.nonce, "7");
+  const pending = page.bridge.invoke("pending", {}, { timeout: 0 }).catch((error: Error) => error);
+  const first = new Error("first disposal");
+  const ended: string[] = [];
+  page.bridge.on("window:file-drag-ended", () => {
+    ended.push("first");
+    page.bridge._dispose(new Error("nested disposal"));
+    expect(page.bridge._bindDocument(page.nonce, "8")).toBe(false);
+  });
+  page.bridge.on("window:file-drag-ended", () => ended.push("second"));
+  page.bridge._onDocumentWindowEvent("7", "file-drag-entered", { windowId: "win-1", position: { x: 1, y: 2 } });
+  page.bridge._dispose(first);
+  expect(ended).toEqual(["first", "second"]);
+  expect(await pending).toBe(first);
+});
+
+test("hover-ended callbacks cannot deliver a drop into a replaced document", () => {
+  const page = realm();
+  page.bridge._bindDocument(page.nonce, "7");
+  let dropped = 0;
+  page.bridge.on("window:file-drag-ended", () => page.bridge._bindDocument(page.nonce, "8"));
+  page.bridge.on("window:files-dropped", () => dropped++);
+  const payload = { windowId: "win-1", position: { x: 1, y: 2 }, paths: ["/selected/file"] };
+  page.bridge._onDocumentWindowEvent("7", "file-drag-entered", payload);
+  expect(page.bridge._onDocumentWindowEvent("7", "files-dropped", payload)).toBe(false);
+  expect(dropped).toBe(0);
+});
 
 test("file drops are delivered only to the currently bound active document", () => {
   const page = realm();

@@ -61,6 +61,9 @@ function runWindowEventsSmoke(
         closed(_) => { allObserved.all = allObserved.all + 10; }
         fileDropRequested(_) => {}
         filesDropped(_) => {}
+        fileDragEntered(_) => {}
+        fileDragMoved(_) => {}
+        fileDragEnded(_) => {}
       }
     }
   );

@@ -20,6 +20,9 @@ import {
   WindowDropPosition,
   WindowFileDropRequestedEvent,
   WindowFilesDroppedEvent,
+  WindowFileDragEnteredEvent,
+  WindowFileDragMovedEvent,
+  WindowFileDragEndedEvent,
 } from "./events.zs";
 
 export type WindowEventSubscription = EventSubscription;
@@ -41,6 +44,9 @@ export readonly class WindowEvents on thread.main {
   readonly closed: Event<WindowClosedEvent>;
   readonly fileDropRequested: Event<WindowFileDropRequestedEvent>;
   readonly filesDropped: Event<WindowFilesDroppedEvent>;
+  readonly fileDragEntered: Event<WindowFileDragEnteredEvent>;
+  readonly fileDragMoved: Event<WindowFileDragMovedEvent>;
+  readonly fileDragEnded: Event<WindowFileDragEndedEvent>;
 
   internal constructor() {
     this.all = new Event<WindowEvent>();
@@ -58,6 +64,9 @@ export readonly class WindowEvents on thread.main {
     this.closed = new Event<WindowClosedEvent>();
     this.fileDropRequested = new Event<WindowFileDropRequestedEvent>();
     this.filesDropped = new Event<WindowFilesDroppedEvent>();
+    this.fileDragEntered = new Event<WindowFileDragEnteredEvent>();
+    this.fileDragMoved = new Event<WindowFileDragMovedEvent>();
+    this.fileDragEnded = new Event<WindowFileDragEndedEvent>();
   }
 
   internal function publishFocused(in windowId: String): void {
@@ -211,7 +220,37 @@ export readonly class WindowEvents on thread.main {
     all.publish(in aggregate);
   }
 
+  internal function publishFileDragEntered(in event: WindowFileDragEnteredEvent): void {
+    let source = this.fileDragEntered;
+    source.publish(in event);
+    const aggregate = WindowEvent.fileDragEntered(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishFileDragMoved(in event: WindowFileDragMovedEvent): void {
+    let source = this.fileDragMoved;
+    source.publish(in event);
+    const aggregate = WindowEvent.fileDragMoved(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
+  internal function publishFileDragEnded(in event: WindowFileDragEndedEvent): void {
+    let source = this.fileDragEnded;
+    source.publish(in event);
+    const aggregate = WindowEvent.fileDragEnded(copy event);
+    let all = this.all;
+    all.publish(in aggregate);
+  }
+
   internal function finish(): void {
+    let entered = this.fileDragEntered;
+    let moved = this.fileDragMoved;
+    let ended = this.fileDragEnded;
+    entered.finish();
+    moved.finish();
+    ended.finish();
     let requested = this.fileDropRequested;
     let dropped = this.filesDropped;
     requested.finish();

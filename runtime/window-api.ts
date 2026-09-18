@@ -113,6 +113,14 @@ export interface WindowResizedEvent {
 
 /** Top-left WebView viewport coordinates in CSS pixels. */
 export interface WindowDropPosition { readonly x: number; readonly y: number; }
+/** Observational hover feedback. No paths are exposed and no grants are created. */
+export interface WindowFileDragEnteredEvent {
+  readonly windowId: string;
+  readonly position: WindowDropPosition;
+}
+export type WindowFileDragMovedEvent = WindowFileDragEnteredEvent;
+/** The hover session ended by leaving, dropping, rejection, or cancellation. */
+export interface WindowFileDragEndedEvent { readonly windowId: string; }
 /** Accepted native file paths; operation permissions are still checked separately. */
 export interface WindowFilesDroppedEvent {
   readonly windowId: string;
@@ -145,6 +153,9 @@ export const WindowEvent = {
   FULLSCREEN_ENTERED: 9,
   FULLSCREEN_EXITED: 10,
   FILES_DROPPED: 11,
+  FILE_DRAG_ENTERED: 12,
+  FILE_DRAG_MOVED: 13,
+  FILE_DRAG_ENDED: 14,
 } as const;
 
 export type WindowEvent = (typeof WindowEvent)[keyof typeof WindowEvent];
@@ -219,6 +230,12 @@ export interface WindowHandle {
     event: typeof WindowEvent.FILES_DROPPED,
     handler: (event: WindowFilesDroppedEvent) => void,
   ): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_ENTERED,
+    handler: (event: WindowFileDragEnteredEvent) => void): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_MOVED,
+    handler: (event: WindowFileDragMovedEvent) => void): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_ENDED,
+    handler: (event: WindowFileDragEndedEvent) => void): WindowEventSubscription;
 
   show(): void;
   /** Reveal/restore and request focus; observe FOCUS for native confirmation. */
@@ -239,6 +256,8 @@ export interface WindowHandle {
 }
 
 type FocusedEventHandler =
+  | ((event: WindowFileDragEnteredEvent) => void)
+  | ((event: WindowFileDragEndedEvent) => void)
   | ((event: WindowFilesDroppedEvent) => void)
   | ((event: WindowFocusedEvent) => void)
   | ((event: WindowBlurredEvent) => void)
@@ -257,6 +276,9 @@ const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
 const WINDOW_EVENT_NAMES: Record<WindowEvent, string> = {
   [WindowEvent.FILES_DROPPED]: "window:files-dropped",
+  [WindowEvent.FILE_DRAG_ENTERED]: "window:file-drag-entered",
+  [WindowEvent.FILE_DRAG_MOVED]: "window:file-drag-moved",
+  [WindowEvent.FILE_DRAG_ENDED]: "window:file-drag-ended",
   [WindowEvent.FOCUS]: "window:focus",
   [WindowEvent.BLUR]: "window:blur",
   [WindowEvent.MINIMIZED]: "window:minimized",
@@ -418,9 +440,29 @@ class FocusedWindowHandle implements WindowHandle {
   ): WindowEventSubscription;
   subscribe(event: typeof WindowEvent.FILES_DROPPED,
     handler: (event: WindowFilesDroppedEvent) => void): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_ENTERED,
+    handler: (event: WindowFileDragEnteredEvent) => void): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_MOVED,
+    handler: (event: WindowFileDragMovedEvent) => void): WindowEventSubscription;
+  subscribe(event: typeof WindowEvent.FILE_DRAG_ENDED,
+    handler: (event: WindowFileDragEndedEvent) => void): WindowEventSubscription;
   subscribe(event: WindowEvent, handler: FocusedEventHandler): WindowEventSubscription {
     const cleanup = this.bridge().on(WINDOW_EVENT_NAMES[event], (value) => {
       if (!isRecord(value) || value.windowId !== this.id) return;
+
+      if (event === WindowEvent.FILE_DRAG_ENDED) {
+        (handler as (event: WindowFileDragEndedEvent) => void)(Object.freeze({ windowId: this.id }));
+        return;
+      }
+      if (event === WindowEvent.FILE_DRAG_ENTERED || event === WindowEvent.FILE_DRAG_MOVED) {
+        if (!isRecord(value.position) || typeof value.position.x !== "number"
+          || typeof value.position.y !== "number" || !Number.isFinite(value.position.x)
+          || !Number.isFinite(value.position.y)) return;
+        (handler as (event: WindowFileDragEnteredEvent) => void)(Object.freeze({
+          windowId: this.id, position: Object.freeze({ x: value.position.x, y: value.position.y }),
+        }));
+        return;
+      }
 
       if (event === WindowEvent.FILES_DROPPED) {
         if (!Array.isArray(value.paths) || value.paths.length === 0

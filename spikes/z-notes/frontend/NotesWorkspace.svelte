@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { currentWindow, WindowEvent } from "@zappdev/runtime/window";
   import type { NotesModel, EditableNote } from "./notes-model";
   import type { InspectorManager } from "./related-inspectors";
   let { model, inspectors, createNote, showActions }: {
@@ -9,6 +11,16 @@
   let inspectorState = $derived(inspectors.state);
   let creating = $state(false);
   let search = $state("");
+  let fileDragging = $state(false);
+  onMount(() => {
+    const window = currentWindow();
+    const subscriptions = [
+      window.subscribe(WindowEvent.FILE_DRAG_ENTERED, () => { fileDragging = true; }),
+      window.subscribe(WindowEvent.FILE_DRAG_MOVED, () => { fileDragging = true; }),
+      window.subscribe(WindowEvent.FILE_DRAG_ENDED, () => { fileDragging = false; }),
+    ];
+    return () => { subscriptions.forEach(subscription => subscription.unsubscribe()); };
+  });
   let query = $derived(search.trim().toLocaleLowerCase());
   let visibleNotes = $derived($view.items.filter(note => !query
     || `${note.draftTitle}\n${note.subtitle ?? ""}\n${note.id}`.toLocaleLowerCase().includes(query)));
@@ -18,6 +30,15 @@
     try { await createNote(); } finally { creating = false; }
   }
 </script>
+
+{#if fileDragging}
+  <div class="file-drop-overlay" role="status" data-file-drop-highlight>
+    <div class="file-drop-prompt">
+      <strong>Drop text files to create notes</strong>
+      <span>Existing UTF-8 files · the filename becomes the title</span>
+    </div>
+  </div>
+{/if}
 
 <section aria-label="Notes workspace" data-svelte-notes>
   <header class="workspace-header" data-zapp-titlebar>
@@ -74,6 +95,16 @@
 </section>
 
 <style>
+  .file-drop-overlay {
+    position: fixed; z-index: 100; pointer-events: none;
+    inset: max(12px, var(--zapp-titlebar-height, 0px)) 12px 12px;
+    display: grid; place-items: center; padding: 24px;
+    border: 2px dashed light-dark(#2865c7, #9cbfff); border-radius: 14px;
+    background: light-dark(rgb(223 236 255 / 85%), rgb(32 53 83 / 90%));
+  }
+  .file-drop-prompt { display: grid; gap: 8px; text-align: center; }
+  .file-drop-prompt strong { font-size: 20px; }
+  .file-drop-prompt span { font-size: 13px; opacity: .8; }
   section { display: contents; }
   .workspace-header {
     position: sticky; top: 0; z-index: 1;

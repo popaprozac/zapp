@@ -10,6 +10,7 @@ import { profileAllowsURL } from "./navigation-policy.zs";
 import { WindowManager } from "../../window.zs";
 import { ContextMenuSessions } from "../../context-menu.zs";
 import { ApplicationMenu } from "../../application-menu.zs";
+import { MacOSFileDrops } from "./file-drops.zs";
 import {
   deliverWebViewWindowNavigationRequested,
 } from "./response-delivery.zs";
@@ -29,12 +30,21 @@ internal class DesktopNavigationDelegate on thread.main
   readonly menu: ApplicationMenu;
   readonly document: BridgeDocument;
   readonly related: Weak<MacOSRelatedWindows>;
+  readonly fileDrops: Option<Weak<MacOSFileDrops>>;
+
+  private function endFileDrag(): void {
+    match (in this.fileDrops) {
+      some(owner) => match (attempt owner.upgrade()) { success(drops) => drops.exit(); failure(_) => {} }
+      none => {}
+    }
+  }
 
   function didCommitNavigation(
     in webView: WebKit.WKWebView,
     in navigation: WebKit.WKNavigation | null
   ): void as "webView:didCommitNavigation:" {
     if (webView != this.webView) return;
+    this.endFileDrag();
     const document = this.document;
     document.didCommit();
     match (attempt this.related.upgrade()) { success(related) => related.pruneInvalidated(); failure(_) => {} }
@@ -45,6 +55,7 @@ internal class DesktopNavigationDelegate on thread.main
     in webView: WebKit.WKWebView
   ): void as "webViewWebContentProcessDidTerminate:" {
     if (webView != this.webView) return;
+    this.endFileDrag();
     const document = this.document;
     document.retire();
     match (attempt this.related.upgrade()) { success(related) => related.pruneInvalidated(); failure(_) => {} }
@@ -148,7 +159,8 @@ internal function createDesktopNavigationDelegate(
   contextMenus: ContextMenuSessions,
   menu: ApplicationMenu,
   document: BridgeDocument,
-  related: MacOSRelatedWindows
+  related: MacOSRelatedWindows,
+  fileDrops: Option<Weak<MacOSFileDrops>>
 ): objc.Adapter<WebKit.WKNavigationDelegate> on thread.main {
   const delegate = new DesktopNavigationDelegate({
     id,
@@ -160,6 +172,7 @@ internal function createDesktopNavigationDelegate(
     menu,
     document,
     related: weak related,
+    fileDrops,
   });
   return objc.adapt<WebKit.WKNavigationDelegate>(delegate);
 }

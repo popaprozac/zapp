@@ -12,6 +12,40 @@ import {
 const BRIDGE_KEY = Symbol.for("zapp.bridge");
 const WINDOW_ID_KEY = Symbol.for("zapp.windowId");
 
+test("drag feedback uses typed immutable snapshots with no path exposure", () => {
+  const previousBridge = (globalThis as any)[BRIDGE_KEY], previousId = (globalThis as any)[WINDOW_ID_KEY];
+  const listeners = new Map<string, (event: unknown) => void>();
+  const received: unknown[] = [];
+  (globalThis as any)[BRIDGE_KEY] = { on(name: string, receive: (event: unknown) => void) {
+    listeners.set(name, receive); return () => listeners.delete(name);
+  } };
+  (globalThis as any)[WINDOW_ID_KEY] = "hover";
+  try {
+    const window = currentWindow();
+    const subscriptions = [
+      window.subscribe(WindowEvent.FILE_DRAG_ENTERED, event => received.push(event)),
+      window.subscribe(WindowEvent.FILE_DRAG_MOVED, event => received.push(event)),
+      window.subscribe(WindowEvent.FILE_DRAG_ENDED, event => received.push(event)),
+    ];
+    const source = { windowId: "hover", position: { x: 1.5, y: -2 }, paths: ["/must/not/escape"] };
+    listeners.get("window:file-drag-entered")!({ ...source, windowId: "other" });
+    listeners.get("window:file-drag-moved")!({ ...source, position: { x: Infinity, y: 0 } });
+    expect(received).toHaveLength(0);
+    listeners.get("window:file-drag-entered")!(source);
+    listeners.get("window:file-drag-moved")!(source);
+    listeners.get("window:file-drag-ended")!(source);
+    source.position.x = 0;
+    expect(received).toEqual([
+      { windowId: "hover", position: { x: 1.5, y: -2 } },
+      { windowId: "hover", position: { x: 1.5, y: -2 } }, { windowId: "hover" },
+    ]);
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(Object.isFrozen((received[0] as any).position)).toBe(true);
+    subscriptions.forEach(subscription => subscription.unsubscribe());
+    expect(listeners.size).toBe(0);
+  } finally { (globalThis as any)[BRIDGE_KEY] = previousBridge; (globalThis as any)[WINDOW_ID_KEY] = previousId; }
+});
+
 test("file-drop subscriptions validate, snapshot and isolate the target window", () => {
   const previousBridge = (globalThis as any)[BRIDGE_KEY], previousId = (globalThis as any)[WINDOW_ID_KEY];
   let receive!: (event: unknown) => void, stopped = 0;
@@ -219,6 +253,9 @@ test("focused window package exposes its intended public values", () => {
     FULLSCREEN_ENTERED: 9,
     FULLSCREEN_EXITED: 10,
     FILES_DROPPED: 11,
+    FILE_DRAG_ENTERED: 12,
+    FILE_DRAG_MOVED: 13,
+    FILE_DRAG_ENDED: 14,
   });
   expect("Window" in windowAPI).toBe(false);
 });

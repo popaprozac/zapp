@@ -29,6 +29,9 @@ import {
   WindowDropPosition as FrameworkWindowDropPosition,
   WindowFileDropRequestedEvent as FrameworkWindowFileDropRequestedEvent,
   WindowFilesDroppedEvent as FrameworkWindowFilesDroppedEvent,
+  WindowFileDragEnteredEvent as FrameworkWindowFileDragEnteredEvent,
+  WindowFileDragMovedEvent as FrameworkWindowFileDragMovedEvent,
+  WindowFileDragEndedEvent as FrameworkWindowFileDragEndedEvent,
 } from "../../framework/events.zs";
 
 import {
@@ -69,6 +72,9 @@ export type WindowSize = FrameworkWindowSize;
 export type WindowDropPosition = FrameworkWindowDropPosition;
 export type WindowFileDropRequestedEvent = FrameworkWindowFileDropRequestedEvent;
 export type WindowFilesDroppedEvent = FrameworkWindowFilesDroppedEvent;
+export type WindowFileDragEnteredEvent = FrameworkWindowFileDragEnteredEvent;
+export type WindowFileDragMovedEvent = FrameworkWindowFileDragMovedEvent;
+export type WindowFileDragEndedEvent = FrameworkWindowFileDragEndedEvent;
 export type WindowCloseRequestedEvent = FrameworkWindowCloseRequestedEvent;
 export type WindowClosedEvent = FrameworkWindowClosedEvent;
 export type WindowNavigationRequestedEvent = FrameworkWindowNavigationRequestedEvent;

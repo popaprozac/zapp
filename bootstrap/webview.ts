@@ -31,6 +31,20 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
   let documentToken = "";
   let documentActive = false;
   const windowGesture = createWindowDragGesture();
+  let fileDragWindow: string | undefined;
+  let fileDragPageHidden = false;
+  function endFileDrag(): void {
+    const windowId = fileDragWindow;
+    fileDragWindow = undefined;
+    if (!windowId) return;
+    // Terminal feedback still reaches the current listener snapshot after the
+    // bridge latches disposal; callbacks cannot reopen the retiring session.
+    const handlers = (listeners["window:file-drag-ended"] || []).slice();
+    for (const handler of handlers) {
+      try { handler({ windowId }); }
+      catch (error) { console.error("[zapp] event handler error:", error); }
+    }
+  }
   let documentNeedsShell = false;
   let documentReadyListener: (() => void) | undefined;
   let waitingForDocument: string[] = [];
@@ -180,8 +194,11 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
         || (token.length === documentToken.length && token < documentToken))) return false;
       if (token === documentToken && needsShell !== documentNeedsShell) return false;
       if (documentToken && token !== documentToken) {
+        const previousToken = documentToken;
         windowGesture.clear();
         documentActive = false;
+        endFileDrag();
+        if (disposed || documentToken !== previousToken) return false;
         retireRelatedObservers("The owning document was replaced.");
         const error = new Error("Native document session was replaced");
         for (const id of Object.keys(pending)) takePending(Number(id))?.reject(error);
@@ -232,8 +249,30 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
     },
 
     _onDocumentWindowEvent(token: string, eventName: string, payload: unknown): boolean {
-      if (disposed || !documentBound || !documentActive || token !== documentToken) return false;
+      if (disposed || !documentBound || !documentActive || fileDragPageHidden || token !== documentToken) return false;
+      if (!payload || typeof payload !== "object" || !("windowId" in payload)
+        || typeof payload.windowId !== "string" || !payload.windowId) return false;
+      if (eventName === "file-drag-entered" || eventName === "file-drag-moved") {
+        const position = (payload as any).position;
+        if (!position || typeof position.x !== "number" || typeof position.y !== "number"
+          || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return false;
+        if (eventName === "file-drag-entered") {
+          endFileDrag();
+          if (disposed || !documentActive || fileDragPageHidden || token !== documentToken) return false;
+          fileDragWindow = payload.windowId;
+        } else if (fileDragWindow !== payload.windowId) return false;
+        bridge._onEvent("window:" + eventName, JSON.stringify({ windowId: payload.windowId,
+          position: { x: position.x, y: position.y } }));
+        return true;
+      }
+      if (eventName === "file-drag-ended") {
+        if (fileDragWindow !== payload.windowId) return false;
+        endFileDrag();
+        return true;
+      }
       if (eventName !== "files-dropped") return false;
+      if (fileDragWindow === payload.windowId) endFileDrag();
+      if (disposed || !documentActive || fileDragPageHidden || token !== documentToken) return false;
       bridge._onEvent("window:" + eventName, JSON.stringify(payload));
       return true;
     },
@@ -557,6 +596,8 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
     _dispose(error: Error): void {
       if (disposed) return;
       disposed = error;
+      documentActive = false;
+      endFileDrag();
       windowGesture.clear();
       clearDocumentReadyListener();
       documentActive = false;
@@ -584,7 +625,8 @@ import { createWindowDragGesture, resolveWindowDrag, windowDragPath } from "./wi
     }, true);
     document.addEventListener("mouseup", () => windowGesture.release(), true);
     window.addEventListener("blur", () => windowGesture.clear());
-    window.addEventListener("pagehide", () => windowGesture.clear());
+    window.addEventListener("pagehide", () => { fileDragPageHidden = true; windowGesture.clear(); endFileDrag(); });
+    window.addEventListener("pageshow", () => { fileDragPageHidden = false; });
   }
 
   // Cleanup workers on page unload — terminate every worker this webview owns.

@@ -128,6 +128,20 @@ export readonly struct WindowDropPosition {
   y: f64;
 }
 
+export readonly struct WindowFileDragEnteredEvent {
+  windowId: String;
+  position: WindowDropPosition;
+}
+
+export readonly struct WindowFileDragMovedEvent {
+  windowId: String;
+  position: WindowDropPosition;
+}
+
+export readonly struct WindowFileDragEndedEvent {
+  windowId: String;
+}
+
 export readonly struct WindowFilesDroppedEvent {
   windowId: String;
   paths: Array<String>;
@@ -217,6 +231,9 @@ export enum WindowEvent {
   fileDropRequested WindowFileDropRequestedEvent,
   filesDropped WindowFilesDroppedEvent,
   closed WindowClosedEvent,
+  fileDragEntered WindowFileDragEnteredEvent,
+  fileDragMoved WindowFileDragMovedEvent,
+  fileDragEnded WindowFileDragEndedEvent,
 }
 
 type EventUnsubscribe = () => void on thread.main;
